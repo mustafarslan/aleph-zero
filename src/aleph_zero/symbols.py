@@ -14,7 +14,9 @@ _KIND_RANK = {
 }
 _SEPARATOR = re.compile(r"::|\.")
 # A definition in test code is rarely the one meant when the same name exists outside it.
-_TEST_PATH = re.compile(r"(^|/)(tests?|spec|__tests__|testdata)/|(^|/)test_[^/]*$|[._-](test|spec)\.[^/.]+$")
+# Only conventions that mean tests: a directory named `test` may be a test framework.
+_TEST_PATH = re.compile(
+    r"(^|/)(tests|__tests__)/|(^|/)test_[^/]*$|[._-](test|spec)\.[^/.]+$|[a-z0-9]Tests?\.[^/.]+$")
 _FETCH = 5000  # rows read for one name before ranking; a name defined more often is cut here
 
 
@@ -43,7 +45,7 @@ def rows(index: Index, name: str, scoped: bool = False) -> list[tuple]:
         "FROM symbols s JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
         "JOIN blob_chunks bc ON bc.blob_oid = s.blob_oid AND bc.family = s.family AND bc.ord = s.chunk_ord "
         + ("JOIN temp.scope_chunks sc ON sc.chunk_id = bc.chunk_id " if scoped else "")
-        + "WHERE s.name_key = ? LIMIT ?",
+        + "WHERE s.name_key = ? ORDER BY s.blob_oid, s.family, s.ord LIMIT ?",
         (last, _FETCH),
     ).fetchall()
     if len(parts) > 1:

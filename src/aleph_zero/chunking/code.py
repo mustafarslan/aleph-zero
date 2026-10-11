@@ -98,7 +98,10 @@ def _unit_chunks(unit: int, found: list[Definition], owner: list[int], lines: li
         scope = (definition.start_line, min(definition.end_line, len(lines)))
         numbers = [number for number in range(scope[0], scope[1] + 1) if owner[number - 1] == unit]
     out: list[tuple[Chunk, Runs]] = []
-    for piece in _pieces(numbers, lines):
+    # A class chunk may skip over its methods: its range is still the class. The module's
+    # leftovers are scattered over the whole file, so each run of them is cut separately
+    # and a module chunk's range never covers code it does not contain.
+    for piece in _pieces(numbers, lines, glue=unit != _MODULE):
         body = "\n".join(lines[number - 1] for number in piece)
         if not any(character.isalnum() for character in body):
             continue  # closing braces and blank lines say nothing
@@ -107,20 +110,21 @@ def _unit_chunks(unit: int, found: list[Definition], owner: list[int], lines: li
     return out
 
 
-def _pieces(numbers: list[int], lines: list[str]) -> list[list[int]]:
+def _pieces(numbers: list[int], lines: list[str], glue: bool = True) -> list[list[int]]:
     """Cut a unit's lines into pieces of at most SPLIT_TOKENS, estimated from length.
-    A piece ends early at a gap in the line numbers once it is big enough, and a cut
-    forced by size falls back to the last blank line of the piece when there is one.
-    One line over the limit is a piece by itself: nothing is ever truncated."""
+    A piece ends at a gap in the line numbers: always without `glue`, and with it once
+    the piece is big enough. A cut forced by size falls back to the last blank line of
+    the piece when there is one. One line over the limit is a piece by itself: nothing
+    is ever truncated."""
     limit = SPLIT_TOKENS / TOKENS_PER_CHAR
-    glue = _GLUE_TOKENS / TOKENS_PER_CHAR
+    enough = _GLUE_TOKENS / TOKENS_PER_CHAR if glue else 0.0
     pieces: list[list[int]] = []
     current: list[int] = []
     size = 0.0
     for number in numbers:
         cost = len(lines[number - 1]) + 1
         gap = bool(current) and number != current[-1] + 1
-        if current and (size + cost > limit or (gap and size >= glue)):
+        if current and (size + cost > limit or (gap and size >= enough)):
             if not gap and size + cost > limit:
                 current, carried = _cut_at_blank(current, lines)
             else:
@@ -128,6 +132,9 @@ def _pieces(numbers: list[int], lines: list[str]) -> list[list[int]]:
             pieces.append(current)
             current = carried
             size = float(sum(len(lines[n - 1]) + 1 for n in current))
+            if current and size + cost > limit:  # what was carried over leaves no room for this line
+                pieces.append(current)
+                current, size = [], 0.0
         current.append(number)
         size += cost
     if current:

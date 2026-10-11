@@ -108,3 +108,15 @@ def test_prose_is_chunked_by_restructuredtext_headings_and_by_window_without_the
     plain = chunk_file("prose", "doc", "just a line\n" * 100)
     assert len(plain) > 1 and all(chunk.kind == "doc" and chunk.breadcrumb == "" for chunk in plain)
     assert sum(chunk.text.count("just a line") for chunk in plain) == 100
+
+
+def test_markdown_fences_comments_and_indented_headings():
+    text = ("# Top\n\n````md\n```\n# not a heading\n```\n````\n\n~~~\n```\n# still code\n~~~\n\n"
+            "<!--\n# commented out\n-->\n\n   ## Indented\n\nBody.\n")
+    assert [chunk.breadcrumb for chunk in markdown_chunks(text)] == ["Top", "Top > Indented"]
+
+
+def test_rst_directives_fields_and_bullets_are_not_titles():
+    text = ("Title\n=====\n\n.. comment line\n---------------\n\n:field: value\n--------------\n\n"
+            "- bullet item\n-------------\n\nReal\n----\n\nText.\n")
+    assert [chunk.breadcrumb for chunk in rst_chunks(text)] == ["Title", "Title > Real"]

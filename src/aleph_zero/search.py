@@ -191,9 +191,11 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         # The same text in many files (a licence header, a common import line) is one
         # finding: show a few places, best first, and count the rest.
         same.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
-        shown = same[:COPIES_SHOWN]
-        if len(same) > len(shown):
-            shown[0] = replace(shown[0], duplicates=len(same) - len(shown))
+        files = list(dict.fromkeys(hit.path for hit in same))
+        listed = set(files[:COPIES_SHOWN])
+        shown = [hit for hit in same if hit.path in listed]
+        if len(files) > len(listed):
+            shown[0] = replace(shown[0], duplicates=len(files) - len(listed))
         hits += shown
     hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
     return arrange(merge_pieces(hits), k, kind)

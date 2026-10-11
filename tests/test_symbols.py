@@ -148,3 +148,13 @@ def test_a_definition_in_the_code_comes_before_one_of_the_same_name_in_its_tests
     assert [hit.path for hit in symbols.lookup(index, view, "get_or_create")] == ["app/models.py", "tests/fakes.py"]
     assert [hit.path for hit in symbols.lookup(index, view, "buildWidget")] == ["web/widget.ts", "spec/widget.spec.ts"]
     assert search(index, view, "get_or_create")[0].path == "app/models.py"
+
+
+def test_a_test_framework_is_not_test_code(repo):
+    repo.write("framework/test/client.py", "class Client:\n    pass\n")
+    repo.write("zz/other.py", "class Client:\n    pass\n")
+    repo.write("src/test/java/ClientTests.java", "class Widget { int fake; }\n")
+    repo.write("zz/Widget.java", "class Widget {}\n")
+    index, view = _ready(repo)
+    assert [hit.path for hit in symbols.lookup(index, view, "Client")] == ["framework/test/client.py", "zz/other.py"]
+    assert [hit.path for hit in symbols.lookup(index, view, "Widget")] == ["zz/Widget.java", "src/test/java/ClientTests.java"]

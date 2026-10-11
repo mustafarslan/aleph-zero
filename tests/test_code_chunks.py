@@ -93,14 +93,6 @@ def test_a_long_function_is_cut_at_line_boundaries_into_pieces_that_share_its_id
     assert pieces[0].start_line == 1 and pieces[-1].end_line == 202
 
 
-def test_pieces_prefer_to_break_at_a_blank_line():
-    block = "".join(f"    step_{i} = prepare({i})\n" for i in range(12))
-    source = "def staged():\n" + (block + "\n") * 6 + "    return 1\n"
-    pieces = by_symbol(chunked("python", source).chunks, "staged")
-    assert len(pieces) > 1
-    assert all(piece.text.split("\n")[0].strip() for piece in pieces)  # no piece starts with a blank line
-
-
 def test_one_very_long_line_is_kept_whole():
     source = "def wide():\n    data = [" + ", ".join(str(i) for i in range(2000)) + "]\n    return data\n"
     pieces = by_symbol(chunked("python", source).chunks, "wide")
@@ -131,3 +123,35 @@ def test_two_functions_on_one_line_do_not_claim_the_line_twice():
     result = chunked("rust", "mod inner { pub fn a() {} pub fn b() {} }\n")
     assert sorted(d.qualified for d in result.definitions) == ["inner", "inner.a", "inner.b"]
     assert sum(chunk.text.count("pub fn a") for chunk in result.chunks) == 1
+
+
+def test_a_module_chunk_never_spans_code_it_does_not_contain():
+    functions = "".join(f"def function_{i}():\n    return {i}\n\n\n" for i in range(30))
+    source = "import os\n\n\n" + functions + "LATE_CONSTANT = 1\n\n\n" + functions.replace("function_", "other_") + "TAIL = 2\n"
+    result = chunked("python", source)
+    for chunk, runs in zip(result.chunks, result.runs):
+        if chunk.kind == "module":
+            assert len(runs) == 1, (chunk.start_line, chunk.end_line, runs)
+            assert chunk.end_line - chunk.start_line + 1 == chunk.text.count("\n") + 1
+    texts = [chunk.text for chunk in result.chunks if chunk.kind == "module"]
+    assert texts == ["import os", "LATE_CONSTANT = 1", "TAIL = 2"]
+
+
+def test_no_piece_exceeds_the_limit_after_a_cut_at_a_blank_line():
+    first = "".join(f"    alpha_{i:02d} = compute_the_value_for(index_{i:02d})\n" for i in range(10))
+    second = "".join(f"    gamma_{i:02d} = compute_the_value_for(index_{i:02d})\n" for i in range(7))
+    wide = "    table = [" + ", ".join(str(i) for i in range(160)) + "]\n"
+    source = "def staged():\n" + first + "\n" + second + wide + "    return table\n"
+    pieces = by_symbol(chunked("python", source).chunks, "staged")
+    for piece in pieces:
+        assert estimate_tokens(piece.text) <= SPLIT_TOKENS or piece.text.count("\n") == 0, piece.text[:60]
+
+
+def test_a_cut_forced_by_size_falls_on_the_blank_line_before_it():
+    block = "".join(f"    step_{i} = prepare({i})\n" for i in range(12))
+    source = "def staged():\n" + (block + "\n") * 6 + "    return 1\n"
+    source_lines = source.split("\n")
+    pieces = by_symbol(chunked("python", source).chunks, "staged")
+    assert len(pieces) > 1
+    for piece in pieces[1:]:
+        assert source_lines[piece.start_line - 2] == ""  # the line before each later piece is blank

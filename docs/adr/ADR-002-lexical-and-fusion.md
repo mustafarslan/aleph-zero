@@ -40,7 +40,7 @@ The M0 storage spike used a uniform synthetic vocabulary, which could not show t
 
 ## Measured with the language layer (M1b)
 
-With source code chunked by definition, Django has 70,435 chunks (was 37,466 line windows), 51,427 symbols and 11,907 imports. Same machine, same spike:
+With source code chunked by definition, Django has 70,481 chunks (was 37,466 line windows), 51,427 symbols and 11,907 imports. Same machine, same spike:
 
 | | p50 / p95 |
 |---|---|
@@ -55,18 +55,18 @@ With source code chunked by definition, Django has 70,435 chunks (was 37,466 lin
 
 | Repository | Language | Files | Chunks | Symbols | Cold index | Definition first |
 |---|---|---|---|---|---|---|
-| Django | Python | 7,080 | 70,435 | 51,427 | 10.2 s | 200 / 200 |
+| Django | Python | 7,080 | 70,481 | 51,427 | 10.3 s | 200 / 200 |
 | FastAPI | Python | 3,182 | 23,567 | 7,994 | 3.4 s | 200 / 200 |
 | Flask | Python | 236 | 1,955 | 1,143 | 0.3 s | 200 / 200 |
 | httpx | Python | 125 | 2,210 | 1,335 | 0.3 s | 200 / 200 |
-| go-kit | Go | 290 | 2,234 | 2,473 | 0.3 s | 200 / 200 |
+| go-kit | Go | 290 | 2,264 | 2,473 | 0.3 s | 200 / 200 |
 | spring-petclinic | Java | 133 | 877 | 318 | 0.1 s | 160 / 160 |
-| eslint | JavaScript | 2,303 | 19,727 | 5,277 | 3.5 s | 200 / 200 |
-| tokio | Rust | 875 | 14,813 | 10,536 | 2.2 s | 200 / 200 |
-| nest | TypeScript | 2,307 | 10,088 | 7,820 | 1.6 s | 200 / 200 |
-| llama.cpp | C++, C, Python, TypeScript | 3,768 | 69,167 | 54,209 | 12.1 s | 198 / 200 |
+| eslint | JavaScript | 2,303 | 19,814 | 5,277 | 3.5 s | 200 / 200 |
+| tokio | Rust | 875 | 16,190 | 10,536 | 2.2 s | 200 / 200 |
+| nest | TypeScript | 2,307 | 10,130 | 7,820 | 1.6 s | 200 / 200 |
+| llama.cpp | C++, C, Python, TypeScript | 3,768 | 70,590 | 55,023 | 12.1 s | 199 / 200 |
 
-The two misses are C++ destructors (`~name`), which rank behind the class and constructor of the same name. This is a sanity check on unique names, not a retrieval benchmark: the benchmark with real questions and a BM25 baseline is M1c's gate.
+The one miss is a C++ destructor (`~name`), which ranks behind the type of the same name. This is a sanity check on unique names, not a retrieval benchmark: the benchmark with real questions and a BM25 baseline is M1c's gate.
 
 The check found three defects, each fixed with a test: files that open with the same lines shared their first chunk, and the path generator proposed that chunk once per file; a JavaScript `#private` member could not be found without its marker; and a C++ declaration behind an unknown export macro took its return type as part of its name.
 
@@ -76,7 +76,8 @@ The check found three defects, each fixed with a test: files that open with the 
 - Lexical and symbol are fused by reciprocal rank over chunks; the symbol generator's vote counts twice (`GENERATOR_WEIGHT`). A file proposed for its path adds a vote to its own first chunk, in that file only.
 - A word of a longer query that names more than 25 definitions (`get`, `main`) proposes no symbol; asked for by itself it proposes the ten best.
 - Among definitions with one name: the exact spelling first, then types and functions before fields, then code before tests.
-- The pieces of one long definition are one result. One chunk held by many files is listed in three places and the rest are counted.
+- The pieces of one long definition are one result. One chunk held by many files is listed in three of them and the other files are counted.
+- A chunk's line range is tight for functions, methods and module-level code. A class chunk is what its methods do not cover, so its range is the class and may skip over them.
 
 All of these are starting values, to be re-examined with the M2 benchmark.
 

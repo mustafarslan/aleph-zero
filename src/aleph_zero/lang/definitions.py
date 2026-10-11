@@ -20,7 +20,9 @@ DOC_LIMIT = 2000
 _NAME_KINDS = frozenset({
     "identifier", "property_identifier", "private_property_identifier", "type_identifier",
     "field_identifier", "namespace_identifier", "destructor_name", "operator_name", "qualified_identifier",
+    "nested_identifier", "nested_namespace_specifier", "operator_cast",
 })
+_LICENCE = re.compile(r"copyright|licen[cs]e|spdx", re.I)
 _MEMBER_SCOPES = frozenset({"class", "interface", "enum", "impl"})
 _ALL_CAPS = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)*\Z")
 _SPACE = re.compile(r"\s+")
@@ -130,7 +132,8 @@ class _Walk:
             kind = profile.type_refinement.get(child.type, kind)
         name_node = self._name_node(definition)
         if name_node is None:
-            return definition, scope  # anonymous: its members belong to whatever encloses it
+            # Unnamed: what it holds belongs to whatever encloses it, but is still a member.
+            return definition, _Scope(scope.names, scope.parent, members=scope.members or kind in _MEMBER_SCOPES)
         owners, name = _split_qualified(_text(name_node))
         index = self._add(kind, name, (*scope.names, *owners), scope.parent, self._outer(node, definition), definition)
         return definition, _Scope((*scope.names, *owners, name), index, members=kind in _MEMBER_SCOPES)
@@ -222,6 +225,11 @@ class _Walk:
         if self.profile.declarator_chain:
             found, _ = _drill(definition)
             return found
+        if definition.type in self.profile.anonymous:
+            # `var visible = function inner() {}` is called as `visible`; `inner` exists only inside it.
+            bound = _bound_name(definition)
+            if bound is not None:
+                return bound
         named = definition.child_by_field_name(self.profile.name_field)
         if named is not None and named.type in _NAME_KINDS:
             return named
@@ -292,6 +300,8 @@ class _Walk:
             if opening is not None and opening.type in profile.string_kinds:
                 return _docstring(_text(opening)), first
         lines = [line for comment in reversed(comments) for line in _text(comment).splitlines()]
+        if comments and first.start_byte == 0 and _LICENCE.search("\n".join(lines)):
+            return "", outer  # the file's licence header, not this definition's documentation
         return _comment_text(lines), first
 
 
@@ -310,9 +320,11 @@ def _last_line(node: Node) -> int:
 
 def _split_qualified(written: str) -> tuple[tuple[str, ...], str]:
     """`TokenStore::Get` -> (('TokenStore',), 'Get'). Template arguments are dropped."""
-    if "::" not in written:
+    if written.startswith("operator"):
+        return (), _SPACE.sub(" ", written.split("(")[0]).strip()  # `operator bool`, `operator==`
+    if "::" not in written and "." not in written:
         return (), written
-    parts = [part.split("<")[0].strip() for part in written.split("::")]
+    parts = [part.split("<")[0].strip() for part in re.split(r"::|\.", written)]
     parts = [part for part in parts if part]
     return tuple(parts[:-1]), parts[-1] if parts else written
 
@@ -337,6 +349,10 @@ def _drill(node: Node, itself: bool = False) -> tuple[Node | None, bool]:
     starting node may be the name."""
     current, is_function = node, False
     for _ in range(12):
+        if current.type in ("function_declarator", "operator_cast"):
+            is_function = True  # a conversion operator carries its own parameter list
+        elif current.type == "parenthesized_declarator":
+            is_function = False  # `void (*callback)(int)` declares a pointer, not a function
         if current.type in _NAME_KINDS and (itself or current is not node):
             if current.type == "qualified_identifier" and b"::" not in (current.text or b""):
                 # `EXPORT_MACRO type name(...)`: an unknown macro makes the parser read
@@ -346,9 +362,12 @@ def _drill(node: Node, itself: bool = False) -> tuple[Node | None, bool]:
                     current = inner
                     continue
             return current, is_function
-        if current.type == "function_declarator":
-            is_function = True
         following = current.child_by_field_name("declarator") or current.child_by_field_name("name")
+        if following is None:
+            # `T& f()`, `(*f)(int)`: reference and parenthesised declarators hold the next
+            # one as a plain child.
+            following = next((child for child in current.named_children
+                              if child.type.endswith("_declarator") or child.type in _NAME_KINDS), None)
         if following is None:
             return None, is_function
         current = following

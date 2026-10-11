@@ -203,3 +203,10 @@ def test_a_private_member_is_found_with_or_without_its_marker(repo):
     assert _find(repo, "#normalizeRules")[0].symbol == "#normalizeRules"
     assert _find(repo, "normalizeRules")[0].symbol == "#normalizeRules"
     assert "symbol" in _find(repo, "normalizeRules")[0].sources
+
+
+def test_copies_are_counted_by_file_not_by_occurrence(repo):
+    body = "    record_metric('wallaby')\n" * 400  # every piece of this function has the same text
+    repo.write("src/repeat.py", f"def repeater():\n    pass\n\n\ndef second():\n{body}    return 0\n")
+    hits = [hit for hit in _find(repo, "wallaby", k=20) if hit.path == "src/repeat.py"]
+    assert len(hits) == 1 and hits[0].duplicates == 0

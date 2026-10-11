@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
@@ -26,6 +27,19 @@ Key = tuple[str, str]  # (blob id, family): the same bytes are chunked once per 
 def symbol_key(name: str) -> str:
     """The form a name is looked up by: lower-cased, without a private marker (`#secret`)."""
     return name.lower().lstrip("#")
+
+
+@contextmanager
+def _temp_tables(conn: apsw.Connection):
+    """A transaction over the connection's own temporary tables. It takes no lock on the
+    index; it only makes the rewrite all-or-nothing and leaves no transaction open on error."""
+    conn.execute("BEGIN")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 @dataclass(frozen=True)
@@ -103,7 +117,8 @@ class Index:
                     continue
                 with transaction(self.conn):
                     for item in prepared:
-                        self._store(item)
+                        if not self._store(item):
+                            continue  # another session stored it first
                         if item.chunks:
                             indexed += 1
                         else:
@@ -151,25 +166,25 @@ class Index:
             return
         of_kind = {"any": "", "code": " WHERE c.kind != 'doc'", "docs": " WHERE c.kind = 'doc'"}[kind]
         conn = self.conn
-        conn.execute("BEGIN")
-        conn.execute("DELETE FROM temp.scope_chunks")
-        if paths is None:
-            conn.execute(
-                "INSERT INTO temp.scope_chunks(chunk_id) SELECT v.chunk_id FROM temp.view_chunks v "
-                "JOIN chunks c ON c.chunk_id = v.chunk_id" + of_kind
-            )
-        else:
-            conn.execute("DELETE FROM temp.scope_blobs")
-            conn.executemany(
-                "INSERT OR IGNORE INTO temp.scope_blobs(blob_oid, family) VALUES (?, ?)",
-                (blob for blob, held in self._paths.items() if any(paths(path) for path in held)),
-            )
-            conn.execute(
-                "INSERT INTO temp.scope_chunks(chunk_id) SELECT DISTINCT bc.chunk_id FROM blob_chunks bc "
-                "JOIN temp.scope_blobs s ON s.blob_oid = bc.blob_oid AND s.family = bc.family "
-                "JOIN chunks c ON c.chunk_id = bc.chunk_id" + of_kind
-            )
-        conn.execute("COMMIT")
+        self._scope = None
+        with _temp_tables(conn):
+            conn.execute("DELETE FROM temp.scope_chunks")
+            if paths is None:
+                conn.execute(
+                    "INSERT INTO temp.scope_chunks(chunk_id) SELECT v.chunk_id FROM temp.view_chunks v "
+                    "JOIN chunks c ON c.chunk_id = v.chunk_id" + of_kind
+                )
+            else:
+                conn.execute("DELETE FROM temp.scope_blobs")
+                conn.executemany(
+                    "INSERT OR IGNORE INTO temp.scope_blobs(blob_oid, family) VALUES (?, ?)",
+                    (blob for blob, held in self._paths.items() if any(paths(path) for path in held)),
+                )
+                conn.execute(
+                    "INSERT INTO temp.scope_chunks(chunk_id) SELECT DISTINCT bc.chunk_id FROM blob_chunks bc "
+                    "JOIN temp.scope_blobs s ON s.blob_oid = bc.blob_oid AND s.family = bc.family "
+                    "JOIN chunks c ON c.chunk_id = bc.chunk_id" + of_kind
+                )
         self._scope = (self._view_epoch, kind, key)
 
     def counts(self) -> dict[str, int]:
@@ -199,20 +214,18 @@ class Index:
         for path in sorted(view.files):
             paths.setdefault((view.files[path], filters.family(path)), []).append(path)
         self._paths = paths
-        self.conn.execute("BEGIN")
-        self.conn.execute("DELETE FROM temp.view_blobs")
-        self.conn.executemany("INSERT INTO temp.view_blobs(blob_oid, family) VALUES (?, ?)", paths)
-        self.conn.execute("COMMIT")
+        with _temp_tables(self.conn):
+            self.conn.execute("DELETE FROM temp.view_blobs")
+            self.conn.executemany("INSERT INTO temp.view_blobs(blob_oid, family) VALUES (?, ?)", paths)
 
     def _refresh_view_chunks(self) -> None:
         self._view_epoch += 1
-        self.conn.execute("BEGIN")
-        self.conn.execute("DELETE FROM temp.view_chunks")
-        self.conn.execute(
-            "INSERT INTO temp.view_chunks(chunk_id) SELECT DISTINCT bc.chunk_id FROM blob_chunks bc "
-            "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family"
-        )
-        self.conn.execute("COMMIT")
+        with _temp_tables(self.conn):
+            self.conn.execute("DELETE FROM temp.view_chunks")
+            self.conn.execute(
+                "INSERT INTO temp.view_chunks(chunk_id) SELECT DISTINCT bc.chunk_id FROM blob_chunks bc "
+                "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family"
+            )
 
     def _touch(self) -> None:
         """Mark the view's blobs as recently seen, at most once an hour each, so a
@@ -251,7 +264,8 @@ class Index:
         chunks = chunk_file(family, kind, text)
         return _Prepared(key, kind if chunks else "skip:empty", len(data), chunks)
 
-    def _store(self, item: _Prepared) -> None:
+    def _store(self, item: _Prepared) -> bool:
+        """Write one blob. False if another session had already written it."""
         conn = self.conn
         oid, family = item.key
         conn.execute("DELETE FROM blobs WHERE blob_oid = ? AND family = ? AND chunker_version != ?",
@@ -262,7 +276,7 @@ class Index:
             (oid, family, item.kind, item.size, CHUNKER_VERSION, int(time.time())),
         )
         if conn.changes() == 0:
-            return  # another session indexed this blob first
+            return False
         for ordinal, chunk in enumerate(item.chunks):
             digest = chunk_hash(family, chunk)
             conn.execute(
@@ -294,6 +308,7 @@ class Index:
               (1 if i.reexport else 0) | (2 if i.deferred else 0), i.line)
              for ordinal, i in enumerate(item.imports)),
         )
+        return True
 
 
 def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | None = None) -> dict[str, int]:

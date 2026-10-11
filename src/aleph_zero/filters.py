@@ -46,6 +46,7 @@ def classify(family: str, data: bytes) -> tuple[str, str | None]:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return "skip:not-utf8", None
+    text = text.removeprefix("\ufeff")  # a byte-order mark is not content
     if not text.strip():
         return "skip:empty", None
     lines = text.count("\n") + 1

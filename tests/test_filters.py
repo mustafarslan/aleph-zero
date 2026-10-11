@@ -26,3 +26,7 @@ def test_unindexable_files_are_skipped_with_a_reason():
     assert classify("a.py", b"\xff\xfe broken") == ("skip:not-utf8", None)
     assert classify("a.py", b"  \n\n") == ("skip:empty", None)
     assert classify("app.min.js", b"a=1;" * 2000) == ("skip:minified", None)
+
+
+def test_a_byte_order_mark_is_not_part_of_the_text():
+    assert classify("README.md", "﻿# Top\n".encode()) == ("doc", "# Top\n")

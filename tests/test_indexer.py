@@ -268,3 +268,44 @@ def test_path_words_are_kept_while_the_set_of_paths_is_unchanged(repo):
     index.sync(added)
     assert "receipt" in index.path_words(added)[1]    # a new path is seen
     assert index.path_words(added) is not words
+
+
+def test_a_blob_another_session_stored_first_is_not_counted_as_indexed_here(repo):
+    first, second = _index(repo), _index(repo)
+    view = build_view(repo.root)
+    assert first.sync(view).indexed == 3
+    report = second.sync(view)
+    assert (report.indexed, report.pending) == (0, 0)
+    stolen = _index(repo)
+    original = Index._prepare
+
+    def prepare_after_someone_else(self, view, reader, key):
+        item = original(self, view, reader, key)
+        Index._prepare = original
+        _index(repo).sync(build_view(repo.root))  # another session finishes first
+        return item
+
+    repo.write("src/new_one.py", "def numbat():\n    return 1\n")
+    fresh = build_view(repo.root)
+    Index._prepare = prepare_after_someone_else
+    try:
+        report = stolen.sync(fresh)
+    finally:
+        Index._prepare = original
+    assert (report.indexed, report.pending) == (0, 0)
+
+
+def test_a_failed_filter_does_not_leave_a_transaction_open(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+
+    def explode(path):
+        raise RuntimeError("bad filter")
+
+    try:
+        index.narrow(view, "any", explode, "boom")
+    except RuntimeError:
+        pass
+    index.narrow(view, "docs", None, None)  # would fail with "cannot start a transaction within a transaction"
+    assert search(index, view, "invoices", kind="docs")

@@ -9,8 +9,8 @@ from .model import Chunk
 WINDOW_LINES = 40
 WINDOW_STRIDE = 30
 SECTION_LINES = 60
-_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-_FENCE = re.compile(r"^\s*(```|~~~)")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _SETEXT = re.compile(r"^ {0,3}(={2,}|-{2,})\s*$")
 _ADORNMENT = re.compile(r"^([=\-`:'\"~^_*+#<>.])\1{2,}\s*$")
 
@@ -35,6 +35,7 @@ def window_chunks(text: str, kind: str = "block", breadcrumb: str = "", first_li
     return chunks
 
 
+_RST_NOT_A_TITLE = (".. ", ":", "- ", "* ", "+ ", "| ")  # directives, comments, field lists, bullets, line blocks
 Heading = tuple[int, int, str]  # (index of its first line, level, title)
 
 
@@ -44,17 +45,25 @@ def markdown_chunks(text: str) -> list[Chunk]:
     fenced code block is not a heading, nor is anything in YAML front matter."""
     lines = text.replace("\r\n", "\n").split("\n")
     headings: list[Heading] = []
-    in_fence = False
     start = 0
     if lines and lines[0].strip() == "---":  # front matter: skip to its closing line
         closing = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), 0)
         start = closing + 1 if closing else 0
+    fence = ""       # the opening fence while inside a code block: closed only by its like
+    in_comment = False
     for index in range(start, len(lines)):
         line = lines[index]
-        if _FENCE.match(line):
-            in_fence = not in_fence
+        opened = _FENCE.match(line)
+        if fence:
+            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence) \
+                    and not line.strip().strip(fence[0]):
+                fence = ""
             continue
-        if in_fence:
+        if opened:
+            fence = opened.group(1)
+            continue
+        if in_comment or "<!--" in line:
+            in_comment = "-->" not in line.split("<!--")[-1] if "<!--" in line else "-->" not in line
             continue
         match = _HEADING.match(line)
         if match:
@@ -79,7 +88,7 @@ def rst_chunks(text: str) -> list[Chunk]:
         title, under = lines[index], lines[index + 1]
         adornment = _ADORNMENT.match(under)
         if (adornment and title.strip() and not title[:1].isspace() and not _ADORNMENT.match(title)
-                and len(under.rstrip()) >= len(title.rstrip())):
+                and not title.startswith(_RST_NOT_A_TITLE) and len(under.rstrip()) >= len(title.rstrip())):
             overlined = index > 0 and lines[index - 1].rstrip() == under.rstrip()
             style = (under[0], overlined)
             if style not in styles:

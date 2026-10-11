@@ -234,3 +234,47 @@ def test_an_export_macro_in_front_of_a_declaration_does_not_become_part_of_the_n
     # plain name (it reads `MACRO type` as a variable and the rest as a call). Known limit.
     in_c = [d.qualified for d in found("c", source) if d.kind == "function"]
     assert in_c == ["XXH64_update", "ggml_new", "llama_n"]
+
+
+def test_cpp_callables_behind_references_pointers_and_conversions_are_found():
+    source = (
+        "class Cfg {\n public:\n"
+        "  const std::string& name() const { return name_; }\n"
+        "  Cfg& operator=(const Cfg&) = default;\n"
+        "  int& at(int index);\n"
+        "  explicit operator bool() const;\n"
+        "  int operator[](int index) const { return index; }\n"
+        "  void (*callback)(int);\n"
+        " private:\n  std::string name_;\n};\n"
+        "Cfg& global_cfg() { static Cfg cfg; return cfg; }\n"
+        "int (*resolve(int code))(int);\n"
+    )
+    assert listing(found("cpp", source)) == [
+        ("class", "Cfg"), ("method", "Cfg.name"), ("method", "Cfg.operator="), ("method", "Cfg.at"),
+        ("method", "Cfg.operator bool"), ("method", "Cfg.operator[]"), ("field", "Cfg.callback"),
+        ("field", "Cfg.name_"), ("function", "global_cfg"), ("function", "resolve"),
+    ]
+
+
+def test_members_of_an_unnamed_class_are_still_methods():
+    defs = found("typescript", "export default class {\n  start() { return 1; }\n}\n")
+    assert listing(defs) == [("method", "start")]
+
+
+def test_dotted_and_nested_namespace_names_keep_every_part():
+    assert listing(found("typescript", "namespace App.Core {\n  export function boot() {}\n}\n")) == [
+        ("namespace", "App.Core"), ("function", "App.Core.boot")]
+    assert listing(found("cpp", "namespace a::b {\nint f() { return 1; }\n}\n")) == [
+        ("namespace", "a.b"), ("function", "a.b.f")]
+
+
+def test_a_function_expression_is_known_by_the_name_it_is_bound_to():
+    assert listing(found("javascript", "var visible = function inner() { return 1; };\n")) == [("function", "visible")]
+
+
+def test_a_licence_header_is_not_the_first_definitions_documentation():
+    source = "// Copyright (c) 2026 Example Corp.\n// SPDX-License-Identifier: MIT\nexport function first() {}\n"
+    first, = found("typescript", source)
+    assert first.doc == "" and first.start_line == 3
+    documented, = found("typescript", "// Starts the service.\nexport function first() {}\n")
+    assert documented.doc == "Starts the service." and documented.start_line == 1
