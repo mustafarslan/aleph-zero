@@ -122,7 +122,7 @@ class Engine:
             "chunks_in_view": counts["chunks_in_view"], "symbols_in_view": counts["symbols_in_view"],
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
-            "sqlite": apsw.sqlite_lib_version(), "watcher": "off",
+            "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
         }
 
     # ---- text for an agent, with the session's memory ----------------------------------------

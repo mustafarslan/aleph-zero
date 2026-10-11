@@ -1,6 +1,6 @@
 # ADR-008: How a query learns what the worktree looks like
 
-- **Status:** Accepted for M1 (stateless). The faster path is designed here and built in M1c, when a long-lived server exists to own it.
+- **Status:** Accepted. Revised 2026-10-12: the watcher chosen below for M1c was built, measured and rejected; see "Outcome in M1c" at the end. The view is rebuilt from git on every query, in a form git's own untracked cache can speed up.
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -73,3 +73,34 @@ Expected result: about 5 ms for a query when nothing changed since the last one,
 **Author (Claude):** profiled the steps above and initially leaned towards option D. Dropped it after both reviews. Added the synchronous event flush before trusting the flag, since event delivery is asynchronous and an edit made just before a query must not be missed.
 
 **Where they differed:** only on option B, and on when to build option E (agy: now; advisor: with the server in M1c). All three converge on rejecting D and on E as the design.
+
+## Outcome in M1c (2026-10-12): the watcher is rejected, git's untracked cache is the fast path
+
+**The watcher was built and failed its own condition.** Option E is sound only if every change has produced an event by the time a query asks. `bench/spikes/fsevents_lag.py` changes a file, asks at once, and keeps asking, flushing the event stream synchronously before each answer:
+
+| Kind of change | Events per directory | Events per file |
+|---|---|---|
+| Same file rewritten | 6 of 80 about one second late | 4 of 80 |
+| Different files | 3 of 80 | 2 of 80 |
+| File replaced atomically | 0 of 80 | 5 of 80 |
+| New files | 8 of 80 | 0 of 80 |
+
+Nothing was ever lost, and the usual delay is 0.1 ms, but between 1% and 10% of changes were reported about 1,010 ms late. A synchronous flush does not help: the delay is before the event reaches the service that is flushed. So for up to a second after an edit, "no event" does not mean "nothing changed", and an agent that edits a file and searches at once could be answered from the old content. This is the case named under "What would change this decision", so the watcher was removed rather than patched. An idle check also cost 3 ms, not the sub-millisecond assumed.
+
+**What replaced it is option C, in the form that needs nothing from us.** Git has its own cache of untracked files (`core.untrackedCache`), kept correct by git with the same directory-timestamp technique option D would have re-implemented. Two facts make it usable from a background reader:
+
+- It is only consulted for `--untracked-files=normal`, where a wholly untracked directory is one entry. Aleph asked for `all`. It now asks for `normal` and lists such directories with a second call (`git ls-files --others --exclude-standard`), which yields the same files.
+- Git can read the cache without writing the index. Aleph still never takes `index.lock`; the cache is refreshed by the user's and the agent's ordinary git commands. After files were created in three directories and two tracked files edited, with no index write possible, the call still took 20.8 ms.
+
+Measured on Django (7,080 files):
+
+| | `git status` alone | Whole view build, p50 / p95 |
+|---|---|---|
+| Untracked cache off (git's default) | 66 ms | 74 / 84 ms |
+| Untracked cache on | 20 ms | 26 / 37 ms |
+
+**Decision.** The view is rebuilt from git on every query: exact, with no state of ours to go stale. Aleph does not change the user's git configuration. `aleph doctor` reports whether the untracked cache is on and what turning it on would save, and `aleph status` shows it. Turning it on is one command for the user: `git config core.untrackedCache true`.
+
+**What is given up:** the "5 ms when nothing changed" that the watcher promised. A query costs about 30 ms on a 7,000-file repository with the cache on and about 80 ms with it off.
+
+**Left open:** on Linux, inotify delivers events synchronously from the kernel queue and might not have this lag. It was not built, because it cannot be tested on this machine; if it is ever added it must pass the same "change, then ask at once" test before it is trusted. The agent's own edits could also be reported to the engine by the Claude Code mod (M4) through its tool hooks; that would be exact for those edits but not for the user's editor, so it cannot replace the git check either.

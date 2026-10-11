@@ -24,7 +24,7 @@ def test_search_symbol_outline_and_status_through_one_engine(repo):
     assert engine.outline("docs/guide.md").items[0].name == "Guide"
     status = engine.status()
     assert status["root"] == str(repo.root) and status["files_in_view"] == 3 and status["pending"] == 0
-    assert status["schema_version"] >= 3 and status["chunker_version"] >= 3 and status["watcher"] == "off"
+    assert status["schema_version"] >= 3 and status["chunker_version"] >= 3 and status["untracked_cache"] is False
     assert status["symbols_in_view"] == 4 and status["index"].endswith("aleph-zero/index.db")
 
 

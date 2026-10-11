@@ -112,9 +112,16 @@ def ls_tree(cwd: Path, tree: str) -> dict[str, str]:
 
 
 def status(cwd: Path) -> list[str]:
-    """Every path that differs from HEAD or is untracked. A rename reports both names."""
-    tokens = git(cwd, "status", "--porcelain=v2", "-z", "--untracked-files=all").split(b"\0")
+    """Every path that differs from HEAD or is untracked. A rename reports both names.
+
+    Untracked files are asked for in git's `normal` form, where a wholly untracked
+    directory is reported as one entry, and such directories are then listed by a
+    second call. The `all` form gives the same files in one call, but git's untracked
+    cache cannot answer it: with `core.untrackedCache` on, this form took 20 ms on
+    Django against 66 ms (ADR-008)."""
+    tokens = git(cwd, "status", "--porcelain=v2", "-z", "--untracked-files=normal").split(b"\0")
     paths: list[bytes] = []
+    directories: list[bytes] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -129,8 +136,20 @@ def status(cwd: Path) -> list[str]:
         elif tag == b"u ":
             paths.append(token.split(b" ", 10)[10])
         elif tag == b"? ":
-            paths.append(token[2:])
+            (directories if token.endswith(b"/") else paths).append(token[2:])
+    if directories:
+        listed = git(cwd, "ls-files", "--others", "--exclude-standard", "-z", "--",
+                     *(os.fsdecode(directory) for directory in directories))
+        paths.extend(path for path in listed.split(b"\0") if path)
     return [path.decode("utf-8", "surrogateescape") for path in paths]
+
+
+def untracked_cache_enabled(cwd: Path) -> bool:
+    """True if git keeps its untracked cache for this repository."""
+    try:
+        return git(cwd, "config", "--bool", "--get", "core.untrackedCache").strip() == b"true"
+    except GitError:
+        return False
 
 
 def hash_blob(data: bytes, fmt: str = "sha1") -> str:

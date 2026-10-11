@@ -101,3 +101,37 @@ def test_blob_reader_does_not_load_a_blob_over_the_limit(repo):
         assert isinstance(refused, gitio.TooLarge) and refused.size == big.stat().st_size
         assert reader.read(small, max_bytes=10_000).startswith(b"# Guide")  # the stream is still in step
         assert len(reader.read(oid)) == big.stat().st_size                # no limit: the whole blob
+
+
+def test_status_lists_every_file_of_a_new_directory_but_not_ignored_ones(repo):
+    repo.write(".gitignore", "*.log\nbuild/\n")
+    repo.commit("ignore rules")
+    repo.write("fresh/top.py", "a = 1\n")
+    repo.write("fresh/deep/er/inner file.py", "b = 2\n")
+    repo.write("fresh/deep/debug.log", "noise\n")
+    repo.write("build/out.py", "c = 3\n")
+    repo.write("src/auth/extra.py", "d = 4\n")
+    expected = ["fresh/deep/er/inner file.py", "fresh/top.py", "src/auth/extra.py"]
+    assert sorted(gitio.status(repo.root)) == expected
+    repo.git("config", "core.untrackedCache", "true")  # the opt-in that makes this call fast
+    repo.git("status")
+    assert sorted(gitio.status(repo.root)) == expected
+    repo.write("fresh/later.py", "e = 5\n")
+    assert sorted(gitio.status(repo.root)) == sorted([*expected, "fresh/later.py"])
+
+
+def test_status_asks_git_in_the_form_its_untracked_cache_can_answer(repo, monkeypatch):
+    seen = []
+    real = gitio._run
+
+    def spy(command):
+        seen.append(command)
+        return real(command)
+
+    monkeypatch.setattr(gitio, "_run", spy)
+    gitio.status(repo.root)
+    assert "--untracked-files=normal" in seen[0] and len(seen) == 1  # nothing untracked: one git call
+    repo.write("fresh/top.py", "a = 1\n")
+    seen.clear()
+    gitio.status(repo.root)
+    assert len(seen) == 2 and "ls-files" in seen[1]  # a new directory is listed by a second call
