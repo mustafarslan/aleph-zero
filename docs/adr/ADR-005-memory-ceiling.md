@@ -112,3 +112,5 @@ Private memory of one process, each measured alone. "Cold" indexed the whole rep
 A session therefore sits at roughly 25–60 MB, against a 150 MB target. Four sessions plus the embed worker at full capacity come to about 480 + 4 × 60 = 720 MB in the worst case measured here.
 
 **Latency on the largest of these (airflow, 13,913 files, 149,238 chunks):** cold index 30.7 s; building the view from git 105 ms p50 / 126 ms p95; a typical query after that 7.7 ms p50 / 21 ms p95. A query answered the stateless way is therefore about 147 ms at p95, at the edge of M1's 150 ms gate. The watcher in ADR-008 removes the git cost when nothing changed.
+
+**The server as a whole (M1 gate).** `aleph serve` on airflow, 64 searches through the protocol: 124 ms p50 / 138 ms p95 with git's untracked cache off, 60 ms p50 / 75 ms p95 with it on; 47 MB of private memory. On Django: ready 45 ms after launch, 17 MB before the first call, 37 MB after eighteen searches. The gate was p95 under 150 ms warm on a 15,000-file repository and under 150 MB per session; airflow has 13,913 files and is the largest corpus at hand.

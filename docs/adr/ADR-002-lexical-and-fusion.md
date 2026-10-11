@@ -82,6 +82,22 @@ The check found three defects, each fixed with a test: files that open with the 
 
 All of these are starting values, to be re-examined with the M2 benchmark.
 
+## Against a plain BM25 baseline (M1 gate, 2026-10-12)
+
+`bench/eval/locbench.py` runs the 35 Django instances of Loc-Bench (the repository with the most instances). For each, the repository is checked out at the issue's base commit, the issue text is the query, and the question is whether the files the fix edited are among the first ten files returned. The baseline was fixed before it was run: one FTS5 row per file, default `unicode61` tokenizer, no column weights, no identifier expansion, every word of the issue OR-ed; it sees exactly the files Aleph indexes.
+
+| | Aleph | Plain BM25 over whole files |
+|---|---|---|
+| Edited files in the first ten (recall@10) | 0.743 | 0.514 |
+| ... in the first five | 0.671 | 0.343 |
+| ... in first place | 0.500 | 0.171 |
+| All edited files in the first ten | 0.714 | 0.514 |
+| Mean reciprocal rank of the first edited file | 0.578 | 0.258 |
+
+M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at ten and 33 points ahead in first place, without any embedding model. Thirty-five questions from one Python repository are a small sample: a difference of one question is 3 points.
+
+**Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.
+
 ## Known limits
 
 - **Languages written without spaces.** Words are recognised in every script, and case and diacritics are folded, so German, Russian or Greek text is searchable. Chinese, Japanese and Korean text is indexed as whole runs between spaces and punctuation, so a query finds a run only if it equals it. Closing this needs a second index with FTS5's trigram tokenizer; it is planned for M3 if the benchmark repositories show a need.

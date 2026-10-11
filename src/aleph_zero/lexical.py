@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import re
 
+import apsw
+
 from .chunking import Chunk
 
 WEIGHTS = (5.0, 3.0, 2.0, 1.0)  # symbol, signature, doc, body: a starting grid, tuned in M2
-MAX_TERMS = 48
+MAX_TERMS = 400      # words read from a query before the rarest are chosen
+LONG_QUERY = 16      # a query with more terms than this keeps only its rarest
+KEEP_TERMS = 24
+TOKENIZER = ("porter", ["unicode61", "tokenchars", "_"])  # must match store/schema.sql
 _WORD = re.compile(r"[^\W\d]\w*|\d+")  # a word in any script, or a number
 _ASCII_PARTS = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
 STOPWORDS = frozenset(
@@ -73,6 +78,29 @@ def query_terms(query: str) -> list[str]:
     return (kept or terms)[:MAX_TERMS]
 
 
+def select_terms(conn, terms: list[str]) -> list[str]:
+    """For a long query (a pasted issue, a paragraph), the KEEP_TERMS terms found in the
+    fewest chunks, rarest first. Every extra term of an OR query is another posting list
+    to read, and a word in half the chunks says little. On the Loc-Bench Django issues
+    this answered in 118 ms instead of 172 ms with the same files found, within the noise
+    of 35 questions (ADR-002). Terms the index has never seen are dropped. A short query
+    is returned as it is."""
+    if len(terms) <= LONG_QUERY:
+        return terms
+    tokenize = conn.fts5_tokenizer(*TOKENIZER)
+    stems: dict[str, str] = {}
+    for term in terms:
+        tokens = tokenize(term.encode("utf-8", "replace"), apsw.FTS5_TOKENIZE_QUERY, None)
+        if tokens:
+            stems[term] = tokens[0][-1]
+    wanted = sorted(set(stems.values()))
+    counts = dict(conn.execute(
+        f"SELECT term, doc FROM temp.chunk_vocab WHERE term IN ({','.join('?' * len(wanted))})", wanted))
+    known = [term for term in terms if counts.get(stems.get(term, ""), 0) > 0]
+    known.sort(key=lambda term: counts[stems[term]])  # stable: equally rare terms keep the query's order
+    return known[:KEEP_TERMS]
+
+
 def match_expression(terms: list[str]) -> str:
     return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
@@ -88,7 +116,7 @@ def insert(conn, chunk_id: int, chunk: Chunk) -> None:
 def search(conn, query: str, limit: int, scoped: bool = False) -> list[tuple[int, float]]:
     """(chunk id, score) for chunks in the current view, best first. Lower scores are better.
     With `scoped`, only chunks the caller put in temp.scope_chunks."""
-    terms = query_terms(query)
+    terms = select_terms(conn, query_terms(query))
     if not terms:
         return []
     return list(conn.execute(SCOPED_SQL if scoped else SEARCH_SQL, (*WEIGHTS, match_expression(terms), limit)))

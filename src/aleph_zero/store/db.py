@@ -96,6 +96,8 @@ def open_db(path: Path) -> apsw.Connection:
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_blobs("
                  "blob_oid TEXT NOT NULL, family TEXT NOT NULL, PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_chunks(chunk_id INTEGER PRIMARY KEY)")
+    # How many chunks hold each term: lets a long query keep its rarest words (lexical.select_terms).
+    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.chunk_vocab USING fts5vocab(main, chunk_fts, row)")
     # A query's kind or path filter narrows the view before candidates are ranked.
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_blobs("
                  "blob_oid TEXT NOT NULL, family TEXT NOT NULL, PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
