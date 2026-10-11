@@ -23,6 +23,11 @@ RETRY_SECONDS = 60  # before a blob git could not supply is asked for again unde
 Key = tuple[str, str]  # (blob id, family): the same bytes are chunked once per treatment
 
 
+def symbol_key(name: str) -> str:
+    """The form a name is looked up by: lower-cased, without a private marker (`#secret`)."""
+    return name.lower().lstrip("#")
+
+
 @dataclass(frozen=True)
 class SyncReport:
     indexed: int    # blobs chunked and stored by this call
@@ -53,7 +58,8 @@ class Index:
         self._missing: frozenset[Key] = frozenset()  # unindexed blobs of the view at the last sync
         self._deferred: dict[Key, float] = {}  # blob git does not have -> when we last asked
         self._paths: dict[Key, list[str]] = {}
-        self._path_tokens: dict[str, tuple[frozenset[str], frozenset[str]]] | None = None
+        self._path_words: tuple[dict[str, list[str]], dict[str, list[str]]] | None = None
+        self._path_names: frozenset[str] = frozenset()
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
         self._scope: tuple | None = None
 
@@ -120,15 +126,21 @@ class Index:
         """Paths of the synced view that hold this content under this treatment."""
         return self._paths.get((oid, family), [])
 
-    def path_tokens(self, view: View) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
-        """For each path of the synced view: (all its lower-cased words, the words of its file name)."""
+    def path_words(self, view: View) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """For the synced view, two maps from a lower-cased word to the paths it occurs in:
+        anywhere in the path, and in the file's own name. Built once per view, so matching
+        a query against paths reads only the query's words, not every path."""
         self._require(view)
-        if self._path_tokens is None:
-            self._path_tokens = {
-                path: (frozenset(lexical.query_terms(path)), frozenset(lexical.query_terms(PurePosixPath(path).stem)))
-                for path in view.files
-            }
-        return self._path_tokens
+        if self._path_words is None:
+            anywhere: dict[str, list[str]] = {}
+            in_name: dict[str, list[str]] = {}
+            for path in view.files:
+                for word in set(lexical.query_terms(path)):
+                    anywhere.setdefault(word, []).append(path)
+                for word in set(lexical.query_terms(PurePosixPath(path).stem)):
+                    in_name.setdefault(word, []).append(path)
+            self._path_words = (anywhere, in_name)
+        return self._path_words
 
     def narrow(self, view: View, kind: str, paths: Callable[[str], bool] | None, key: object) -> None:
         """Fill temp.scope_chunks with the view's chunks of `kind` ('any', 'code', 'docs')
@@ -179,7 +191,9 @@ class Index:
             raise ValueError("this view is not the one the index was last synced to; call sync(view) first")
 
     def _load_view_blobs(self, view: View) -> None:
-        self._path_tokens = None
+        if view.files.keys() != self._path_names:  # most edits change content, not paths
+            self._path_words = None
+            self._path_names = frozenset(view.files)
         self._deferred.clear()
         paths: dict[Key, list[str]] = {}
         for path in sorted(view.files):
@@ -270,7 +284,7 @@ class Index:
         conn.executemany(
             "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, d.name, d.name.lower(), d.qualified, d.kind, d.signature, chunk_ord, d.start_line)
+            ((oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature, chunk_ord, d.start_line)
              for ordinal, (d, chunk_ord) in enumerate(zip(item.definitions, item.chunk_of))),
         )
         conn.executemany(

@@ -171,3 +171,35 @@ def test_a_lockfiles_bytes_under_another_name_are_indexed(repo):
     repo.write("uv.lock", "ocelotword = 1\n")
     repo.write("config/settings.toml", "ocelotword = 1\n")
     assert _paths(_find(repo, "ocelotword")) == ["config/settings.toml"]
+
+
+def test_a_repeated_candidate_votes_once():
+    fused = rrf({"path": [5, 5, 5], "lexical": [7]})
+    assert sorted(score for _, score, _ in fused) == [1 / 61, 1 / 61]
+
+
+def test_files_that_share_their_first_lines_do_not_multiply_a_path_match(repo):
+    opening = "import { RuntimeException } from '@core/internal';\n\n"
+    for name in ("invalid-grpc-package", "invalid-grpc-message", "invalid-kafka-topic",
+                 "invalid-grpc-service", "invalid-grpc-definition", "invalid-message"):
+        class_name = "".join(part.title() for part in name.split("-")) + "Exception"
+        repo.write(f"errors/{name}.exception.ts", f"{opening}export class {class_name} extends RuntimeException {{}}\n")
+    for i in range(20):  # the same first lines in files whose paths say nothing
+        repo.write(f"other/unit_{i}.ts", f"{opening}export class Unit{i} {{}}\n")
+    repo.write("exceptions/grpc-exception.ts",
+               "export class GrpcCancelledException extends GrpcException {\n  constructor() { super(1); }\n}\n")
+    hits = _find(repo, "GrpcCancelledException", k=30)
+    assert hits[0].path == "exceptions/grpc-exception.ts" and hits[0].symbol == "GrpcCancelledException"
+    assert sum("path" in hit.sources for hit in hits) <= 5
+    # The shared opening line also matches the word "exception", in all 26 files. Identical
+    # text is shown a few times and the rest are counted, not listed.
+    shared = [hit for hit in hits if hit.text.startswith("import { RuntimeException }")]
+    assert len(shared) == 3 and shared[0].duplicates == 23
+    assert all("path" in hit.sources for hit in shared)  # the files whose path matched are the ones shown
+
+
+def test_a_private_member_is_found_with_or_without_its_marker(repo):
+    repo.write("web/config.js", "class Config {\n  #normalizeRules(input) { return input; }\n}\n")
+    assert _find(repo, "#normalizeRules")[0].symbol == "#normalizeRules"
+    assert _find(repo, "normalizeRules")[0].symbol == "#normalizeRules"
+    assert "symbol" in _find(repo, "normalizeRules")[0].sources

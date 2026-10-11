@@ -4,7 +4,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import filters, lexical, symbols
 from .indexer import Index
@@ -13,6 +13,7 @@ from .view import View
 RRF_K = 60
 PATH_CANDIDATES = 5
 PATH_TIE_LIMIT = 25
+COPIES_SHOWN = 3  # places listed for one chunk that many files share
 SYMBOL_CANDIDATES = 10
 # A name written in the query that is exactly a definition's name is stronger evidence than
 # a text match: its order decides between otherwise equal candidates. A starting value, tuned in M2.
@@ -37,6 +38,8 @@ class Hit:
     # is one piece of a long function or the part of a class its methods do not cover.
     scope_start_line: int = 0
     scope_end_line: int = 0
+    # How many more files hold exactly this chunk and are not listed.
+    duplicates: int = 0
 
 
 def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...]]]:
@@ -46,7 +49,7 @@ def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...
     sources: dict[int, list[str]] = {}
     for name, ranked in rankings.items():
         weight = GENERATOR_WEIGHT.get(name, 1.0)
-        for rank, chunk_id in enumerate(ranked, start=1):
+        for rank, chunk_id in enumerate(dict.fromkeys(ranked), start=1):  # a repeated id votes once
             scores[chunk_id] = scores.get(chunk_id, 0.0) + weight / (RRF_K + rank)
             sources.setdefault(chunk_id, []).append(name)
     return sorted(((cid, score, tuple(sources[cid])) for cid, score in scores.items()),
@@ -54,32 +57,31 @@ def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...
 
 
 def path_ranking(index: Index, view: View, terms: list[str],
-                 accept: Callable[[str], bool] | None = None) -> list[int]:
-    """First chunk of the files whose path matches the query's words, best first.
+                 accept: Callable[[str], bool] | None = None) -> list[tuple[str, str]]:
+    """The files whose path matches the query's words, best first, as (blob, family).
 
     A multi-word query must match at least two words and a one-word query must match
     the file's own name, so a common word or an extension does not match everything.
-    When too many files tie for best, the path says nothing and no file is proposed."""
+    When too many files tie for best, the path says nothing and no file is proposed.
+
+    Files are proposed, not chunks: many files open with the same lines, and a chunk
+    shared by all of them would stand for every one."""
     need = min(2, len(terms))
-    scored: list[tuple[int, str]] = []
-    for path, (words, name_words) in index.path_tokens(view).items():
-        if accept is not None and not accept(path):
-            continue
-        matched = sum(term in words for term in terms)
-        in_name = sum(term in name_words for term in terms)
-        if matched >= need and (len(terms) > 1 or in_name):
-            scored.append((-(matched + in_name), path))
+    anywhere, in_name = index.path_words(view)
+    matched: dict[str, int] = {}
+    named: dict[str, int] = {}
+    for term in terms:
+        for path in anywhere.get(term, ()):
+            matched[path] = matched.get(path, 0) + 1
+        for path in in_name.get(term, ()):
+            named[path] = named.get(path, 0) + 1
+    scored = [(-(count + named.get(path, 0)), path) for path, count in matched.items()
+              if count >= need and (len(terms) > 1 or path in named) and (accept is None or accept(path))]
     scored.sort()
     if not scored or sum(score == scored[0][0] for score, _ in scored) > PATH_TIE_LIMIT:
         return []
-    chunk_ids: list[int] = []
-    for _, path in scored[:PATH_CANDIDATES]:
-        rows = index.conn.execute(
-            "SELECT chunk_id FROM blob_chunks WHERE blob_oid = ? AND family = ? AND ord = 0",
-            (view.files[path], filters.family(path))).fetchall()
-        if rows:
-            chunk_ids.append(rows[0][0])
-    return chunk_ids
+    keys = [(view.files[path], filters.family(path)) for _, path in scored[:PATH_CANDIDATES]]
+    return list(dict.fromkeys(keys))
 
 
 def symbol_ranking(index: Index, query: str, scoped: bool) -> list[int]:
@@ -151,31 +153,47 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     fused = rrf({
         "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],
         "symbol": symbol_ranking(index, query, scoped),
-        "path": path_ranking(index, view, terms, accept),
     })[:pool]
-    if not fused:
+    by_chunk = {chunk_id: (score, sources) for chunk_id, score, sources in fused}
+    # A file proposed for its path votes for its own first chunk, in that file only.
+    by_file = {key: 1.0 / (RRF_K + rank)
+               for rank, key in enumerate(path_ranking(index, view, terms, accept), start=1)}
+    if not by_chunk and not by_file:
         return []
-    marks = ",".join("?" * len(fused))
-    occurrences: dict[int, list[tuple]] = {}
-    for row in index.conn.execute(
-        "SELECT bc.chunk_id, bc.blob_oid, bc.family, bc.start_line, bc.end_line, bc.scope_start, bc.scope_end, "
-        "c.kind, c.symbol, c.signature, "
-        "c.breadcrumb, c.text FROM blob_chunks bc JOIN chunks c ON c.chunk_id = bc.chunk_id "
-        "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
-        f"WHERE bc.chunk_id IN ({marks}) ORDER BY bc.blob_oid, bc.family, bc.ord",
-        [chunk_id for chunk_id, _, _ in fused],
-    ):
-        occurrences.setdefault(row[0], []).append(row[1:])
+    columns = ("SELECT bc.chunk_id, bc.blob_oid, bc.family, bc.ord, bc.start_line, bc.end_line, bc.scope_start, "
+               "bc.scope_end, c.kind, c.symbol, c.signature, c.breadcrumb, c.text "
+               "FROM blob_chunks bc JOIN chunks c ON c.chunk_id = bc.chunk_id ")
+    rows = list(index.conn.execute(
+        columns + "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
+        f"WHERE bc.chunk_id IN ({','.join('?' * len(by_chunk))})", list(by_chunk))) if by_chunk else []
+    seen = {(row[1], row[2], row[3]) for row in rows}
+    for oid, family in by_file:
+        rows += [row for row in index.conn.execute(
+            columns + "WHERE bc.blob_oid = ? AND bc.family = ? AND bc.ord = 0", (oid, family))
+            if (row[1], row[2], row[3]) not in seen]
+    copies: dict[int, list[Hit]] = {}
+    for (chunk_id, oid, family, ordinal, start, end, scope_start, scope_end, chunk_kind, symbol, signature,
+         breadcrumb, text) in rows:
+        if kind == "docs" and chunk_kind != "doc":
+            continue
+        if kind == "code" and chunk_kind == "doc":
+            continue
+        score, sources = by_chunk.get(chunk_id, (0.0, ()))
+        if ordinal == 0 and (oid, family) in by_file:
+            score, sources = score + by_file[(oid, family)], (*sources, "path")
+        for path in index.paths_for(oid, family):
+            if accept is None or accept(path):
+                copies.setdefault(chunk_id, []).append(
+                    Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources,
+                        scope_start or start, scope_end or end))
     hits: list[Hit] = []
-    for chunk_id, score, sources in fused:
-        for (oid, family, start, end, scope_start, scope_end, chunk_kind, symbol, signature, breadcrumb,
-             text) in occurrences.get(chunk_id, ()):
-            if kind == "docs" and chunk_kind != "doc":
-                continue
-            if kind == "code" and chunk_kind == "doc":
-                continue
-            for path in index.paths_for(oid, family):
-                if accept is None or accept(path):
-                    hits.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources,
-                                    scope_start or start, scope_end or end))
+    for same in copies.values():
+        # The same text in many files (a licence header, a common import line) is one
+        # finding: show a few places, best first, and count the rest.
+        same.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
+        shown = same[:COPIES_SHOWN]
+        if len(same) > len(shown):
+            shown[0] = replace(shown[0], duplicates=len(same) - len(shown))
+        hits += shown
+    hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
     return arrange(merge_pieces(hits), k, kind)

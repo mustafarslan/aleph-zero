@@ -252,3 +252,19 @@ def test_view_follows_other_sessions_even_when_the_number_of_unindexed_blobs_is_
 
     assert index.sync(view, budget_seconds=0.0).pending == 2  # two again, but not the same two
     assert [hit.path for hit in search(index, view, "quollword")] == ["src/okapi.py"]  # found by content
+
+
+def test_path_words_are_kept_while_the_set_of_paths_is_unchanged(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    words = index.path_words(view)
+    repo.write("src/billing/invoice.py", "def render_invoice(order):\n    return 'edited'\n")
+    edited = build_view(repo.root)
+    index.sync(edited)
+    assert index.path_words(edited) is words          # an edit moved no file
+    repo.write("src/billing/receipt.py", "def render_receipt():\n    return 1\n")
+    added = build_view(repo.root)
+    index.sync(added)
+    assert "receipt" in index.path_words(added)[1]    # a new path is seen
+    assert index.path_words(added) is not words
