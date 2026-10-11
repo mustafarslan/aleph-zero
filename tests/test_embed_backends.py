@@ -119,3 +119,19 @@ def test_many_requests_reuse_one_connection():
         assert embedder.connections_opened == 1
     finally:
         embedder.close()
+
+
+@pytest.mark.skipif(
+    not embed_backends.LLAMA_SERVERS["cpu"].exists()
+    or not (embed_backends.DATA / "unsloth__embeddinggemma-2-GGUF" / "embeddinggemma-2-UD-Q4_K_XL.gguf").exists(),
+    reason="needs the llama-server build and the Q4 model under bench/data (bench/spikes/build_llama.sh)",
+)
+def test_requests_do_not_inherit_the_two_second_health_check_timeout():
+    # A CPU chunk near capacity takes over 2 s; a 2 s socket timeout would make the
+    # client give up and retry while the single-slot server is still computing.
+    embedder = embed_backends.load("gguf-q4", n_ctx=64)
+    try:
+        embedder.token_count("x")
+        assert embedder._conn.timeout >= 120
+    finally:
+        embedder.close()

@@ -32,7 +32,7 @@ Not used: PyTorch and sentence-transformers (memory), `llama-cpp-python` (cannot
 | Worker private memory | Unpatched | Patched |
 |---|---|---|
 | CPU Q4, after 820-token inputs | 1,119 MB | 267 MB |
-| Metal Q8, after 820-token inputs | 1,335 MB | 303 MB |
+| Metal Q8, after 820-token inputs (unpatched figure from an ad-hoc probe) | 1,335 MB | 303 MB |
 
 The patch does not change the output: patched llama.cpp agrees with ONNX Runtime running the `onnx-community` export at cosine 0.99977, and CPU agrees with Metal at 0.99993.
 
@@ -40,16 +40,18 @@ The patch does not change the output: patched llama.cpp agrees with ONNX Runtime
 
 ## Measurements (M0, 2026-10-11, Apple M4 Max)
 
-**Speed** (median per input):
+**Speed** (median per input, final gate run `bench/data/results/mem_share.json`):
 
-| | Query | ~250 tokens | ~820 tokens | ~1,900 tokens | ~4,100 tokens |
-|---|---|---|---|---|---|
-| Metal | 9 ms | 17 ms (59/s) | 51 ms | 123 ms | 316 ms |
-| CPU, 8 threads | 8–12 ms | 78–97 ms (10–13/s) | 313–381 ms | 882 ms | 2,244 ms |
+| | Query | 246 tokens | Near capacity |
+|---|---|---|---|
+| Metal, capacity 4,096 | 8.6 ms | 16.5 ms (61/s) | 289 ms at 3,624 tokens |
+| CPU, 8 threads, capacity 2,048 | 11.3 ms | 77.5 ms (13/s) | 791 ms at 1,734 tokens |
+
+From ad-hoc probes earlier the same day (recorded in the execution ledger, not part of a gate): an ~820-token input takes about 51 ms on Metal and 313–417 ms on CPU; a ~1,900-token input 114–123 ms on Metal.
 
 On Metal one CPU thread gives the same throughput as eight (59 chunks/s) at 17% of a core instead of 183%, with the GPU at 85–88% utilization. Parallel slots and array batches gave no gain, which is consistent with the GPU being the bottleneck. On CPU, eight threads is the optimum; twelve is no faster.
 
-**Worker memory by capacity** (Metal Q8, inputs near the capacity): 512 → 289 MB; 1,024 → 305 MB; 2,048 → 343 MB; 4,096 → 478 MB; 8,192 → 947 MB. The CPU worker at 4,096 reaches 754 MB, over the 600 MB limit, so its capacity is 2,048 (474 MB).
+**Worker memory by capacity** (Metal Q8, inputs near the capacity, from a capacity sweep recorded in the ledger): 512 → 289 MB; 1,024 → 305 MB; 2,048 → 343 MB; 4,096 → 465–478 MB across runs; 8,192 → 947 MB. The CPU worker at 4,096 reached 754 MB, over the 600 MB limit, so its capacity is 2,048 (459–474 MB across runs).
 
 **Quality by weights, dimension and vector type** (CoSQA subset: 300 queries, 3,300 documents; NDCG@10 relative to BF16 weights at 768-d float32, which scored 0.9017):
 
@@ -62,15 +64,15 @@ On Metal one CPU thread gives the same throughput as eight (59 chunks/s) at 17% 
 
 Every 256-d variant is within 3% of the reference; every 128-d variant fails. float16 storage is indistinguishable from float32. The subset is easy (recall@10 is 0.99 at 768-d everywhere), so it bounds the loss from truncation and quantization and says little about absolute quality. Differences between 256-d and 512-d here are within noise; the choice between them is revisited in M2 on localization tasks.
 
-Q8 and Q4 are the same speed and the same memory on Metal, so Q8 is used for its slightly higher fidelity. On CPU Q8 is also the faster of the two on chunks.
+Q8 and Q4 cannot be told apart on quality here: at the operating point (256-d float16) Q4 on Metal scores 0.991 and Q8 0.989, and at 768-d 0.998 and 0.997, all within noise. They are also the same speed and the same memory on Metal. Q8 is chosen as the more conservative quantization at no cost on the GPU (the two produce slightly different vectors, cosine 0.992 for the same input), and on CPU it is the faster of the two on chunks (77 ms against 97 ms), at 54 MB more idle memory. Either would pass.
 
 **Chunk reuse across commits** (50 consecutive commits; share of chunks in changed files that needed no new embedding): Flask 92.1% with AST chunks against 54.2% with 50-line windows; FastAPI 80.7% against 33.2%.
 
-**Install:** `uv sync` from an empty environment took 32.6 s, including compiling `llama-cpp-python` from source (which is no longer needed and is removed from the dependency list in M2). Building the patched llama.cpp worker takes 13 s (Metal) to 33 s (CPU) and needs git, CMake and Ninja; prebuilt binaries are required before public release.
+**Install:** `uv sync` from an empty environment took 32.6 s, including compiling `llama-cpp-python` from source (which turned out to be unusable and has since been removed from the dependency list). Building the patched llama.cpp worker takes 13 s (Metal) to 33 s (CPU) and needs git, CMake and Ninja; prebuilt binaries are required before public release.
 
-## Split threshold: 256 tokens, chosen by retrieval quality
+## Split threshold: 256 tokens, provisional, chosen by retrieval quality
 
-`bench/spikes/cap_quality.py`, run on 2026-10-11. Corpus: every Python function in Flask, FastAPI and Django (35,851), with its docstring removed. Queries: the first sentence of the docstring for 1,500 functions (all 426 over 256 tokens that have one, plus a random sample of shorter ones). A function over the threshold is split at statement boundaries into pieces under it, each carrying the file path, scope and signature as a header. A function is found when any piece is retrieved. 256-d vectors, Q8 weights on Metal.
+`bench/spikes/cap_quality.py`, run on 2026-10-11. Corpus: every Python function in Flask, FastAPI and Django (35,851), with its docstring removed. Queries: the first sentence of the docstring for 1,500 functions: all 292 over 512 tokens that have one, plus a random sample of shorter ones (134 between 256 and 512 tokens, 1,074 at or under 256). A function over the threshold is split at statement boundaries into pieces under it, each carrying the file path, scope and signature as a header. A function is found when any piece is retrieved. 256-d vectors, Q8 weights on Metal.
 
 Recall@10 by function length:
 
@@ -85,7 +87,7 @@ Recall@10 by function length:
 | 768 | 0.688 | 0.697 | 0.649 | 0.668 | 0.674 | 36,496 |
 | 1,024 | 0.689 | 0.697 | 0.649 | 0.664 | 0.696 | 36,182 |
 | 4,096 (whole) | 0.689 | 0.698 | 0.649 | 0.664 | 0.696 | 35,897 |
-| truncate at 512 | 0.655 | 0.698 | 0.649 | (recall@1 0.18 against 0.36) | | 35,851 |
+| truncate at 512 | 0.655 | 0.698 | 0.649 | (recall@1 0.18 against 0.34 whole) | | 35,851 |
 
 Gain over keeping functions whole, paired on the same queries, with 95% intervals from 2,000 bootstrap resamples:
 
@@ -104,11 +106,13 @@ Gain over keeping functions whole, paired on the same queries, with 95% interval
 
 - Quality rises as the threshold falls across the whole range tested. There is no interior optimum, and a larger cap never helps: from 768 tokens up the benefit is zero.
 - Truncating instead of splitting is the worst option by a wide margin.
-- Short functions are unaffected, within one point at every threshold.
+- Short functions are nearly unaffected: at most 1.1 points lower (at 256), which fits more pieces of long functions competing for the same top ten.
 - The choice is therefore a trade against index size. Going from whole to 256 buys about 6 points on long functions for 18% more chunks. Going from 256 to 96 buys about 5 more for roughly double the index.
 
-**Decision.** Split at 256 tokens. Each piece carries path, scope and signature as a header. Ranking is by function (the best piece wins) and results are returned at function level, with pieces of one function merged. Nothing is truncated: a single statement larger than the threshold becomes its own piece and is embedded whole, which the worker's 4,096-token capacity allows.
+**Decision (provisional).** Split at 256 tokens. Each piece carries path, scope and signature as a header. Ranking is by function (the best piece wins) and results are returned at function level, with pieces of one function merged. Content is split, not cut off: a single statement larger than the threshold becomes its own piece and is embedded whole up to the worker's capacity; only an input beyond that capacity is truncated, by tokens, as a last resort.
 
-**Caveat.** Docstring sentences often paraphrase the function's name, and every piece repeats the signature, so this benchmark favours small pieces. M2's Benchmark C repeats the sweep at 96, 128, 192, 256 and 384 on issue text with gold edit locations (Loc-Bench), and adds a control that indexes a signature-only chunk beside the whole function, before 256 is treated as final.
+**What the benchmark does and does not show.** It shows that, for docstring-style queries, taking the best of several statement-boundary pieces with a repeated header beats one vector for the whole function, and that truncation is clearly worst. The gain is significant for functions over 256 tokens (+5.9 points [+3.1, +8.7]) and not significant over all queries at 256 (+0.9 [−0.1, +1.9]). It does not show that a piece is a better unit than a function in itself. Three explanations are mixed together: more pieces give a long function more chances under best-piece ranking; small pieces are dominated by the signature, which docstrings tend to paraphrase; and pieces genuinely cover the body better. Against the second being the whole story: truncating at 512 keeps the signature and still loses about 15 points on 512–1,024-token functions, so body content matters. Two limits of the measurement itself: thresholds are nominal, because pieces are sized by an average tokens-per-character ratio and the header is not counted when deciding whether a function fits; and at the 4,096 threshold a few pieces may have exceeded the worker's capacity and been truncated.
+
+**Before it is final.** M2's Benchmark C repeats the sweep at 96, 128, 192, 256 and 384 on issue text with gold edit locations (Loc-Bench), adds a control that indexes a signature-only chunk beside the whole function, and records which piece won for each query.
 
 **History.** The first value, 512, was set as a defence against memory growth that the llama.cpp patch then removed. A review note asked whether it should be raised. It should not: the measurement shows a smaller threshold is better, for a reason unrelated to memory.

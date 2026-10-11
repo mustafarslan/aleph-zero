@@ -13,6 +13,7 @@ DATA = Path(__file__).resolve().parents[1] / "data"
 DATASET = "CoIR-Retrieval/cosqa"
 LOSS_LIMIT = 0.03
 REFERENCE = ("gguf-bf16-gpu", "768-f32")
+CHOSEN = ("gguf-q8-gpu", "256-f16")  # ADR-001: Q8 weights, 256-d, stored as float16
 
 
 def truncate(rows: np.ndarray, dim: int) -> np.ndarray:
@@ -30,6 +31,16 @@ def metrics(scores: np.ndarray, relevant: list[int], k: int = 10) -> dict[str, f
             ndcg += 1.0 / np.log2(rank + 1)
     n = len(relevant)
     return {"recall": recall / n, "mrr": mrr / n, "ndcg": ndcg / n}
+
+
+def gate_passes(report: dict, chosen: tuple[str, str] = CHOSEN, limit: float = LOSS_LIMIT) -> bool:
+    """True only if the configuration the design ships is within the loss limit.
+
+    The reference row is always within the limit of itself, so "anything passed"
+    is not a gate.
+    """
+    row = report.get("configs", {}).get(chosen[0], {}).get(chosen[1])
+    return bool(row) and bool(row.get("ndcg_vs_reference", 0.0) >= 1 - limit)
 
 
 def load_dataset(n_queries: int, n_distractors: int, seed: int) -> tuple[list[str], list[str], list[int]]:
@@ -103,11 +114,13 @@ def main() -> int:
             for name, row in table.items()
             if row["ndcg_vs_reference"] >= 1 - LOSS_LIMIT
         )
+    report["chosen"] = "/".join(CHOSEN)
+    report["pass"] = gate_passes(report)
     out = DATA / "results" / "quality.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
-    return 0 if report.get("within_limit") else 1
+    return 0 if report["pass"] else 1
 
 
 if __name__ == "__main__":

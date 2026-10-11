@@ -18,21 +18,21 @@ The budget is machine-wide:
 | Quantity | Limit | Measured (M0) |
 |---|---|---|
 | Session baseline (Python, MCP SDK, numpy, tree-sitter; no model) | target 150 MB, fail above 200 MB | 60.8 MB |
-| Embed worker, GPU, capacity 4,096 tokens | 600 MB | 279 MB idle, 478 MB after 4,100-token inputs |
-| Embed worker, CPU fallback, capacity 2,048 tokens | 600 MB | 215 MB idle, 474 MB after 1,900-token inputs |
-| Four sessions plus the worker | 1024 MB | 721 MB at full capacity; 532 MB when inputs stay under ~500 tokens |
+| Embed worker, GPU, capacity 4,096 tokens | 600 MB | 280 MB idle, 465–478 MB after inputs near capacity |
+| Embed worker, CPU fallback, capacity 2,048 tokens | 600 MB | 214 MB idle, 459–474 MB after inputs near capacity |
+| Four sessions plus the worker | 1024 MB | 708 MB at full capacity; about 530 MB when inputs stay under ~500 tokens |
 
 This relaxes the original rule "no daemon" to "no always-on daemon": the worker is a helper that exits when nothing has used it for a while.
 
-**The gate metric is private memory, not RSS.** With a 200 MB file mapped by two processes on the reference machine, RSS read 239 MB in each while the footprint stayed at 18 MB. `aleph_zero.memstat.private_bytes` reads `phys_footprint` on macOS and `Pss_Anon + SwapPss` on Linux. psutil's USS is not used: it read 228 MB with one mapper and 18 MB with two.
+**The gate metric is private memory, not RSS.** In a probe run during planning on the reference machine (a 200 MB file mapped by two processes), RSS read 239 MB in each while the footprint stayed at 18 MB. `aleph_zero.memstat.private_bytes` reads `phys_footprint` on macOS and `Pss_Anon + SwapPss` on Linux. psutil's USS is not used: it read 228 MB with one mapper and 18 MB with two.
 
 ## Why the first decision was replaced
 
 The first decision was that each session memory-maps the model on CPU so the OS shares the weights. M0 measured that and found three things.
 
 1. **Weight sharing worked, and was not the problem.** With three processes on one file, both llama.cpp and ONNX Runtime kept the weights as shared pages.
-2. **An unneeded buffer was.** llama.cpp reserves `vocabulary × output tokens` floats for logits even in an embeddings-only context. EmbeddingGemma 2 has a 262,144-word vocabulary, so that is 1.05 MB per token, kept at the size of the longest input seen: 1,119 MB after 820-token chunks on CPU and 1,335 MB on Metal. A one-line patch removes it (see ADR-001 and `docs/upstream/llama-cpp-logits-reservation.md`).
-3. **The GPU is 6–8× faster for chunks and cannot share weights across processes.** On Metal each process holds its own copy (278 MB). The owner's rule is to use the GPU wherever it speeds things up, and there is no working in-process llama.cpp binding today (ADR-001). One GPU copy per machine is the only arrangement that satisfies all three.
+2. **An unneeded buffer was.** llama.cpp reserves `vocabulary × output tokens` floats for logits even in an embeddings-only context. EmbeddingGemma 2 has a 262,144-word vocabulary, so that is 1.05 MB per token, kept at the size of the longest input seen: 1,119 MB after 820-token chunks on CPU and 1,335 MB on Metal (the Metal figure is from an ad-hoc probe). A one-line patch removes it (see ADR-001 and `docs/upstream/llama-cpp-logits-reservation.md`).
+3. **The GPU is 5–8× faster for chunks (4.7× at 246 tokens, 6–8× at ~820), and its weights are not expected to be shareable across processes.** A Metal worker's private memory is 278 MB against 157–211 MB on CPU; weights offloaded to the GPU are not file-backed pages. This was not measured with several Metal processes; it is inferred from the larger private footprint. The owner's rule is to use the GPU wherever it speeds things up, and there is no working in-process llama.cpp binding today (ADR-001). One GPU copy per machine is the only arrangement that satisfies all three.
 
 ## Measurements (M0, 2026-10-11, Apple M4 Max, 12 performance cores, 64 GB)
 
@@ -48,24 +48,24 @@ Worker private memory, patched llama.cpp, by capacity (inputs near the capacity)
 
 The worker keeps the footprint of the longest input it has processed, so the capacity sets its ceiling: 4,096 on GPU and 2,048 on CPU.
 
-Speed and idle memory:
+Speed and idle memory, final gate run (`bench/data/results/mem_share.json`; both configurations are required to pass):
 
-| Configuration | After load | After queries | Query | 246-token chunk | 4,137-token chunk |
-|---|---|---|---|---|---|
-| Q8, Metal, 1 CPU thread | 277.9 MB | 280.0 MB | 8.5–9.0 ms | 16.7 ms (59/s) | 316 ms |
-| Q4, Metal, 1 CPU thread | 278.9 MB | 280.0 MB | 9.1 ms | 17.4 ms (58/s) | 316 ms |
-| Q8, CPU, 8 threads | 210.8 MB | 215.0 MB | 11.4 ms | 83.7 ms (12/s) | 2,244 ms |
-| Q4, CPU, 8 threads | 157.3 MB | 161.5 MB | 7.9 ms | 96.8 ms (10/s) | not run |
+| Configuration | Capacity | After load | After queries | After inputs near capacity | Query | 246-token chunk | Near-capacity chunk |
+|---|---|---|---|---|---|---|---|
+| Q8, Metal, 1 CPU thread | 4,096 | 277.9 MB | 280.0 MB | 464.5 MB | 8.6 ms | 16.5 ms (61/s) | 289 ms at 3,624 tokens |
+| Q8, CPU, 8 threads | 2,048 | 210.8 MB | 213.9 MB | 459.3 MB | 11.3 ms | 77.5 ms (13/s) | 791 ms at 1,734 tokens |
+
+Four sessions plus the worker: 707.7 MB on Metal, 702.5 MB on CPU. Earlier runs the same day with Q4 weights: Metal 278.9 MB after load, 9.1 ms per query, 17.4 ms per 246-token chunk; CPU 157.3 MB after load, 7.9 ms per query, 96.8 ms per chunk.
 
 On Metal the worker needs one CPU thread: eight give the same 59 chunks per second at 183% of a core instead of 17%, with the GPU at 85–88% utilization either way.
 
-Lifecycle check, Metal over a UNIX socket, 500 mixed requests at capacity 4,096: private memory stayed between 478.2 and 479.2 MB; the process exited with code 0 on SIGTERM.
+Lifecycle check, Metal over a UNIX socket, 500 mixed requests at capacity 4,096: private memory stayed between 475.0 and 476.1 MB; the process exited with code 0 on SIGTERM.
 
 Alternatives measured and not chosen:
 
 | Alternative | Per session | Four sessions | Query |
 |---|---|---|---|
-| ONNX Runtime in every session, sentencepiece tokenizer (q8) | ~190 MB | ~960–1070 MB | 46 ms |
+| ONNX Runtime in every session, sentencepiece tokenizer (q8) | ~190 MB | ~760 MB private plus 200–314 MB of shared weights | 46 ms |
 | ONNX Runtime in every session, HF tokenizer | ~300 MB (the tokenizer alone is 144 MB) | over budget | 20 ms |
 | GPU model in every session | ~340 MB | ~1,360 MB | 9 ms |
 

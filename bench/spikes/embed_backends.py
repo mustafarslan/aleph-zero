@@ -148,7 +148,11 @@ class GgufEmbedder:
                 raise UnsupportedModel(f"llama-server exited with code {self._proc.returncode} while loading {files[0].name}")
             try:
                 if self._request("GET", "/health", None, timeout=2)[0] == 200:
-                    self.connections_opened = 1  # attempts refused during start-up do not count
+                    # Drop the probe connection: it carries the 2 s health-check timeout,
+                    # and a chunk near capacity takes longer than that on CPU.
+                    self._conn.close()
+                    self._conn = None
+                    self.connections_opened = 0  # attempts during start-up do not count
                     return
             except (OSError, http.client.HTTPException):
                 pass

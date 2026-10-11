@@ -28,3 +28,28 @@ def test_metrics_for_a_miss_outside_k():
     scores = np.array([[0.9, 0.8, 0.7, 0.1]], dtype=np.float32)
     result = quality.metrics(scores, relevant=[3], k=3)
     assert result == {"recall": 0.0, "mrr": 0.0, "ndcg": 0.0}
+
+
+def test_gate_fails_when_only_the_reference_is_within_the_limit():
+    report = {"configs": {
+        "gguf-bf16-gpu": {"768-f32": {"ndcg_vs_reference": 1.0}},
+        "gguf-q8-gpu": {"256-f16": {"ndcg_vs_reference": 0.90}},
+    }}
+    assert quality.gate_passes(report, chosen=("gguf-q8-gpu", "256-f16")) is False
+
+
+def test_gate_fails_when_the_chosen_configuration_was_not_measured():
+    report = {"configs": {"gguf-bf16-gpu": {"768-f32": {"ndcg_vs_reference": 1.0}}}}
+    assert quality.gate_passes(report, chosen=("gguf-q8-gpu", "256-f16")) is False
+
+
+def test_gate_passes_when_the_chosen_configuration_is_within_three_percent():
+    report = {"configs": {"gguf-q8-gpu": {"256-f16": {"ndcg_vs_reference": 0.989}}}}
+    assert quality.gate_passes(report, chosen=("gguf-q8-gpu", "256-f16")) is True
+
+
+def test_gate_result_is_a_plain_bool_even_for_numpy_scores():
+    # Scores reach the gate as numpy floats; a numpy bool cannot be written to JSON.
+    report = {"configs": {"gguf-q8-gpu": {"256-f16": {"ndcg_vs_reference": np.float64(0.989)}}}}
+    result = quality.gate_passes(report, chosen=("gguf-q8-gpu", "256-f16"))
+    assert result is True
