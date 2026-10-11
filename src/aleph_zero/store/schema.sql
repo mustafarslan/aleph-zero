@@ -27,11 +27,46 @@ CREATE TABLE IF NOT EXISTS blob_chunks (
     chunk_id   INTEGER NOT NULL REFERENCES chunks(chunk_id),
     start_line INTEGER NOT NULL,
     end_line   INTEGER NOT NULL,
+    scope_start INTEGER NOT NULL DEFAULT 0,  -- the whole definition, when this is a piece of one
+    scope_end   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (blob_oid, family, ord),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS blob_chunks_by_chunk ON blob_chunks(chunk_id);
+
+-- Every definition of a blob: what a by-name lookup reads.
+CREATE TABLE IF NOT EXISTS symbols (
+    blob_oid  TEXT NOT NULL,
+    family    TEXT NOT NULL,
+    ord       INTEGER NOT NULL,
+    name      TEXT NOT NULL,
+    name_key  TEXT NOT NULL,      -- lower-cased name
+    qualified TEXT NOT NULL,      -- dotted, within the file: TokenStore.get
+    kind      TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    chunk_ord INTEGER NOT NULL,   -- the chunk of the same blob that holds its first line
+    line      INTEGER NOT NULL,
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS symbols_by_name ON symbols(name_key);
+
+-- What a blob imports, unresolved: the code graph (M7) resolves these per view.
+CREATE TABLE IF NOT EXISTS imports (
+    blob_oid  TEXT NOT NULL,
+    family    TEXT NOT NULL,
+    ord       INTEGER NOT NULL,
+    specifier TEXT NOT NULL,
+    names     TEXT NOT NULL,      -- JSON array of the names taken from the module
+    level     INTEGER NOT NULL,   -- leading dots of a relative Python import
+    kind      TEXT NOT NULL,      -- value, type_only, wildcard, dynamic, side_effect, system
+    flags     INTEGER NOT NULL,   -- 1 = re-export, 2 = deferred (inside a definition)
+    line      INTEGER NOT NULL,
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     symbol, signature, doc, body,

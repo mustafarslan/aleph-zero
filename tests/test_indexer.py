@@ -40,10 +40,10 @@ def test_identical_content_at_two_paths_is_stored_once(repo):
     assert _total(index, "blobs") == 3
 
 
-def test_a_chunk_shared_by_two_different_files_is_stored_once(repo):
-    shared = "".join(f"shared_line_{i} = {i}\n" for i in range(40))
+def test_a_function_shared_by_two_different_files_is_stored_once(repo):
+    shared = "def shared_helper(value):\n    return value * 2\n"
     repo.write("a.py", shared)
-    repo.write("b.py", shared + "".join(f"only_in_b_{i} = {i}\n" for i in range(20)))
+    repo.write("b.py", shared + "\n\ndef only_in_b():\n    return 1\n")
     index = _index(repo)
     index.sync(build_view(repo.root))
     rows = index.conn.execute(

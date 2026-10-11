@@ -1,15 +1,18 @@
 """Bringing the index up to date with a view, and telling queries which chunks they may return."""
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 import apsw
 
-from . import filters, gitio, lexical
-from .chunking import CHUNKER_VERSION, Chunk, chunk_file, chunk_hash
+from . import filters, gitio, lang, lexical
+from .chunking import CHUNKER_VERSION, Chunk, chunk_file, chunk_hash, code_chunks
+from .lang.definitions import Definition
+from .lang.imports import RawImport
 from .store import transaction
 from .view import View
 
@@ -26,6 +29,18 @@ class SyncReport:
     skipped: int    # blobs recorded as not indexable (binary, too large, ...)
     pending: int    # blobs in the view still not indexed: out of time, or not readable right now
     seconds: float
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """Everything to store for one blob under one family."""
+    key: Key
+    kind: str
+    size: int
+    chunks: list[Chunk] = field(default_factory=list)
+    definitions: list[Definition] = field(default_factory=list)
+    chunk_of: list[int] = field(default_factory=list)
+    imports: list[RawImport] = field(default_factory=list)
 
 
 class Index:
@@ -81,14 +96,14 @@ class Index:
                 if not prepared:
                     continue
                 with transaction(self.conn):
-                    for key, kind, size, chunks in prepared:
-                        self._store(key, kind, size, chunks)
-                        if chunks:
+                    for item in prepared:
+                        self._store(item)
+                        if item.chunks:
                             indexed += 1
                         else:
                             skipped += 1
                 left -= len(prepared)
-                stored.update(item[0] for item in prepared)
+                stored.update(item.key for item in prepared)
         if changed or indexed or skipped or frozenset(missing) != self._missing:
             self._refresh_view_chunks()  # also when another session indexed or collected something
         self._missing = frozenset(missing) - stored
@@ -150,6 +165,10 @@ class Index:
         return {
             "blobs_in_view": one("SELECT count(*) FROM temp.view_blobs"),
             "chunks_in_view": one("SELECT count(*) FROM temp.view_chunks"),
+            "symbols_in_view": one("SELECT count(*) FROM symbols s JOIN temp.view_blobs v "
+                                   "ON v.blob_oid = s.blob_oid AND v.family = s.family"),
+            "imports_in_view": one("SELECT count(*) FROM imports i JOIN temp.view_blobs v "
+                                   "ON v.blob_oid = i.blob_oid AND v.family = i.family"),
             "blobs_total": one("SELECT count(*) FROM blobs"),
             "chunks_total": one("SELECT count(*) FROM chunks"),
             "pending": self._pending,
@@ -197,7 +216,7 @@ class Index:
                     (now, now - SEEN_REFRESH_SECONDS),
                 )
 
-    def _prepare(self, view: View, reader: gitio.BlobReader, key: Key) -> tuple[Key, str, int, list[Chunk]] | None:
+    def _prepare(self, view: View, reader: gitio.BlobReader, key: Key) -> _Prepared | None:
         """What to store for a blob, or None if its content cannot be read right now.
         The index is keyed by content, so nothing may be recorded without the content."""
         _, family = key
@@ -209,23 +228,28 @@ class Index:
             return None
         kind, text = filters.classify(family, data)
         if text is None:
-            return key, kind, len(data), []
+            return _Prepared(key, kind, len(data))
+        profile = lang.PROFILES.get(family)
+        if profile is not None:
+            code = code_chunks(profile, text)
+            if code.chunks:
+                return _Prepared(key, kind, len(data), code.chunks, code.definitions, code.chunk_of, code.imports)
         chunks = chunk_file(family, kind, text)
-        return key, (kind if chunks else "skip:empty"), len(data), chunks
+        return _Prepared(key, kind if chunks else "skip:empty", len(data), chunks)
 
-    def _store(self, key: Key, kind: str, size: int, chunks: list[Chunk]) -> None:
+    def _store(self, item: _Prepared) -> None:
         conn = self.conn
-        oid, family = key
+        oid, family = item.key
         conn.execute("DELETE FROM blobs WHERE blob_oid = ? AND family = ? AND chunker_version != ?",
                      (oid, family, CHUNKER_VERSION))
         conn.execute(
             "INSERT OR IGNORE INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (oid, family, kind, size, CHUNKER_VERSION, int(time.time())),
+            (oid, family, item.kind, item.size, CHUNKER_VERSION, int(time.time())),
         )
         if conn.changes() == 0:
             return  # another session indexed this blob first
-        for ordinal, chunk in enumerate(chunks):
+        for ordinal, chunk in enumerate(item.chunks):
             digest = chunk_hash(family, chunk)
             conn.execute(
                 "INSERT INTO chunks(chunk_hash, kind, symbol, signature, breadcrumb, text) "
@@ -238,10 +262,24 @@ class Index:
             else:  # the same content is already indexed, from another file or branch
                 chunk_id = conn.execute("SELECT chunk_id FROM chunks WHERE chunk_hash = ?", (digest,)).fetchall()[0][0]
             conn.execute(
-                "INSERT INTO blob_chunks(blob_oid, family, ord, chunk_id, start_line, end_line) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (oid, family, ordinal, chunk_id, chunk.start_line, chunk.end_line),
+                "INSERT INTO blob_chunks(blob_oid, family, ord, chunk_id, start_line, end_line, scope_start, scope_end) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (oid, family, ordinal, chunk_id, chunk.start_line, chunk.end_line,
+                 chunk.scope_start_line, chunk.scope_end_line),
             )
+        conn.executemany(
+            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ((oid, family, ordinal, d.name, d.name.lower(), d.qualified, d.kind, d.signature, chunk_ord, d.start_line)
+             for ordinal, (d, chunk_ord) in enumerate(zip(item.definitions, item.chunk_of))),
+        )
+        conn.executemany(
+            "INSERT INTO imports(blob_oid, family, ord, specifier, names, level, kind, flags, line) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ((oid, family, ordinal, i.specifier, json.dumps(list(i.names)), i.level, i.kind,
+              (1 if i.reexport else 0) | (2 if i.deferred else 0), i.line)
+             for ordinal, i in enumerate(item.imports)),
+        )
 
 
 def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | None = None) -> dict[str, int]:

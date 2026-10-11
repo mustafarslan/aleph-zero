@@ -6,13 +6,19 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from . import filters, lexical
+from . import filters, lexical, symbols
 from .indexer import Index
 from .view import View
 
 RRF_K = 60
 PATH_CANDIDATES = 5
 PATH_TIE_LIMIT = 25
+SYMBOL_CANDIDATES = 10
+# A name written in the query that is exactly a definition's name is stronger evidence than
+# a text match: its order decides between otherwise equal candidates. A starting value, tuned in M2.
+GENERATOR_WEIGHT = {"symbol": 2.0}
+SYMBOL_TIE_LIMIT = 25
+_IDENTIFIER = re.compile(r"[^\W\d]\w*(?:(?:\.|::)[^\W\d]\w*)*")
 
 
 @dataclass(frozen=True)
@@ -27,15 +33,21 @@ class Hit:
     text: str
     score: float
     sources: tuple[str, ...]  # which generators proposed it
+    # The whole definition the chunk belongs to. Equal to its own lines unless the chunk
+    # is one piece of a long function or the part of a class its methods do not cover.
+    scope_start_line: int = 0
+    scope_end_line: int = 0
 
 
 def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...]]]:
-    """Reciprocal rank fusion: (chunk id, score, generators), best first."""
+    """Reciprocal rank fusion: (chunk id, score, generators), best first. A generator's
+    vote counts GENERATOR_WEIGHT times; unlisted generators count once."""
     scores: dict[int, float] = {}
     sources: dict[int, list[str]] = {}
     for name, ranked in rankings.items():
+        weight = GENERATOR_WEIGHT.get(name, 1.0)
         for rank, chunk_id in enumerate(ranked, start=1):
-            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + weight / (RRF_K + rank)
             sources.setdefault(chunk_id, []).append(name)
     return sorted(((cid, score, tuple(sources[cid])) for cid, score in scores.items()),
                   key=lambda item: (-item[1], item[0]))
@@ -68,6 +80,38 @@ def path_ranking(index: Index, view: View, terms: list[str],
         if rows:
             chunk_ids.append(rows[0][0])
     return chunk_ids
+
+
+def symbol_ranking(index: Index, query: str, scoped: bool) -> list[int]:
+    """Chunks that define a name written in the query, best first. A word of a longer
+    query that names more than SYMBOL_TIE_LIMIT definitions (`get`, `main`) says nothing
+    about which one is meant, and proposes none."""
+    written = _IDENTIFIER.findall(query)
+    alone = len(written) == 1
+    chunk_ids: list[int] = []
+    for name in written:
+        if not alone and name.lower() in lexical.STOPWORDS:
+            continue
+        found = symbols.rows(index, name, scoped)
+        if not alone and len(found) > SYMBOL_TIE_LIMIT:
+            continue
+        for row in found[:SYMBOL_CANDIDATES]:
+            if row[7] not in chunk_ids:
+                chunk_ids.append(row[7])
+    return chunk_ids
+
+
+def merge_pieces(hits: list[Hit]) -> list[Hit]:
+    """One result per definition: of the pieces of a long function, the best-ranked stays."""
+    seen: set[tuple] = set()
+    kept: list[Hit] = []
+    for hit in hits:
+        key = (hit.path, hit.symbol, hit.scope_start_line, hit.scope_end_line)
+        if hit.symbol and key in seen:
+            continue
+        seen.add(key)
+        kept.append(hit)
+    return kept
 
 
 def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
@@ -106,6 +150,7 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     pool = max(50, k * 6)
     fused = rrf({
         "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],
+        "symbol": symbol_ranking(index, query, scoped),
         "path": path_ranking(index, view, terms, accept),
     })[:pool]
     if not fused:
@@ -113,7 +158,8 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     marks = ",".join("?" * len(fused))
     occurrences: dict[int, list[tuple]] = {}
     for row in index.conn.execute(
-        "SELECT bc.chunk_id, bc.blob_oid, bc.family, bc.start_line, bc.end_line, c.kind, c.symbol, c.signature, "
+        "SELECT bc.chunk_id, bc.blob_oid, bc.family, bc.start_line, bc.end_line, bc.scope_start, bc.scope_end, "
+        "c.kind, c.symbol, c.signature, "
         "c.breadcrumb, c.text FROM blob_chunks bc JOIN chunks c ON c.chunk_id = bc.chunk_id "
         "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
         f"WHERE bc.chunk_id IN ({marks}) ORDER BY bc.blob_oid, bc.family, bc.ord",
@@ -122,12 +168,14 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         occurrences.setdefault(row[0], []).append(row[1:])
     hits: list[Hit] = []
     for chunk_id, score, sources in fused:
-        for oid, family, start, end, chunk_kind, symbol, signature, breadcrumb, text in occurrences.get(chunk_id, ()):
+        for (oid, family, start, end, scope_start, scope_end, chunk_kind, symbol, signature, breadcrumb,
+             text) in occurrences.get(chunk_id, ()):
             if kind == "docs" and chunk_kind != "doc":
                 continue
             if kind == "code" and chunk_kind == "doc":
                 continue
             for path in index.paths_for(oid, family):
                 if accept is None or accept(path):
-                    hits.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources))
-    return arrange(hits, k, kind)
+                    hits.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources,
+                                    scope_start or start, scope_end or end))
+    return arrange(merge_pieces(hits), k, kind)

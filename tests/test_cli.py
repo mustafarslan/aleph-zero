@@ -18,7 +18,7 @@ def test_index_then_search_as_json(repo, capsys):
 def test_search_prints_location_lines(repo, capsys):
     cli.main(["--cwd", str(repo.root), "search", "render_invoice", "-k", "1"])
     out = capsys.readouterr().out
-    assert out.startswith("src/billing/invoice.py:1-3  block")
+    assert out.startswith("src/billing/invoice.py:1-3  function  render_invoice")
 
 
 def test_status_reports_the_view(repo, capsys):

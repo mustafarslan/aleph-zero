@@ -1,4 +1,4 @@
-"""Command line: aleph index | search | status | gc."""
+"""Command line: aleph index | search | symbol | status | gc."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import gitio
+from . import gitio, symbols
 from .indexer import Index, collect_garbage
 from .search import search
 from .store import StoreError, index_file, open_db
@@ -54,6 +54,21 @@ def _search(args) -> int:
     return 0
 
 
+def _symbol(args) -> int:
+    index, view = _open(args.cwd)
+    report = index.sync(view)
+    found = symbols.lookup(index, view, args.name, limit=args.k)
+    if args.json:
+        print(json.dumps({"pending": report.pending, "symbols": [asdict(hit) for hit in found]}, indent=2))
+        return 0
+    for hit in found:
+        print(f"{hit.path}:{hit.line}  {hit.kind}  {hit.qualified}")
+        print(f"    {hit.signature[:160]}")
+    if report.pending:
+        print(f"note: {report.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
+    return 0
+
+
 def _status(args) -> int:
     index, view = _open(args.cwd)
     report = index.sync(view, budget_seconds=0.0)
@@ -88,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("--glob", help="only paths matching this pattern")
     find.add_argument("--json", action="store_true")
     find.set_defaults(run=_search)
+
+    symbol = commands.add_parser("symbol", help="where a name is defined in the current view")
+    symbol.add_argument("name", help="a name, or a qualified one: TokenStore.get, auth::TokenStore")
+    symbol.add_argument("-k", type=int, default=20)
+    symbol.add_argument("--json", action="store_true")
+    symbol.set_defaults(run=_symbol)
 
     status = commands.add_parser("status", help="what the index holds for this worktree")
     status.set_defaults(run=_status)

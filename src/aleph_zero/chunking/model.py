@@ -7,8 +7,9 @@ import textwrap
 from dataclasses import dataclass
 
 # Bump when chunk boundaries, hashing, or the text handed to the lexical index change:
-# every blob is then indexed again. 2: words are recognised in every script, not only ASCII.
-CHUNKER_VERSION = 2
+# every blob is then indexed again. 2: words are recognised in every script, not only
+# ASCII. 3: source code is chunked by definition, with symbols and imports.
+CHUNKER_VERSION = 3
 # Measured in M0 on 35,851 Python functions with the EmbeddingGemma 2 tokenizer.
 TOKENS_PER_CHAR = 0.2919
 
