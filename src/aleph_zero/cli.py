@@ -1,4 +1,4 @@
-"""Command line: aleph index | search | symbol | status | gc."""
+"""Command line: aleph index | search | symbol | outline | status | gc."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import gitio, symbols
+from . import gitio, outline, symbols
 from .indexer import Index, collect_garbage
 from .search import search
 from .store import StoreError, index_file, open_db
@@ -69,6 +69,13 @@ def _symbol(args) -> int:
     return 0
 
 
+def _outline(args) -> int:
+    view = build_view(args.cwd)
+    result = outline.of(view, args.path)
+    print(json.dumps(asdict(result), indent=2) if args.json else outline.text(result))
+    return 0
+
+
 def _status(args) -> int:
     index, view = _open(args.cwd)
     report = index.sync(view, budget_seconds=0.0)
@@ -110,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     symbol.add_argument("--json", action="store_true")
     symbol.set_defaults(run=_symbol)
 
+    skeleton = commands.add_parser("outline", help="what a file defines, without reading it all")
+    skeleton.add_argument("path", help="a path in this worktree, relative to its top")
+    skeleton.add_argument("--json", action="store_true")
+    skeleton.set_defaults(run=_outline)
+
     status = commands.add_parser("status", help="what the index holds for this worktree")
     status.set_defaults(run=_status)
 
@@ -120,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.run(args)
-    except (gitio.GitError, StoreError) as exc:
+    except (gitio.GitError, StoreError, outline.OutlineError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
 
