@@ -116,3 +116,11 @@ Gain over keeping functions whole, paired on the same queries, with 95% interval
 **Before it is final.** M2's Benchmark C repeats the sweep at 96, 128, 192, 256 and 384 on issue text with gold edit locations (Loc-Bench), adds a control that indexes a signature-only chunk beside the whole function, and records which piece won for each query.
 
 **History.** The first value, 512, was set as a defence against memory growth that the llama.cpp patch then removed. A review note asked whether it should be raised. It should not: the measurement shows a smaller threshold is better, for a reason unrelated to memory.
+
+## What is embedded, as built (M2, 2026-10-12): no path
+
+The header benchmark above put the path, the scope and the signature in front of each piece. In the index a chunk is content: it is stored once and shared by every file, branch and worktree that contains it, and paths are not stored at all. A vector that depended on the path would have to be made per file, which undoes the sharing and multiplies the worker's work.
+
+So a chunk is embedded as its scope (the breadcrumb, such as `TokenStore.get` or `Guide > Install`), its signature and its text, with the document prefix. This is a deviation from what M0 measured. Its cost is one of the things Benchmark C reports; the path still takes part in ranking through the path generator.
+
+Vectors are stored with their kind (`embeddinggemma-2-q8/p1/256`: model, prefix version, width), one file per kind, so a change of model or prefix never mixes with older vectors.

@@ -114,3 +114,25 @@ A session therefore sits at roughly 25–60 MB, against a 150 MB target. Four se
 **Latency on the largest of these (airflow, 13,913 files, 149,238 chunks):** cold index 30.7 s; building the view from git 105 ms p50 / 126 ms p95; a typical query after that 7.7 ms p50 / 21 ms p95. A query answered the stateless way is therefore about 147 ms at p95, at the edge of M1's 150 ms gate. The watcher in ADR-008 removes the git cost when nothing changed.
 
 **The server as a whole (M1 gate).** `aleph serve` on airflow, 64 searches through the protocol: 124 ms p50 / 138 ms p95 with git's untracked cache off, 60 ms p50 / 75 ms p95 with it on; 47 MB of private memory. On Django: ready 45 ms after launch, 17 MB before the first call, 37 MB after eighteen searches. The gate was p95 under 150 ms warm on a 15,000-file repository and under 150 MB per session; airflow has 13,913 files and is the largest corpus at hand.
+
+## The worker as built (M2, 2026-10-12)
+
+**Who stops it.** `llama-server --sleep-idle-seconds` unloads the model but keeps the process: 278 MB awake, 106 MB asleep, 556 ms to answer the first request after sleep. Reading `/metrics` or `/health` does not wake it; `/slots` does. So the worker sleeps after two idle minutes, and a small supervisor process (15 MB) that owns it stops it after thirty, judging idleness from the request counter in `/metrics`.
+
+**Staying one.** Starting takes a file lock. The state file records both process ids, and a process counts as ours only if its command line names our socket, so a recycled id is not mistaken for the worker. A healthy worker whose supervisor was killed is adopted by a new supervisor rather than doubled (macOS has no way to make a child die with its parent). A supervisor leaves when its worker dies. A failed start is reported with the server's own last words and not retried for a minute. The socket path is kept under the system's limit (104 bytes on macOS), falling back to a private directory under `/tmp` for a deep home directory.
+
+**More slots, same ceiling.** One slot embedded Django's chunks at 72 per second. Eight slots give 104 to 116, but with the decode batch left at the context size the worker reached 954 MB when every slot was fed inputs at capacity. With eight slots of 2,048 tokens and decodes capped at 4,096 tokens the worst case is 490 MB, the same as one slot, and throughput stays at 104 per second. That is the configuration. An input over 2,048 tokens is cut by the client (it was 4,096 with one slot); chunks are cut at 256 tokens, so this touches only long documentation sections and files without a language profile.
+
+| Configuration | Typical chunks | Every slot at capacity |
+|---|---|---|
+| 1 slot × 4,096 | 72 chunks/s, 314 MB | 479 MB, 2.9 inputs/s |
+| 8 slots × 2,048, decode ≤ 4,096 (chosen) | 104 chunks/s, 381 MB | 490 MB, 7.8 inputs/s |
+| 8 slots × 4,096, decode ≤ 8,192 | 116 chunks/s, 379 MB | 957 MB (over the limit) |
+
+Several inputs in one request gain nothing (73 per second): the slots, not the request, are what run in parallel, so the client keeps one connection per slot.
+
+**Installed size.** `aleph embed setup` builds the server statically in 25 s on this machine and leaves 665 MB under `~/.cache/aleph-zero/worker` (source, build tree, a 22 MB binary and the 310 MB model).
+
+**Measured against the real model.** Cold start to first answer 3.2 to 4.0 s; a query vector in 6 ms when awake; Flask's 1,959 chunks embedded in 19 s.
+
+**Views consulted** are recorded in the M2 plan: the advisor asked for the sleep behaviour to be measured before deciding who stops the worker; agy pointed out the orphaned worker on macOS and the recycled process id, which led to recording both ids and to adoption.
