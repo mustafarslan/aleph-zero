@@ -16,7 +16,7 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, lang, render, symbols
+from . import gitio, lang, render, sources, symbols
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
 from .indexer import Index
@@ -123,6 +123,7 @@ class Engine:
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
+            "sources": sources.describe(view.common_dir),
         }
 
     # ---- text for an agent, with the session's memory ----------------------------------------

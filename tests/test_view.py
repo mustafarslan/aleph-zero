@@ -81,7 +81,7 @@ def test_paths_for_lists_every_path_with_the_same_content(repo):
 def test_read_takes_dirty_content_from_disk_and_clean_content_from_git(repo):
     repo.write("src/billing/invoice.py", "dirty = True\n")
     view = build_view(repo.root)
-    with gitio.BlobReader(repo.root) as reader:
+    with gitio.Readers() as reader:
         assert view.read("src/billing/invoice.py", reader) == b"dirty = True\n"
         assert view.read("docs/guide.md", reader).startswith(b"# Guide")
 
@@ -109,7 +109,7 @@ def test_read_refuses_dirty_content_that_changed_after_the_view_was_built(repo):
     repo.write("src/billing/invoice.py", "first = 1\n")
     view = build_view(repo.root)
     repo.write("src/billing/invoice.py", "second = 2\n")
-    with gitio.BlobReader(repo.root) as reader:
+    with gitio.Readers() as reader:
         assert view.read("src/billing/invoice.py", reader) is None
 
 

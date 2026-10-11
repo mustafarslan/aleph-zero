@@ -44,7 +44,7 @@ def of(view: View, path: str) -> Outline:
     if path not in view.files:
         raise OutlineError(f"{path} is not a file in this worktree")
     family = filters.family(path)
-    with gitio.BlobReader(view.root) as reader:
+    with gitio.Readers() as reader:
         data = view.read(path, reader, filters.MAX_BYTES)
     if data is None:
         raise OutlineError(f"{path} could not be read")

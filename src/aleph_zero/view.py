@@ -19,13 +19,24 @@ _TREE_CACHE_SIZE = 8
 
 
 @dataclass(frozen=True)
+class Mount:
+    """A linked source inside a view: another repository whose files appear as `name:path`."""
+    name: str
+    root: Path                 # a worktree, or a bare repository
+    object_format: str
+    files: dict[str, str]      # path inside the source -> blob id
+    dirty: frozenset[str]      # paths read from the source's working copy
+
+
+@dataclass(frozen=True)
 class View:
     root: Path
     common_dir: Path
     object_format: str
     tree: str | None
-    files: dict[str, str]
+    files: dict[str, str]      # every path of the view, linked sources included as `name:path`
     dirty: frozenset[str]
+    mounts: tuple[Mount, ...] = ()
 
     @cached_property
     def fingerprint(self) -> str:
@@ -41,21 +52,34 @@ class View:
             by_blob.setdefault(self.files[path], []).append(path)
         return by_blob
 
+    @cached_property
+    def _mounted(self) -> dict[str, Mount]:
+        return {mount.name: mount for mount in self.mounts}
+
     def paths_for(self, oid: str) -> list[str]:
         return self._paths_by_blob.get(oid, [])
 
-    def read(self, path: str, reader: gitio.BlobReader,
+    def locate(self, path: str) -> tuple[Path, str, str]:
+        """Where a path of the view really is: (repository, path inside it, object format)."""
+        name, colon, inside = path.partition(":")
+        mount = self._mounted.get(name) if colon else None
+        if mount is not None and inside in mount.files:
+            return mount.root, inside, mount.object_format
+        return self.root, path, self.object_format
+
+    def read(self, path: str, readers: gitio.Readers,
              max_bytes: int | None = None) -> bytes | gitio.TooLarge | None:
         """Content of a file exactly as the view saw it: from disk if it differs from HEAD,
         else from git. None if it cannot be read that way any more: gone, unreadable, or
         edited since. The caller must not treat None as a statement about the content."""
+        root, inside, fmt = self.locate(path)
         if path in self.dirty:
             try:
-                data = (self.root / path).read_bytes()
+                data = (root / inside).read_bytes()
             except OSError:
                 return None
-            return data if gitio.hash_blob(data, self.object_format) == self.files[path] else None
-        return reader.read(self.files[path], max_bytes)
+            return data if gitio.hash_blob(data, fmt) == self.files[path] else None
+        return readers.reader(root).read(self.files[path], max_bytes)
 
 
 def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:
@@ -96,7 +120,9 @@ def _dirty_blob(root: Path, path: str, fmt: str, listings: dict[Path, frozenset[
         return None
 
 
-def build_view(cwd: Path) -> View:
+def worktree_files(cwd: Path) -> tuple[gitio.RepoInfo, dict[str, str], frozenset[str]]:
+    """One worktree as it is now: its repository facts, path -> blob id, and the paths
+    whose content was taken from the working copy."""
     info = gitio.repo_info(cwd)
     root, fmt, tree = info.root, info.object_format, info.tree
     files = dict(_tree_files(root, info.common_dir, tree)) if tree else {}
@@ -109,4 +135,24 @@ def build_view(cwd: Path) -> View:
         else:
             files[path] = oid
             dirty.add(path)
-    return View(root, info.common_dir, fmt, tree, files, frozenset(dirty))
+    return info, files, frozenset(dirty)
+
+
+def tree_files(root: Path, tree: str) -> dict[str, str]:
+    """The files of a tree in a repository, remembered per tree."""
+    return _tree_files(root, root, tree)
+
+
+def build_view(cwd: Path) -> View:
+    from . import sources  # sources builds its mounts with the helpers above
+
+    info, files, dirty = worktree_files(cwd)
+    mounts = tuple(sources.mounts(info.common_dir))
+    if mounts:
+        dirty = set(dirty)
+        for mount in mounts:
+            for inside, oid in mount.files.items():
+                files.setdefault(f"{mount.name}:{inside}", oid)  # a real path of that spelling wins
+            dirty.update(f"{mount.name}:{inside}" for inside in mount.dirty)
+        dirty = frozenset(dirty)
+    return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts)

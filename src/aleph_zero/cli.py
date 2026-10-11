@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import gitio, outline, render
+from . import gitio, outline, render, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -78,6 +78,29 @@ def _serve(args) -> int:
     return server.main(Engine(args.cwd))
 
 
+def _source(args) -> int:
+    if args.action == "add":
+        added = sources.add(args.cwd, args.location, name=args.name, ref=args.ref)
+        print(f"added {added.name} ({added.kind}): {added.location}")
+    elif args.action == "remove":
+        sources.remove(args.cwd, args.name)
+        print(f"removed {args.name}")
+    elif args.action == "refresh":
+        for name, outcome in sources.refresh(args.cwd, args.name).items():
+            print(f"{name}: {outcome}")
+    else:
+        rows = sources.describe(gitio.common_dir(args.cwd))
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            print(f"{len(rows)} linked sources")
+            for row in rows:
+                age = "" if row["age_seconds"] is None else f"  fetched {row['age_seconds']} s ago"
+                problem = f"  PROBLEM: {row['last_error']}" if row["last_error"] else ""
+                print(f"  {row['name']}  {row['kind']}  {row['location']}  {row['files']} files{age}{problem}")
+    return 0
+
+
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
@@ -124,6 +147,18 @@ def main(argv: list[str] | None = None) -> int:
 
     serve = commands.add_parser("serve", help="run the MCP server on standard input and output")
     serve.set_defaults(run=_serve)
+
+    source = commands.add_parser("source", help="documentation or code that lives in another repository")
+    actions = source.add_subparsers(dest="action", required=True)
+    adding = actions.add_parser("add", help="link a repository by local path, or by URL (uses the network)")
+    adding.add_argument("location")
+    adding.add_argument("--name", help="how its paths are prefixed; default: the directory's name")
+    adding.add_argument("--ref", help="URL sources: the branch or tag to read")
+    listing = actions.add_parser("list")
+    listing.add_argument("--json", action="store_true")
+    actions.add_parser("remove").add_argument("name")
+    actions.add_parser("refresh", help="fetch URL sources now").add_argument("name", nargs="?")
+    source.set_defaults(run=_source)
 
     gc = commands.add_parser("gc", help="drop content no view has used recently")
     gc.add_argument("--days", type=float, default=30.0)

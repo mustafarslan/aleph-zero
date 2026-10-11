@@ -36,6 +36,12 @@ def _init(root: Path) -> Repo:
 
 
 @pytest.fixture
+def make_repo():
+    """A function that creates another throwaway repository at a given path."""
+    return _init
+
+
+@pytest.fixture
 def empty_repo(tmp_path) -> Repo:
     return _init(tmp_path / "repo")
 

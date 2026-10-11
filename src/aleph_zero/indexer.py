@@ -101,7 +101,7 @@ class Index:
         left = len(missing)
         stored: set[Key] = set()
         deadline = started + budget_seconds
-        with gitio.BlobReader(view.root) as reader:
+        with gitio.Readers() as reader:
             for offset in range(0, len(todo), BATCH):
                 if time.monotonic() >= deadline or (stop is not None and stop()):
                     break
@@ -244,7 +244,7 @@ class Index:
                     (now, now - SEEN_REFRESH_SECONDS),
                 )
 
-    def _prepare(self, view: View, reader: gitio.BlobReader, key: Key) -> _Prepared | None:
+    def _prepare(self, view: View, reader: gitio.Readers, key: Key) -> _Prepared | None:
         """What to store for a blob, or None if its content cannot be read right now.
         The index is keyed by content, so nothing may be recorded without the content."""
         _, family = key

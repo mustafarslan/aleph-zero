@@ -144,6 +144,31 @@ def status(cwd: Path) -> list[str]:
     return [path.decode("utf-8", "surrogateescape") for path in paths]
 
 
+class Readers:
+    """Blob readers, one per repository, opened when first needed. A view can hold files
+    of several repositories: its own and the linked sources."""
+
+    def __init__(self) -> None:
+        self._open: dict[Path, BlobReader] = {}
+
+    def reader(self, root: Path) -> "BlobReader":
+        found = self._open.get(root)
+        if found is None:
+            found = self._open[root] = BlobReader(root)
+        return found
+
+    def close(self) -> None:
+        for reader in self._open.values():
+            reader.close()
+        self._open.clear()
+
+    def __enter__(self) -> "Readers":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
 def untracked_cache_enabled(cwd: Path) -> bool:
     """True if git keeps its untracked cache for this repository."""
     try:
