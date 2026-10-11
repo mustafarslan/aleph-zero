@@ -7,6 +7,7 @@ hit is valid only if its blob is in the view, so results cannot be stale.
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -44,12 +45,15 @@ class View:
         return self._paths_by_blob.get(oid, [])
 
     def read(self, path: str, reader: gitio.BlobReader) -> bytes | None:
-        """Content of a file in the view: from disk if it differs from HEAD, else from git."""
+        """Content of a file exactly as the view saw it: from disk if it differs from HEAD,
+        else from git. None if it cannot be read that way any more: gone, unreadable, or
+        edited since. The caller must not treat None as a statement about the content."""
         if path in self.dirty:
             try:
-                return (self.root / path).read_bytes()
+                data = (self.root / path).read_bytes()
             except OSError:
                 return None
+            return data if gitio.hash_blob(data, self.object_format) == self.files[path] else None
         return reader.read(self.files[path])
 
 
@@ -62,16 +66,46 @@ def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:
     return _TREE_CACHE[key]
 
 
+def _spelled_as_on_disk(root: Path, path: str, listings: dict[Path, frozenset[str]]) -> bool:
+    """False if the file system holds this path under another spelling. On a
+    case-insensitive volume a renamed file still answers to its old name."""
+    directory = root
+    for part in path.split("/"):
+        if directory not in listings:
+            try:
+                listings[directory] = frozenset(os.listdir(directory))
+            except OSError:
+                listings[directory] = frozenset()
+        if part not in listings[directory]:
+            return False
+        directory = directory / part
+    return True
+
+
+def _dirty_blob(root: Path, path: str, fmt: str, listings: dict[Path, frozenset[str]]) -> str | None:
+    """The blob id of a working-copy file, or None if it is not an indexable file right now."""
+    full = root / path
+    try:
+        if full.is_symlink() or not full.is_file() or full.stat().st_size > filters.MAX_BYTES:
+            return None
+        if not _spelled_as_on_disk(root, path, listings):
+            return None
+        return gitio.hash_blob(full.read_bytes(), fmt)
+    except OSError:  # unreadable, or removed while we looked
+        return None
+
+
 def build_view(cwd: Path) -> View:
     info = gitio.repo_info(cwd)
     root, fmt, tree = info.root, info.object_format, info.tree
     files = dict(_tree_files(root, info.common_dir, tree)) if tree else {}
     dirty: set[str] = set()
+    listings: dict[Path, frozenset[str]] = {}
     for path in gitio.status(root):
-        full = root / path
-        if full.is_file() and not full.is_symlink() and full.stat().st_size <= filters.MAX_BYTES:
-            files[path] = gitio.hash_blob(full.read_bytes(), fmt)
-            dirty.add(path)
+        oid = _dirty_blob(root, path, fmt, listings)
+        if oid is None:
+            files.pop(path, None)  # deleted, renamed away, unreadable, or too large to index
         else:
-            files.pop(path, None)  # deleted, replaced by a directory, or too large to index
+            files[path] = oid
+            dirty.add(path)
     return View(root, info.common_dir, fmt, tree, files, frozenset(dirty))

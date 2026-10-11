@@ -28,6 +28,10 @@ def _index(args) -> int:
         skipped += report.skipped
         if report.pending == 0 or args.once:
             break
+        fresh = build_view(args.cwd)  # the worktree may have moved on while we indexed
+        if report.indexed + report.skipped == 0 and fresh.fingerprint == view.fingerprint:
+            break  # nothing more can be done right now
+        view = fresh
     print(f"indexed {indexed} files, skipped {skipped}, pending {report.pending}; "
           f"{index.counts()['chunks_in_view']} chunks in view")
     return 0

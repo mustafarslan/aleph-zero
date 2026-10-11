@@ -118,18 +118,30 @@ def hash_blob(data: bytes, fmt: str = "sha1") -> str:
 
 
 class BlobReader:
-    """Reads blobs by id through one long-lived `git cat-file --batch`, with no checkout."""
+    """Reads blobs by id through one long-lived `git cat-file --batch`, with no checkout.
+    Git starts on the first read, so a reader that is never used costs nothing."""
 
     def __init__(self, cwd: Path) -> None:
-        self._proc = subprocess.Popen(
-            ["git", "-C", str(cwd), "cat-file", "--batch"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=_env(),
-        )
+        self._cwd = cwd
+        self._proc: subprocess.Popen | None = None
 
     def read(self, oid: str) -> bytes | None:
-        self._proc.stdin.write(oid.encode() + b"\n")
-        self._proc.stdin.flush()
-        header = self._proc.stdout.readline().split()
+        """The blob's content, or None if the repository does not have it."""
+        if self._proc is None:
+            self._proc = subprocess.Popen(
+                ["git", "-C", str(self._cwd), "cat-file", "--batch"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_env(),
+            )
+        try:
+            self._proc.stdin.write(oid.encode() + b"\n")
+            self._proc.stdin.flush()
+            line = self._proc.stdout.readline()
+        except OSError:
+            line = b""
+        if not line:  # git is gone: that says nothing about whether the blob exists
+            detail = self._proc.stderr.read().decode(errors="replace").strip()[:300]
+            raise GitError(f"git cat-file stopped in {self._cwd}: {detail}")
+        header = line.split()
         if len(header) != 3:  # "<oid> missing"
             return None
         data = self._proc.stdout.read(int(header[2]))
@@ -137,9 +149,19 @@ class BlobReader:
         return data
 
     def close(self) -> None:
-        if self._proc.poll() is None:
-            self._proc.stdin.close()
-            self._proc.wait(timeout=10)
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
     def __enter__(self) -> "BlobReader":
         return self

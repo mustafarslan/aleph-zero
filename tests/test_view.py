@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from aleph_zero import filters, gitio
 from aleph_zero.view import build_view
 
@@ -91,3 +93,29 @@ def test_a_submodule_entry_is_left_out_without_error(repo):
     view = build_view(repo.root)
     assert "vendor/lib" not in view.files
     assert "docs/guide.md" in view.files
+
+
+def test_an_unreadable_file_is_left_out_of_the_view(repo):
+    secret = repo.write("secret.py", "x = 1\n")
+    secret.chmod(0)
+    try:
+        view = build_view(repo.root)
+    finally:
+        secret.chmod(0o644)
+    assert "secret.py" not in view.files
+
+
+def test_read_refuses_dirty_content_that_changed_after_the_view_was_built(repo):
+    repo.write("src/billing/invoice.py", "first = 1\n")
+    view = build_view(repo.root)
+    repo.write("src/billing/invoice.py", "second = 2\n")
+    with gitio.BlobReader(repo.root) as reader:
+        assert view.read("src/billing/invoice.py", reader) is None
+
+
+def test_a_case_only_rename_leaves_one_name_in_the_view(repo):
+    if not (repo.root / "DOCS").exists():
+        pytest.skip("this file system is case-sensitive")
+    repo.git("mv", "docs/guide.md", "docs/Guide.md")
+    view = build_view(repo.root)
+    assert "docs/Guide.md" in view.files and "docs/guide.md" not in view.files

@@ -1,8 +1,11 @@
 import multiprocessing
+import os
+import time
 
 from aleph_zero.indexer import Index, collect_garbage
+from aleph_zero.search import search
 from aleph_zero.store import index_path, open_db
-from aleph_zero.view import build_view
+from aleph_zero.view import View, build_view
 
 
 def _index(repo):
@@ -123,12 +126,93 @@ def test_two_processes_indexing_the_same_repository_agree(repo):
     assert orphans == [(0,)]
 
 
-def test_a_file_that_vanishes_between_status_and_read_is_skipped_not_fatal(repo):
+def test_a_file_that_vanishes_between_status_and_read_stays_pending_and_is_never_recorded(repo):
     repo.write("ephemeral.py", "here_then_gone = 1\n")
     view = build_view(repo.root)          # the view still lists the file
     (repo.root / "ephemeral.py").unlink()  # ...and it disappears before indexing
-    report = _index(repo).sync(view)
-    assert (report.indexed, report.skipped, report.pending) == (3, 1, 0)
+    index = _index(repo)
+    report = index.sync(view)
+    assert (report.indexed, report.skipped, report.pending) == (3, 0, 1)
+    assert _total(index, "blobs") == 3  # a failed read says nothing about the content
+
+
+def test_content_that_could_not_be_read_once_is_indexed_when_it_reappears(repo):
+    index = _index(repo)
+    repo.write("notes/draft.py", "def pangolin_marker():\n    return 1\n")
+    view = build_view(repo.root)
+    os.remove(repo.root / "notes/draft.py")
+    index.sync(view)
+    repo.write("src/restored.py", "def pangolin_marker():\n    return 1\n")  # the same bytes, elsewhere
+    fresh = build_view(repo.root)
+    assert index.sync(fresh).indexed == 1
+    assert [hit.path for hit in search(index, fresh, "pangolin_marker")] == ["src/restored.py"]
+
+
+def test_a_dirty_file_edited_after_the_view_was_built_is_not_stored_under_the_old_id(repo):
+    index = _index(repo)
+    path = "src/billing/invoice.py"
+    repo.write(path, "def first_version():\n    return 'aardvark'\n")
+    view = build_view(repo.root)
+    repo.write(path, "def second_version():\n    return 'buffalo'\n")
+    assert index.sync(view).pending == 1
+    repo.write(path, "def first_version():\n    return 'aardvark'\n")
+    fresh = build_view(repo.root)
+    index.sync(fresh)
+    assert search(index, fresh, "buffalo") == []
+    assert [hit.path for hit in search(index, fresh, "aardvark")] == [path]
+
+
+def test_a_blob_missing_from_the_object_store_stays_pending(repo):
+    # A partial clone has tree entries whose blobs were never fetched.
+    index = _index(repo)
+    real = build_view(repo.root)
+    ghost = View(real.root, real.common_dir, real.object_format, real.tree,
+                 {**real.files, "ghost.py": "0" * 40}, real.dirty)
+    first = index.sync(ghost)
+    assert (first.indexed, first.skipped, first.pending) == (3, 0, 1)
+    assert index.sync(ghost).pending == 1
+    assert index.conn.execute("SELECT count(*) FROM blobs WHERE kind LIKE 'skip:%'").fetchall() == [(0,)]
+
+
+def test_index_recovers_after_another_session_collects_its_content(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    other = open_db(index_path(repo.root))  # a session with no view of its own
+    collect_garbage(other, max_age_days=0, now=time.time() + 10)
+    assert _total(index, "blobs") == 0
+    assert index.sync(view).indexed == 3
+    assert search(index, view, "render_invoice")[0].path == "src/billing/invoice.py"
+
+
+def test_an_unchanged_view_still_marks_its_content_as_in_use(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    index.conn.execute("UPDATE blobs SET last_seen_at = 0")
+    index.sync(view)
+    assert index.conn.execute("SELECT min(last_seen_at) FROM blobs").fetchall()[0][0] > 0
+
+
+def test_a_failed_sync_does_not_leave_the_index_answering_for_the_wrong_view(repo, monkeypatch):
+    index = _index(repo)
+    main = build_view(repo.root)
+    index.sync(main)
+    repo.write("src/extra.py", "def numbat_marker():\n    return 1\n")
+    edited = build_view(repo.root)
+
+    def fail(self):
+        raise RuntimeError("interrupted")
+
+    monkeypatch.setattr(Index, "_refresh_view_chunks", fail)
+    try:
+        index.sync(edited)
+    except RuntimeError:
+        pass
+    monkeypatch.undo()
+    os.remove(repo.root / "src/extra.py")
+    index.sync(main)  # the same fingerprint as before the failure
+    assert index.counts()["blobs_in_view"] == 3
 
 
 def test_an_empty_repository_syncs_to_nothing(empty_repo):

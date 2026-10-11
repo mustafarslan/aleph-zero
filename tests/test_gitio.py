@@ -73,3 +73,19 @@ def test_repo_info_has_no_tree_before_the_first_commit(empty_repo):
 def test_repo_info_outside_a_repository_raises(tmp_path):
     with pytest.raises(gitio.GitError):
         gitio.repo_info(tmp_path)
+
+
+def test_blob_reader_raises_when_git_dies_instead_of_reporting_a_missing_object(tmp_path):
+    reader = gitio.BlobReader(tmp_path)  # not a repository: cat-file exits at once
+    with pytest.raises(gitio.GitError):
+        reader.read("0" * 40)
+    reader.close()
+
+
+def test_blob_reader_starts_git_only_when_something_is_read(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("git was started")
+
+    monkeypatch.setattr(gitio.subprocess, "Popen", refuse)
+    with gitio.BlobReader(tmp_path):
+        pass

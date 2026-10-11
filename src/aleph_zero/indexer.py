@@ -14,13 +14,14 @@ from .view import View
 
 BATCH = 50
 SEEN_REFRESH_SECONDS = 3600
+RETRY_SECONDS = 60  # before a blob git could not supply is asked for again under the same view
 
 
 @dataclass(frozen=True)
 class SyncReport:
     indexed: int    # blobs chunked and stored by this call
     skipped: int    # blobs recorded as not indexable (binary, too large, ...)
-    pending: int    # blobs in the view still not indexed: the time budget ran out
+    pending: int    # blobs in the view still not indexed: out of time, or not readable right now
     seconds: float
 
 
@@ -31,29 +32,45 @@ class Index:
         self.conn = conn
         self._fingerprint: str | None = None
         self._pending = 0
-        self._path_tokens: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+        self._deferred: dict[str, float] = {}  # blob git does not have -> when we last asked
+        self._path_tokens: dict[str, tuple[frozenset[str], frozenset[str]]] | None = None
 
     def sync(self, view: View, budget_seconds: float = 5.0) -> SyncReport:
         """Index every blob of the view the index has not seen, within a time budget,
-        then point the connection's view tables at this view."""
+        then point the connection's view tables at this view.
+
+        Cheap when nothing changed, but never skipped: another session may have
+        collected this view's content, or indexed what was pending here."""
         started = time.monotonic()
-        if view.fingerprint == self._fingerprint and self._pending == 0:
-            return SyncReport(0, 0, 0, time.monotonic() - started)
-        if view.fingerprint != self._fingerprint:
+        changed = view.fingerprint != self._fingerprint
+        if changed:
+            self._fingerprint = None  # until the tables below match the view again
             self._load_view_blobs(view)
         missing = [row[0] for row in self.conn.execute(
             "SELECT v.blob_oid FROM temp.view_blobs v LEFT JOIN blobs b "
             "ON b.blob_oid = v.blob_oid AND b.chunker_version = ? WHERE b.blob_oid IS NULL ORDER BY v.blob_oid",
             (CHUNKER_VERSION,),
         )]
-        indexed = skipped = done = 0
+        retry_before = started - RETRY_SECONDS
+        todo = [oid for oid in missing if self._deferred.get(oid, retry_before) <= retry_before]
+        indexed = skipped = 0
+        left = len(missing)
         deadline = started + budget_seconds
         with gitio.BlobReader(view.root) as reader:
-            for offset in range(0, len(missing), BATCH):
+            for offset in range(0, len(todo), BATCH):
                 if time.monotonic() >= deadline:
                     break
-                batch = missing[offset:offset + BATCH]
-                prepared = [self._prepare(view, reader, oid) for oid in batch]
+                prepared = []
+                for oid in todo[offset:offset + BATCH]:
+                    item = self._prepare(view, reader, oid)
+                    if item is not None:
+                        prepared.append(item)
+                    elif not any(path in view.dirty for path in view.paths_for(oid)):
+                        # Git does not have the object. Asking again on every query would
+                        # cost a lookup per missing blob; a working-copy file is one read.
+                        self._deferred[oid] = time.monotonic()
+                if not prepared:
+                    continue
                 with transaction(self.conn):
                     for oid, kind, size, chunks in prepared:
                         self._store(oid, kind, size, chunks)
@@ -61,16 +78,23 @@ class Index:
                             indexed += 1
                         else:
                             skipped += 1
-                done += len(batch)
-        self._pending = len(missing) - done
-        self._refresh_view_chunks()
+                left -= len(prepared)
+        if changed or indexed or skipped or len(missing) != self._pending:
+            self._refresh_view_chunks()
+        self._pending = left
         self._touch()
         self._fingerprint = view.fingerprint
-        return SyncReport(indexed, skipped, self._pending, time.monotonic() - started)
+        return SyncReport(indexed, skipped, left, time.monotonic() - started)
+
+    def serves(self, view: View) -> bool:
+        """True if the last sync was for this view, so queries answer for it."""
+        return self._fingerprint is not None and self._fingerprint == view.fingerprint
 
     def path_tokens(self, view: View) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
-        """For each path of the view: (all its lower-cased words, the words of its file name)."""
-        if not self._path_tokens or self._fingerprint != view.fingerprint:
+        """For each path of the synced view: (all its lower-cased words, the words of its file name)."""
+        if not self.serves(view):
+            raise ValueError("this view is not the one the index was last synced to; call sync(view) first")
+        if self._path_tokens is None:
             self._path_tokens = {
                 path: (frozenset(lexical.query_terms(path)), frozenset(lexical.query_terms(PurePosixPath(path).stem)))
                 for path in view.files
@@ -88,7 +112,8 @@ class Index:
         }
 
     def _load_view_blobs(self, view: View) -> None:
-        self._path_tokens = {}
+        self._path_tokens = None
+        self._deferred.clear()
         self.conn.execute("BEGIN")
         self.conn.execute("DELETE FROM temp.view_blobs")
         self.conn.executemany("INSERT OR IGNORE INTO temp.view_blobs(blob_oid) VALUES (?)",
@@ -106,7 +131,7 @@ class Index:
 
     def _touch(self) -> None:
         """Mark the view's blobs as recently seen, at most once an hour each, so a
-        query does not take the write lock every time."""
+        query does not take the write lock every time. The check itself is one index probe."""
         now = int(time.time())
         stale = self.conn.execute(
             "SELECT 1 FROM blobs b JOIN temp.view_blobs v ON v.blob_oid = b.blob_oid "
@@ -121,11 +146,15 @@ class Index:
                 )
 
     @staticmethod
-    def _prepare(view: View, reader: gitio.BlobReader, oid: str) -> tuple[str, str, int, list[Chunk]]:
-        path = view.paths_for(oid)[0]
-        data = view.read(path, reader)
-        if data is None:
-            return oid, "skip:unreadable", 0, []
+    def _prepare(view: View, reader: gitio.BlobReader, oid: str) -> tuple[str, str, int, list[Chunk]] | None:
+        """What to store for a blob, or None if its content cannot be read right now.
+        The index is keyed by content, so nothing may be recorded without the content."""
+        for path in view.paths_for(oid):
+            data = view.read(path, reader)
+            if data is not None:
+                break
+        else:
+            return None
         kind, text = filters.classify(path, data)
         if text is None:
             return oid, kind, len(data), []
