@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
+from . import lang
+
 MAX_BYTES = 300_000
 MAX_AVERAGE_LINE = 500
 MARKDOWN_SUFFIXES = {".md", ".mdx"}
@@ -26,7 +28,8 @@ def family(path: str) -> str:
         return "markdown"
     if suffix in PROSE_SUFFIXES:
         return "prose"
-    return "text"
+    profile = lang.profile_for_path(path)
+    return profile.name if profile else "text"
 
 
 def classify(family: str, data: bytes) -> tuple[str, str | None]:
