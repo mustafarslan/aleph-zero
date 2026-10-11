@@ -44,7 +44,8 @@ class View:
     def paths_for(self, oid: str) -> list[str]:
         return self._paths_by_blob.get(oid, [])
 
-    def read(self, path: str, reader: gitio.BlobReader) -> bytes | None:
+    def read(self, path: str, reader: gitio.BlobReader,
+             max_bytes: int | None = None) -> bytes | gitio.TooLarge | None:
         """Content of a file exactly as the view saw it: from disk if it differs from HEAD,
         else from git. None if it cannot be read that way any more: gone, unreadable, or
         edited since. The caller must not treat None as a statement about the content."""
@@ -54,7 +55,7 @@ class View:
             except OSError:
                 return None
             return data if gitio.hash_blob(data, self.object_format) == self.files[path] else None
-        return reader.read(self.files[path])
+        return reader.read(self.files[path], max_bytes)
 
 
 def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:

@@ -8,7 +8,6 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "apsw" },
-    { name = "mcp" },
     { name = "numpy" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
@@ -23,13 +22,13 @@ bench = [
     { name = "tokenizers" },
 ]
 dev = [
+    { name = "mcp" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "apsw", specifier = ">=3.53" },
-    { name = "mcp", specifier = ">=2.3,<3" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "tree-sitter", specifier = ">=0.25.2,<0.26" },
     { name = "tree-sitter-language-pack", specifier = ">=1.21,<2" },
@@ -43,7 +42,10 @@ bench = [
     { name = "pyarrow", specifier = ">=17" },
     { name = "tokenizers", specifier = ">=0.23" },
 ]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "annotated-types"

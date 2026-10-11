@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = { file = "LICENSE" }
 dependencies = [
-  "mcp>=2.3,<3",
   # 0.26.0 segfaults when node positions are read across large trees
   # (tests/test_tree_sitter_stability.py); 0.25.2 is clean.
   "tree-sitter>=0.25.2,<0.26",
@@ -16,7 +15,12 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+  "pytest>=8",
+  # Not imported by the server (ADR-009). Its client checks our server's conformance,
+  # and bench/spikes/transport.py measures against its server.
+  "mcp>=2.3,<3",
+]
 bench = [
   "huggingface-hub>=0.30",
   "onnxruntime>=1.31",

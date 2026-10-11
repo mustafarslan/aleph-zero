@@ -89,3 +89,15 @@ def test_blob_reader_starts_git_only_when_something_is_read(tmp_path, monkeypatc
     monkeypatch.setattr(gitio.subprocess, "Popen", refuse)
     with gitio.BlobReader(tmp_path):
         pass
+
+
+def test_blob_reader_does_not_load_a_blob_over_the_limit(repo):
+    big = repo.write("assets/dump.sql", "INSERT INTO t VALUES (1);\n" * 40_000)  # about 1 MB
+    repo.commit("big file")
+    oid = gitio.hash_blob(big.read_bytes())
+    small = gitio.hash_blob((repo.root / "docs/guide.md").read_bytes())
+    with gitio.BlobReader(repo.root) as reader:
+        refused = reader.read(oid, max_bytes=10_000)
+        assert isinstance(refused, gitio.TooLarge) and refused.size == big.stat().st_size
+        assert reader.read(small, max_bytes=10_000).startswith(b"# Guide")  # the stream is still in step
+        assert len(reader.read(oid)) == big.stat().st_size                # no limit: the whole blob

@@ -309,3 +309,22 @@ def test_a_failed_filter_does_not_leave_a_transaction_open(repo):
         pass
     index.narrow(view, "docs", None, None)  # would fail with "cannot start a transaction within a transaction"
     assert search(index, view, "invoices", kind="docs")
+
+
+def test_a_huge_committed_file_is_skipped_without_being_read_into_memory(repo):
+    import tracemalloc
+
+    (repo.root / "cache.db").write_bytes(b"SQLite format 3\x00" + b"\x01\x02\x03\x04" * 5_000_000)  # 20 MB
+    repo.commit("a cache someone committed")
+    index = _index(repo)
+    view = build_view(repo.root)
+    tracemalloc.start()
+    try:
+        report = index.sync(view)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert (report.indexed, report.skipped, report.pending) == (3, 1, 0)
+    assert index.conn.execute("SELECT kind, size FROM blobs WHERE kind LIKE 'skip:%'").fetchall() == [
+        ("skip:too-large", 20_000_016)]
+    assert peak < 8_000_000

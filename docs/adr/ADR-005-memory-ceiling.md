@@ -91,3 +91,24 @@ Other M0 readings: MCP attach 1.36 s on the first launch and 0.25 s after. One s
 ## Views consulted
 
 The advisor and agy (no boost) were consulted on the first decision and again on the failed gate. Both backed the shared worker once the measurements were in. The advisor identified the logits buffer from the arithmetic (262,144 × 4 bytes) before it was confirmed in the source; agy attributed the growth to lazy graph allocation, which the fixed 110 MiB compute buffer rules out. agy's main concern, a helper that lingers unmanaged, is addressed by the requirements above.
+
+## Session memory with the language layer (M1c measurement, 2026-10-12)
+
+Private memory of one process, each measured alone. "Cold" indexed the whole repository in that process; "warm" opened an existing index. Both then ran five queries.
+
+| Repository | Files | Cold: after indexing and queries | Warm: after queries |
+|---|---|---|---|
+| nest (TypeScript) | 2,307 | 34.6 MB | 23.1 MB |
+| tokio (Rust) | 875 | 34.6 MB | 22.0 MB |
+| eslint (JavaScript) | 2,303 | 41.9 MB | 24.1 MB |
+| Django (Python) | 7,080 | 54.5 MB | 35.7 MB |
+| llama.cpp (C++, C) | 3,768 | 53.5 MB | 32.5 MB |
+| airflow (Python) | 13,913 | 61.5 MB peak while indexing | 47.2 MB |
+
+- **Grammars cost no private memory.** Each is a shared library mapped from disk; loading any of the nine left the footprint at 13.6 MB.
+- **Two defects were found by this measurement and fixed.** A committed 108 MB file was read whole before being skipped as too large, leaving 150 MB behind; blobs over the size limit are now passed over in small steps. And the SQLite page cache was 32 MB per session for no measurable gain; it is 8 MB.
+- With the hand-written MCP transport (ADR-009) a session's baseline is about 9 MB instead of 54 MB.
+
+A session therefore sits at roughly 25–60 MB, against a 150 MB target. Four sessions plus the embed worker at full capacity come to about 480 + 4 × 60 = 720 MB in the worst case measured here.
+
+**Latency on the largest of these (airflow, 13,913 files, 149,238 chunks):** cold index 30.7 s; building the view from git 105 ms p50 / 126 ms p95; a typical query after that 7.7 ms p50 / 21 ms p95. A query answered the stateless way is therefore about 147 ms at p95, at the edge of M1's 150 ms gate. The watcher in ADR-008 removes the git cost when nothing changed.

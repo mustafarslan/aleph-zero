@@ -72,7 +72,9 @@ def open_db(path: Path) -> apsw.Connection:
     conn.set_busy_timeout(5000)
     _retry_while_busy(lambda: conn.pragma("journal_mode", "wal"))
     conn.pragma("synchronous", "normal")
-    conn.pragma("cache_size", -32000)
+    # 8 MB of page cache per session. 32 MB indexed Django no faster (10.1 s against 10.2 s),
+    # answered queries no faster, and left 28 MB more private memory behind (M1c measurement).
+    conn.pragma("cache_size", -8000)
     conn.pragma("foreign_keys", True)
     conn.pragma("temp_store", "memory")
 

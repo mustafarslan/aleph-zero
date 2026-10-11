@@ -117,6 +117,12 @@ def hash_blob(data: bytes, fmt: str = "sha1") -> str:
     return digest.hexdigest()
 
 
+@dataclass(frozen=True)
+class TooLarge:
+    """A blob that was not read because it is over the caller's limit."""
+    size: int
+
+
 class BlobReader:
     """Reads blobs by id through one long-lived `git cat-file --batch`, with no checkout.
     Git starts on the first read, so a reader that is never used costs nothing."""
@@ -125,8 +131,10 @@ class BlobReader:
         self._cwd = cwd
         self._proc: subprocess.Popen | None = None
 
-    def read(self, oid: str) -> bytes | None:
-        """The blob's content, or None if the repository does not have it."""
+    def read(self, oid: str, max_bytes: int | None = None) -> bytes | TooLarge | None:
+        """The blob's content, or None if the repository does not have it. A blob over
+        `max_bytes` is passed over in small steps and reported as TooLarge: someone's
+        committed 100 MB database must not be held in memory just to be skipped."""
         if self._proc is None:
             self._proc = subprocess.Popen(
                 ["git", "-C", str(self._cwd), "cat-file", "--batch"],
@@ -144,7 +152,13 @@ class BlobReader:
         header = line.split()
         if len(header) != 3:  # "<oid> missing"
             return None
-        data = self._proc.stdout.read(int(header[2]))
+        size = int(header[2])
+        if max_bytes is not None and size > max_bytes:
+            left = size + 1  # the content and the newline after it
+            while left > 0:
+                left -= len(self._proc.stdout.read(min(left, 1 << 16)))
+            return TooLarge(size)
+        data = self._proc.stdout.read(size)
         self._proc.stdout.read(1)  # the newline after the content
         return data
 

@@ -248,11 +248,13 @@ class Index:
         The index is keyed by content, so nothing may be recorded without the content."""
         _, family = key
         for path in self._paths[key]:
-            data = view.read(path, reader)
+            data = view.read(path, reader, filters.MAX_BYTES)
             if data is not None:
                 break
         else:
             return None
+        if isinstance(data, gitio.TooLarge):
+            return _Prepared(key, "skip:too-large", data.size)
         kind, text = filters.classify(family, data)
         if text is None:
             return _Prepared(key, kind, len(data))
