@@ -29,10 +29,20 @@ How are lexical candidates produced, and how are symbol, path, lexical and dense
 
 | Query set | FTS5 only, p50 / p95 | Whole search, p50 / p95 |
 |---|---|---|
-| 14 typical queries | 2.0 / 6.8 ms | 3.2 / 8.3 ms |
-| 7 queries made of words found in most chunks (`self`, `return`, `if not self`) | 4.9 / 9.5 ms | 5.8 / 10.7 ms |
+| 14 typical queries | 2.1 / 7.1 ms | 4.2 / 9.7 ms |
+| 7 queries made of words found in most chunks (`self`, `return`, `if not self`) | 5.1 / 10.0 ms | 6.7 / 11.9 ms |
+| 6 queries with a kind or path filter, filter seen for the first time | | 14.2 / 22.5 ms |
+| The same filtered queries repeated | | 1.3 / 5.9 ms |
 
-The M0 storage spike used a uniform synthetic vocabulary, which could not show the cost of long posting lists. On real code the worst queries stay near 11 ms, so the lexical stage is not where a query's time goes: building the view (two git calls) takes about 70 ms of the same query. The view filter must stay written as `+rowid IN (...)`; without the unary plus the same query takes seconds.
+Bringing the index up to date with an unchanged view takes 0.9 ms.
+
+The M0 storage spike used a uniform synthetic vocabulary, which could not show the cost of long posting lists. On real code the worst queries stay near 11 ms, so the lexical stage is not where a query's time goes: building the view (two git calls) takes about 70 ms of the same query (ADR-008). The view filter must stay written as `+rowid IN (...)`; without the unary plus the same query takes seconds.
+
+## Known limits
+
+- **Languages written without spaces.** Words are recognised in every script, and case and diacritics are folded, so German, Russian or Greek text is searchable. Chinese, Japanese and Korean text is indexed as whole runs between spaces and punctuation, so a query finds a run only if it equals it. Closing this needs a second index with FTS5's trigram tokenizer; it is planned for M3 if the benchmark repositories show a need.
+- **Kind and path filters** narrow the candidates inside the query (a temporary table per filter, reused while the view is unchanged). They are not applied after ranking: a filter that few chunks pass would otherwise find nothing among the best fifty of everything.
+- **Path matches.** A one-word query matches a path only through the file's own name, and the path generator proposes nothing when more than 25 files tie for best. Both rules are heuristics to be re-examined with the M2 benchmark.
 
 ## Open for M2
 
