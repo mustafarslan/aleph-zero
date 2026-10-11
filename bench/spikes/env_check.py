@@ -4,10 +4,12 @@ import platform
 import sqlite3
 import sys
 
+import apsw
+
 MIN_SQLITE = (3, 51, 3)
 
 
-def contentless_delete_works(conn: sqlite3.Connection) -> bool:
+def contentless_delete_works(conn: apsw.Connection) -> bool:
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE probe USING fts5("
@@ -15,27 +17,32 @@ def contentless_delete_works(conn: sqlite3.Connection) -> bool:
         )
         conn.execute("INSERT INTO probe(rowid, a) VALUES (1, 'get_user_name')")
         conn.execute("DELETE FROM probe WHERE rowid = 1")
-        return conn.execute("SELECT count(*) FROM probe WHERE probe MATCH 'get_user_name'").fetchone()[0] == 0
-    except sqlite3.OperationalError:
+        return conn.execute("SELECT count(*) FROM probe WHERE probe MATCH 'get_user_name'").fetchall()[0][0] == 0
+    except apsw.Error:
         return False
 
 
 def main() -> int:
-    conn = sqlite3.connect(":memory:")
-    options = {row[0] for row in conn.execute("PRAGMA compile_options")}
+    conn = apsw.Connection(":memory:")
+    options = set(apsw.compile_options)
+    bundled = tuple(int(part) for part in apsw.sqlite_lib_version().split("."))
     report = {
         "python": platform.python_version(),
         "machine": platform.machine(),
-        "sqlite": sqlite3.sqlite_version,
+        "interpreter_sqlite": sqlite3.sqlite_version,
+        "apsw": apsw.apsw_version(),
+        "sqlite": apsw.sqlite_lib_version(),
+        "amalgamation": apsw.using_amalgamation,
         "fts5": "ENABLE_FTS5" in options,
         "contentless_delete": "ENABLE_FTS5" in options and contentless_delete_works(conn),
-        "autocommit_attr": hasattr(conn, "autocommit"),
     }
     failures = []
     if sys.version_info[:2] != (3, 13):
         failures.append("python must be 3.13")
-    if sqlite3.sqlite_version_info < MIN_SQLITE:
-        failures.append("sqlite older than 3.51.3: bundle SQLite through APSW instead of stdlib sqlite3")
+    if bundled < MIN_SQLITE:
+        failures.append("APSW's SQLite is older than 3.51.3")
+    if not apsw.using_amalgamation:
+        failures.append("APSW is linked to a system SQLite instead of its bundled one")
     if not report["fts5"]:
         failures.append("sqlite built without FTS5")
     if not report["contentless_delete"]:

@@ -10,6 +10,7 @@ dependencies = [
   "tree-sitter>=0.26,<0.27",
   "tree-sitter-language-pack>=1.21,<2",
   "numpy>=2.0",
+  "apsw>=3.53",
 ]
 
 [dependency-groups]
