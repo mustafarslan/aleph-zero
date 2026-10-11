@@ -72,6 +72,12 @@ def _status(args) -> int:
     return 0
 
 
+def _serve(args) -> int:
+    from . import server  # only this command needs it
+
+    return server.main(Engine(args.cwd))
+
+
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
@@ -115,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
 
     status = commands.add_parser("status", help="what the index holds for this worktree")
     status.set_defaults(run=_status)
+
+    serve = commands.add_parser("serve", help="run the MCP server on standard input and output")
+    serve.set_defaults(run=_serve)
 
     gc = commands.add_parser("gc", help="drop content no view has used recently")
     gc.add_argument("--days", type=float, default=30.0)

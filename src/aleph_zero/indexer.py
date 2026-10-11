@@ -77,7 +77,8 @@ class Index:
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
         self._scope: tuple | None = None
 
-    def sync(self, view: View, budget_seconds: float = 5.0) -> SyncReport:
+    def sync(self, view: View, budget_seconds: float = 5.0,
+             stop: Callable[[], bool] | None = None) -> SyncReport:
         """Index every blob of the view the index has not seen, within a time budget,
         then point the connection's view tables at this view.
 
@@ -102,7 +103,7 @@ class Index:
         deadline = started + budget_seconds
         with gitio.BlobReader(view.root) as reader:
             for offset in range(0, len(todo), BATCH):
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= deadline or (stop is not None and stop()):
                     break
                 prepared = []
                 for key in todo[offset:offset + BATCH]:

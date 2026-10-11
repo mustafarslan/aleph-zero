@@ -8,6 +8,7 @@ any number of worktrees and repositories.
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -41,13 +42,19 @@ class SymbolAnswer:
     elapsed_ms: int = 0
 
 
+class Cancelled(Exception):
+    """The caller withdrew the request while it was running."""
+
+
 @contextmanager
-def deadline(conn: apsw.Connection, until: float | None):
-    """Inside this block SQLite stops with apsw.InterruptError once `until` has passed."""
-    if until is None:
+def deadline(conn: apsw.Connection, until: float | None, stop: threading.Event | None = None):
+    """Inside this block SQLite stops with apsw.InterruptError once `until` has passed
+    or `stop` is set."""
+    if until is None and stop is None:
         yield
         return
-    conn.set_progress_handler(lambda: time.monotonic() > until, 2000)
+    conn.set_progress_handler(
+        lambda: (until is not None and time.monotonic() > until) or (stop is not None and stop.is_set()), 2000)
     try:
         yield
     finally:
@@ -59,6 +66,15 @@ class Engine:
         self.default_cwd = Path(default_cwd) if default_cwd is not None else Path.cwd()
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._shown: set[tuple] = set()
+        self._stop = threading.Event()
+
+    def cancel(self) -> None:
+        """Stop the operation running on another thread; it raises Cancelled."""
+        self._stop.set()
+
+    def resume(self) -> None:
+        """Forget a cancellation, before the next operation."""
+        self._stop.clear()
 
     # ---- the four operations --------------------------------------------------------------
 
@@ -71,11 +87,13 @@ class Engine:
         hits = []
         if not late or time.monotonic() < until:
             try:
-                with deadline(index.conn, until):
+                with deadline(index.conn, until, self._stop):
                     hits = run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families) or []
             except apsw.InterruptError:
                 late = True
                 _reset(index.conn)
+        if self._stop.is_set():
+            raise Cancelled
         return render.Answer(query, hits, pending, late, _elapsed(started))
 
     def symbol(self, name: str, k: int = 20, cwd: Path | str | None = None,
@@ -84,11 +102,13 @@ class Engine:
         index, view, pending, late = self._ready(cwd, started, until)
         found = []
         try:
-            with deadline(index.conn, until):
+            with deadline(index.conn, until, self._stop):
                 found = symbols.lookup(index, view, name, limit=k)
         except apsw.InterruptError:
             late = True
             _reset(index.conn)
+        if self._stop.is_set():
+            raise Cancelled
         return SymbolAnswer(name, found, pending, late, _elapsed(started))
 
     def outline(self, path: str, cwd: Path | str | None = None) -> outlines.Outline:
@@ -134,7 +154,9 @@ class Engine:
             budget = sync_seconds
         else:
             budget = max(0.0, (until - time.monotonic()) * (1 - SEARCH_SHARE))
-        report = index.sync(view, budget_seconds=budget)
+        report = index.sync(view, budget_seconds=budget, stop=self._stop.is_set)
+        if self._stop.is_set():
+            raise Cancelled
         return index, view, report.pending, until is not None and report.pending > 0
 
 

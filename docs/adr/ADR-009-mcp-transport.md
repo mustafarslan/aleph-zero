@@ -37,6 +37,19 @@ The SDK did these for us; each is a test in `tests/test_server.py`:
 - Exit when stdin closes; a client that has gone away is not an error.
 - Requests the server may send to the client (`roots/list`) are not used: each tool takes `cwd`, and the server's own working directory is the default.
 
+## What Claude Code actually sends (2.1.296, recorded 2026-10-12)
+
+1. `server/discover` with id `"server-discover-probe-1"`, proposing protocol `2026-07-28` in `_meta`. This is the newer, 2026 handshake. We answer "method not found" (-32601).
+2. On that answer it falls back to `initialize` with protocol `2025-11-25`, then `notifications/initialized`, `tools/list`, and `tools/call` carrying a `_meta` with a progress token.
+
+So request ids may be strings or numbers, and the fallback costs one extra round trip at start-up. Speaking the 2026 handshake natively is deferred until its rules are read from the specification rather than inferred; the fallback is the client's documented behaviour.
+
+## The server as built (M1c)
+
+On Django (7,080 files), `aleph serve` as a child process: ready 45 ms after launch, 16.8 MB of private memory before the first call, 36.7 MB after eighteen searches. A search costs about 84 ms, nearly all of it the git check (ADR-008).
+
+In a headless Claude Code session with only this server attached, `search` is in the tool list and callable at once; `outline`, `symbol` and `status` are listed as deferred, as intended: one always-loaded description is paid for in every session, the others when needed. The SDK's own client lists and calls all four (a test).
+
 ## What would change this decision
 
 A protocol revision that makes stdio servers materially harder to implement (a mandatory streaming or session layer), or a conformance failure against Claude Code that the SDK does not have. The gate for each release is a headless Claude Code session that lists `search` and calls it.
