@@ -1,4 +1,4 @@
-from aleph_zero.chunking import Chunk, chunk_file, chunk_hash, estimate_tokens, markdown_chunks, normalize, window_chunks
+from aleph_zero.chunking import Chunk, chunk_file, chunk_hash, estimate_tokens, markdown_chunks, normalize, rst_chunks, window_chunks
 
 
 def _chunk(text, breadcrumb="", start=1):
@@ -36,7 +36,7 @@ def test_markdown_sections_carry_the_heading_trail():
     chunks = markdown_chunks(text)
     assert [c.breadcrumb for c in chunks] == ["", "Guide", "Guide > Install", "Guide > Install > Linux", "Guide > Usage"]
     install = chunks[2]
-    assert (install.symbol, install.signature, install.kind) == ("Install", "## Install", "doc")
+    assert (install.symbol, install.signature, install.kind) == ("Install", "Install", "doc")
     assert (install.start_line, install.end_line) == (7, 9)
     assert install.text == "## Install\n\npip"
 
@@ -70,3 +70,41 @@ def test_windows_line_endings_do_not_change_line_numbers_or_the_hash():
     windows = unix.replace("\n", "\r\n")
     assert [(c.start_line, c.end_line) for c in window_chunks(windows)] == [(1, 10)]
     assert chunk_hash("text", window_chunks(windows)[0]) == chunk_hash("text", window_chunks(unix)[0])
+
+
+def test_setext_headings_open_sections():
+    text = "Guide\n=====\n\nIntro text.\n\nInstall\n-------\n\nRun the installer.\n\n### Details\n\nMore.\n"
+    chunks = markdown_chunks(text)
+    assert [chunk.breadcrumb for chunk in chunks] == ["Guide", "Guide > Install", "Guide > Install > Details"]
+    assert chunks[1].symbol == "Install" and chunks[1].start_line == 6 and chunks[1].signature == "Install"
+
+
+def test_a_thematic_break_a_table_and_front_matter_are_not_headings():
+    text = ("---\ntitle: x\ntags: y\n---\n\n# Real\n\nPara one.\n\n---\n\nPara two.\n\n"
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n- item\n-\n")
+    assert [chunk.breadcrumb for chunk in markdown_chunks(text)] == ["", "Real"]
+
+
+def test_restructuredtext_sections_nest_by_the_order_adornments_appear():
+    text = ("=========\nQuerySets\n=========\n\nIntro.\n\nMethods\n=======\n\nAbout methods.\n\n"
+            "filter\n------\n\nFilters rows.\n\nexclude\n-------\n\nExcludes rows.\n\nSettings\n========\n\nMore.\n")
+    chunks = rst_chunks(text)
+    assert [chunk.breadcrumb for chunk in chunks] == [
+        "QuerySets", "QuerySets > Methods", "QuerySets > Methods > filter",
+        "QuerySets > Methods > exclude", "QuerySets > Settings",
+    ]
+    assert chunks[0].start_line == 1 and chunks[0].signature == "QuerySets"
+    assert chunks[2].symbol == "filter" and chunks[2].kind == "doc" and "Filters rows." in chunks[2].text
+
+
+def test_rst_tables_transitions_and_short_underlines_are_not_headings():
+    text = ("Title\n=====\n\n=====  =====\nA      B\n=====  =====\n1      2\n=====  =====\n\nText\n\n----\n\n"
+            "More text\n\nNot a title\n--\n\n::\n\n    code\n    ====\n")
+    assert [chunk.breadcrumb for chunk in rst_chunks(text)] == ["Title"]
+
+
+def test_prose_is_chunked_by_restructuredtext_headings_and_by_window_without_them():
+    assert chunk_file("prose", "doc", "Usage\n=====\n\nRun it.\n")[0].breadcrumb == "Usage"
+    plain = chunk_file("prose", "doc", "just a line\n" * 100)
+    assert len(plain) > 1 and all(chunk.kind == "doc" and chunk.breadcrumb == "" for chunk in plain)
+    assert sum(chunk.text.count("just a line") for chunk in plain) == 100
