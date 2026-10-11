@@ -38,6 +38,48 @@ Bringing the index up to date with an unchanged view takes 0.9 ms.
 
 The M0 storage spike used a uniform synthetic vocabulary, which could not show the cost of long posting lists. On real code the worst queries stay near 11 ms, so the lexical stage is not where a query's time goes: building the view (two git calls) takes about 70 ms of the same query (ADR-008). The view filter must stay written as `+rowid IN (...)`; without the unary plus the same query takes seconds.
 
+## Measured with the language layer (M1b)
+
+With source code chunked by definition, Django has 70,435 chunks (was 37,466 line windows), 51,427 symbols and 11,907 imports. Same machine, same spike:
+
+| | p50 / p95 |
+|---|---|
+| Cold index of the whole repository | 10.3 s, 86 MB peak private memory (was 5.7 s) |
+| 14 typical queries, whole search | 2.9 / 11.0 ms |
+| 7 queries of words found in most chunks | 10.8 / 16.8 ms |
+| 6 filtered queries, first use / repeated | 17.2 / 33.9 ms, then 1.6 / 9.6 ms |
+| Sync of an unchanged view | 1.1 ms |
+| Query process, private memory | 69 MB |
+
+`bench/spikes/definition_check.py` asks the opposite question: for a random sample of functions, methods and types whose name is defined once, does searching for the bare name return that definition first?
+
+| Repository | Language | Files | Chunks | Symbols | Cold index | Definition first |
+|---|---|---|---|---|---|---|
+| Django | Python | 7,080 | 70,435 | 51,427 | 10.2 s | 200 / 200 |
+| FastAPI | Python | 3,182 | 23,567 | 7,994 | 3.4 s | 200 / 200 |
+| Flask | Python | 236 | 1,955 | 1,143 | 0.3 s | 200 / 200 |
+| httpx | Python | 125 | 2,210 | 1,335 | 0.3 s | 200 / 200 |
+| go-kit | Go | 290 | 2,234 | 2,473 | 0.3 s | 200 / 200 |
+| spring-petclinic | Java | 133 | 877 | 318 | 0.1 s | 160 / 160 |
+| eslint | JavaScript | 2,303 | 19,727 | 5,277 | 3.5 s | 200 / 200 |
+| tokio | Rust | 875 | 14,813 | 10,536 | 2.2 s | 200 / 200 |
+| nest | TypeScript | 2,307 | 10,088 | 7,820 | 1.6 s | 200 / 200 |
+| llama.cpp | C++, C, Python, TypeScript | 3,768 | 69,167 | 54,209 | 12.1 s | 198 / 200 |
+
+The two misses are C++ destructors (`~name`), which rank behind the class and constructor of the same name. This is a sanity check on unique names, not a retrieval benchmark: the benchmark with real questions and a BM25 baseline is M1c's gate.
+
+The check found three defects, each fixed with a test: files that open with the same lines shared their first chunk, and the path generator proposed that chunk once per file; a JavaScript `#private` member could not be found without its marker; and a C++ declaration behind an unknown export macro took its return type as part of its name.
+
+## Fusion as built
+
+- Three generators: lexical (FTS5), symbol (a name written in the query that is exactly a definition's name), path (files whose path matches the query's words).
+- Lexical and symbol are fused by reciprocal rank over chunks; the symbol generator's vote counts twice (`GENERATOR_WEIGHT`). A file proposed for its path adds a vote to its own first chunk, in that file only.
+- A word of a longer query that names more than 25 definitions (`get`, `main`) proposes no symbol; asked for by itself it proposes the ten best.
+- Among definitions with one name: the exact spelling first, then types and functions before fields, then code before tests.
+- The pieces of one long definition are one result. One chunk held by many files is listed in three places and the rest are counted.
+
+All of these are starting values, to be re-examined with the M2 benchmark.
+
 ## Known limits
 
 - **Languages written without spaces.** Words are recognised in every script, and case and diacritics are folded, so German, Russian or Greek text is searchable. Chinese, Japanese and Korean text is indexed as whole runs between spaces and punctuation, so a query finds a run only if it equals it. Closing this needs a second index with FTS5's trigram tokenizer; it is planned for M3 if the benchmark repositories show a need.

@@ -55,6 +55,22 @@ Aleph does not depend on the `oxn` package: its API is unpromised, its schema ve
 
 SCIP ingestion comes before the resolver's acceptance gate, because the resolver is graded against SCIP: ingest first, grade second, tools third. The symbol and import port moves into M1, where it immediately improves the `symbol` tool and lexical ranking. Cross-file resolution and stored edges stay in M7.
 
+## What was ported in M1b
+
+`aleph_zero.lang` holds the port (attribution in its package docstring: oxn v0.1.2 at `2c8ee6d`, MIT). It imports nothing from the rest of Aleph; a test enforces that.
+
+| Piece | From oxn | Changed or added |
+|---|---|---|
+| `profile.py`, `languages.py` | The profile design, the node-kind tables for Python, TypeScript, TSX, JavaScript, Go, Rust and Java, `ImportSpec` | Metric tables left out. Added: C and C++ profiles; tables for values (constants, variables, fields, macros); the kind of each type node (class, interface, enum, alias, namespace); `holders`; `declarator_chain` |
+| `definitions.py` | The containment walk, the bound-name rule for anonymous callables, receiver and `impl` ownership | Written for retrieval: signatures, doc comments and docstrings, line ranges that include decorators and the comment above. Callable bodies are not walked, so closures and locals are not name candidates (one of the oxn behaviours ADR-007 said not to copy) |
+| `imports.py` | The whole extractor, copied and adapted | ECMAScript imports and re-exports record the names they take; `#include` for C and C++ |
+
+Not ported yet, by the order above: module resolution, the L0/L1 resolver, the SCIP reader and the graded evaluation harness (M7 and M9).
+
+**The parser library's own extraction was evaluated and not used.** `tree-sitter-language-pack` 1.21 offers `process()`, which returns structure, symbols and imports. On one sample file per language it returned unnamed classes and a wrong function name for C++, no constructors or fields for Java, no types or constants for Go, no docstrings for Python, and an unnamed TypeScript abstract class. A test keeps it as a floor: every named item it finds on the samples must be found by ours, and ours must find more. The library is used for parsers only.
+
+**Known limit.** In a `.c` file, a prototype behind an unknown macro whose return type is a plain name (`API_MACRO my_type my_function(void);`) is read by the C grammar as a variable followed by a call, so the function is not recorded. Headers are read with the C++ grammar, which recovers it. Deferred to M3.
+
 ## A note for oxn itself
 
 oxn requires `tree-sitter>=0.25` with no upper bound, and its environments have 0.26.0 installed. py-tree-sitter 0.26.0 segfaults when `start_point` and `end_byte` are read on every node during a recursive walk over `named_children` of large trees (Aleph pins 0.25.2 and carries a regression test, `tests/test_tree_sitter_stability.py`).
