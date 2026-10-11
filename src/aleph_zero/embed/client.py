@@ -11,8 +11,10 @@ import http.client
 import json
 import socket
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:  # numpy is loaded when vectors are made: the supervisor never needs it
+    import numpy as np
 
 MODEL = "embeddinggemma-2-q8"
 PREFIX_VERSION = 1
@@ -48,6 +50,8 @@ class EmbedClient:
 
     def embed(self, texts: list[str], kind: str) -> np.ndarray:
         """One unit-length row of WIDTH floats per text. `kind` is 'query' or 'document'."""
+        import numpy as np
+
         prefix = {"query": QUERY_PREFIX, "document": DOCUMENT_PREFIX}[kind]
         rows = []
         for text in texts:
