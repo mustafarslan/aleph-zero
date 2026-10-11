@@ -69,3 +69,25 @@ def repo(empty_repo) -> Repo:
     ))
     empty_repo.commit("initial")
     return empty_repo
+
+
+@pytest.fixture
+def fake_worker():
+    """A stand-in for the embedding worker, listening on a UNIX socket. Yields the socket's path."""
+    import shutil
+    import sys
+    import tempfile
+    import time
+
+    directory = Path(tempfile.mkdtemp(prefix="az-", dir="/tmp"))  # short: a socket path is limited to 104 bytes
+    sock = directory / "w.sock"
+    proc = subprocess.Popen([sys.executable, str(Path(__file__).parent / "fake_worker.py"), "--host", str(sock), "-c", "4096"])
+    from aleph_zero.embed.client import EmbedClient
+
+    deadline = time.time() + 10
+    while time.time() < deadline and not (sock.exists() and EmbedClient(sock).healthy()):
+        time.sleep(0.02)  # the socket file appears before the server accepts connections
+    yield sock
+    proc.terminate()
+    proc.wait(timeout=10)
+    shutil.rmtree(directory, ignore_errors=True)

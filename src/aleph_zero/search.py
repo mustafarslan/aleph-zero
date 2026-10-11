@@ -148,15 +148,17 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
 
 
 def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
-           path_glob: str | None = None, families: frozenset[str] | None = None) -> list[Hit]:
+           path_glob: str | None = None, families: frozenset[str] | None = None,
+           dense: Callable[[int, bool], list[int]] | None = None) -> list[Hit]:
     """Hits for `query` in `view`. Call `index.sync(view)` first: only blobs of the
-    synced view can be returned."""
+    synced view can be returned. `dense(limit, scoped)` gives the chunks whose vectors
+    are nearest the query's, best first; without it the search is by words and names."""
     if kind not in ("any", "code", "docs"):
         raise ValueError(f"kind must be 'any', 'code' or 'docs', not {kind!r}")
     if not index.serves(view):
         raise ValueError("this view is not the one the index was last synced to; call index.sync(view) first")
     terms = lexical.query_terms(query)
-    if not terms:
+    if not terms and dense is None:
         return []
     # Filters narrow the candidates before ranking: applied afterwards, a filter that
     # few chunks pass would find nothing among the best fifty of everything.
@@ -166,10 +168,13 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         index.narrow(view, kind, accept, (path_glob, families))
     pool = max(50, k * 6)
     named, bare_name = symbol_ranking(index, query, scoped)
-    fused = rrf({
+    rankings = {
         "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],
         "symbol": named,
-    })[:pool]
+    }
+    if dense is not None:
+        rankings["dense"] = dense(pool, scoped)
+    fused = rrf(rankings)[:pool]
     if bare_name and named:
         # The query is one name: its definitions come first, in the order the lookup gives
         # them (exact spelling, kind, code before tests). Rank fusion cannot keep that order,

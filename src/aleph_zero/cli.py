@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -38,7 +39,7 @@ def _index(args) -> int:
 
 
 def _search(args) -> int:
-    engine = Engine(args.cwd)
+    engine = Engine(args.cwd, dense=args.dense or os.environ.get("ALEPH_DENSE") == "1")
     answer = engine.search(args.query, k=args.k, kind=args.kind, path_glob=args.glob, lang=args.lang,
                            timeout_ms=args.timeout_ms)
     if args.json:
@@ -75,7 +76,7 @@ def _status(args) -> int:
 def _serve(args) -> int:
     from . import server  # only this command needs it
 
-    return server.main(Engine(args.cwd))
+    return server.main(Engine(args.cwd, dense=os.environ.get("ALEPH_DENSE") == "1"))
 
 
 def _source(args) -> int:
@@ -122,6 +123,11 @@ def _embed(args) -> int:
     elif args.action == "stop":
         worker.stop()
         print("stopped")
+    elif args.action == "run":
+        say = lambda done, left: print(f"  {done} embedded", end="\r", flush=True)  # noqa: E731
+        report = Engine(args.cwd, dense=True).embed(budget_seconds=args.minutes * 60, progress=say)
+        print(f"embedded {report.embedded} chunks in {report.seconds:.0f} s; {report.remaining} chunks left"
+              + (f" ({report.reason})" if report.reason else ""))
     else:
         known = worker.state()
         print(f"installed: {'yes' if setup.installed() else 'no'} ({worker.home()})")
@@ -156,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("--detail", choices=render.DETAILS, default="snippets")
     find.add_argument("--budget-tokens", type=int, default=render.DEFAULT_BUDGET, help="ceiling for the text answer")
     find.add_argument("--timeout-ms", type=int, help="answer within this time, marked partial if cut short")
+    find.add_argument("--dense", action="store_true", help="also search by meaning (needs `aleph embed run` first)")
     find.add_argument("--json", action="store_true")
     find.set_defaults(run=_search)
 
@@ -198,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     installing = embedding.add_parser("setup", help="build the worker and download the model (uses the network)")
     installing.add_argument("--llama-source", type=Path, help="an existing llama.cpp checkout to build from")
     installing.add_argument("--model-file", type=Path, help="a local copy of the model file, instead of downloading")
+    running = embedding.add_parser("run", help="make vectors for this worktree's chunks (about a hundred a second)")
+    running.add_argument("--minutes", type=float, default=float("inf"), help="stop after this long; it resumes next time")
     embedding.add_parser("status")
     embedding.add_parser("stop")
     embed.set_defaults(run=_embed)

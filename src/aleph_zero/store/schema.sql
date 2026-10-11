@@ -68,6 +68,20 @@ CREATE TABLE IF NOT EXISTS imports (
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
+-- Which row of a vector file holds a chunk's embedding. One file per kind of vector
+-- (model, prefix version, width); a row is never moved or reused (vectors.py).
+CREATE TABLE IF NOT EXISTS chunk_vectors (
+    chunk_id INTEGER NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,
+    row      INTEGER NOT NULL,
+    PRIMARY KEY (chunk_id, kind)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS vector_files (
+    kind     TEXT PRIMARY KEY,
+    next_row INTEGER NOT NULL      -- only ever grows
+) WITHOUT ROWID;
+
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     symbol, signature, doc, body,
     content='', contentless_delete=1,

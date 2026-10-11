@@ -41,6 +41,34 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self._path)
 
 
+class EmbedPool:
+    """Several connections to the worker, used at once: it has that many slots, and
+    embedding through all of them is what fills the GPU."""
+
+    def __init__(self, socket_path: Path, capacity: int = 2048, connections: int = 8, timeout: float = 120.0) -> None:
+        self._clients = [EmbedClient(socket_path, capacity, timeout) for _ in range(max(1, connections))]
+
+    def embed(self, texts: list[str], kind: str) -> "np.ndarray":
+        """Rows in the order of `texts`. Raises Unavailable if any connection fails."""
+        import numpy as np
+        from concurrent.futures import ThreadPoolExecutor
+
+        if not texts:
+            return np.zeros((0, WIDTH), dtype=np.float32)
+        used = self._clients[: min(len(self._clients), len(texts))]
+        shares = [texts[offset::len(used)] for offset in range(len(used))]
+        with ThreadPoolExecutor(max_workers=len(used)) as threads:
+            parts = list(threads.map(lambda pair: pair[0].embed(pair[1], kind), zip(used, shares)))
+        rows = np.empty((len(texts), WIDTH), dtype=np.float32)
+        for offset, part in enumerate(parts):
+            rows[offset::len(used)] = part
+        return rows
+
+    def close(self) -> None:
+        for client in self._clients:
+            client.close()
+
+
 class EmbedClient:
     def __init__(self, socket_path: Path, capacity: int = 4096, timeout: float = 120.0) -> None:
         self.socket_path = Path(socket_path)
@@ -56,7 +84,8 @@ class EmbedClient:
         rows = []
         for text in texts:
             status, data = self._request("POST", "/v1/embeddings", {"input": prefix + text})
-            if status == 500 and b"too large" in data:
+            if status in (400, 500) and (b"too large" in data or b"exceed_context_size" in data):
+                # The server refuses input over a slot's capacity instead of cutting it.
                 status, data = self._request("POST", "/v1/embeddings", {"input": self._truncate(prefix + text)})
             if status != 200:
                 raise Unavailable(f"embedding failed with HTTP {status}: {data[:200].decode(errors='replace')}")

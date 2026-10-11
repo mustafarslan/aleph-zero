@@ -76,20 +76,32 @@ def write_state(values: dict) -> None:
 
 
 def server_command(gpu: bool | None = None) -> list[str]:
-    """llama-server for embeddings: one slot, a batch as large as the context, the GPU
-    with one CPU thread or the CPU with eight (both measured in M0)."""
+    """llama-server for embeddings.
+
+    On the GPU: eight slots of 2,048 tokens, with at most 4,096 tokens in one decode.
+    Measured on Django's chunks: 104 chunks/s against 72 with one slot; with every slot
+    fed inputs at capacity, 490 MB of private memory at worst. Without the cap on the
+    decode the same test reached 954 MB, over the worker's 600 MB limit (ADR-005).
+    On the CPU: one slot, eight threads, as measured in M0."""
     gpu = sys.platform == "darwin" if gpu is None else gpu
-    capacity = str(capacity_tokens(gpu))
+    count, capacity = slots(gpu), capacity_tokens(gpu)
+    batch = str(min(count * capacity, 4096))
     return [
         str(binary()), "-m", str(model()), "--embedding", "-ngl", "99" if gpu else "0",
-        "--host", str(socket_path()), "-c", capacity, "-b", capacity, "-ub", capacity,
-        "-t", "1" if gpu else "8", "--parallel", "1", "--metrics", "--sleep-idle-seconds", str(IDLE_SLEEP),
+        "--host", str(socket_path()), "-c", str(count * capacity), "-b", batch, "-ub", batch,
+        "-t", "1" if gpu else "8", "--parallel", str(count), "--metrics", "--sleep-idle-seconds", str(IDLE_SLEEP),
     ]
 
 
-def capacity_tokens(gpu: bool | None = None) -> int:
+def slots(gpu: bool | None = None) -> int:
+    """How many inputs the worker takes at once; a client gains from that many connections."""
     gpu = sys.platform == "darwin" if gpu is None else gpu
-    return 4096 if gpu else 2048
+    return 8 if gpu else 1
+
+
+def capacity_tokens(gpu: bool | None = None) -> int:
+    """The longest input one slot accepts. Chunks are cut at 256 tokens (ADR-001), so this is a safety net."""
+    return 2048
 
 
 def is_ours(pid: int | None) -> bool:

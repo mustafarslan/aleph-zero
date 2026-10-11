@@ -81,7 +81,11 @@ class Handler(BaseHTTPRequestHandler):
             if "DIE" in text:
                 os._exit(3)
             if len(text.split()) > CAPACITY:
-                self.reply(500, {"error": {"message": "input is too large to process"}})
+                if "OLDSTYLE" in text:   # a single-slot server words its refusal differently
+                    self.reply(500, {"error": {"message": "input is too large to process"}})
+                else:
+                    self.reply(400, {"error": {"code": 400, "type": "exceed_context_size_error",
+                                               "message": "input is larger than the max context size. skipping"}})
                 return
             STATE["embeddings"] += 1
             self.reply(200, {"data": [{"embedding": vector(text)}]})

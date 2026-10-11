@@ -28,6 +28,11 @@ class Answer:
     pending: int = 0          # files of the view not indexed yet
     timed_out: bool = False
     elapsed_ms: int = 0
+    # Semantic search: "" when it is switched off, "used" when vectors took part, otherwise
+    # the reason they did not. `covered` and `chunks` say how much of the view has vectors.
+    dense: str = ""
+    covered: int = 0
+    chunks: int = 0
 
 
 @dataclass
@@ -48,6 +53,9 @@ def as_json(answer: Answer) -> dict:
         "pending": answer.pending,
         "timed_out": answer.timed_out,
         "elapsed_ms": answer.elapsed_ms,
+        "dense": answer.dense,
+        "covered": answer.covered,
+        "chunks": answer.chunks,
     }
 
 
@@ -129,6 +137,11 @@ def _notes(answer: Answer) -> list[str]:
         notes.append(f"note: {answer.pending} files are not indexed yet; results may be incomplete")
     if answer.timed_out:
         notes.append(f"note: stopped at the time limit ({answer.elapsed_ms} ms); results may be incomplete")
+    if answer.dense == "used" and answer.covered < answer.chunks:
+        notes.append(f"note: semantic search covers {answer.covered} of {answer.chunks} chunks so far; "
+                     "the rest are matched by words and names only")
+    elif answer.dense not in ("", "used"):
+        notes.append(f"note: semantic search was not used: {answer.dense}")
     return notes
 
 

@@ -9,7 +9,7 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 

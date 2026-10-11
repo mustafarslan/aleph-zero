@@ -27,6 +27,7 @@ from .view import View, build_view
 SYNC_SECONDS = 5.0       # how long a query without a time limit may spend indexing first
 SEARCH_SHARE = 0.25      # of a time limit, kept for the search itself
 SHOWN_LIMIT = 5000       # texts remembered as shown before the memory starts over
+QUERY_EMBED_SECONDS = 2.0  # a sleeping worker wakes in half a second; longer than this, answer without vectors
 _LANGUAGES = {
     "py": ("python",), "ts": ("typescript", "tsx"), "typescript": ("typescript", "tsx"), "js": ("javascript",),
     "golang": ("go",), "rs": ("rust",), "c++": ("cpp",), "md": ("markdown",), "rst": ("prose",),
@@ -62,8 +63,11 @@ def deadline(conn: apsw.Connection, until: float | None, stop: threading.Event |
 
 
 class Engine:
-    def __init__(self, default_cwd: Path | None = None) -> None:
+    def __init__(self, default_cwd: Path | None = None, dense: bool = False) -> None:
         self.default_cwd = Path(default_cwd) if default_cwd is not None else Path.cwd()
+        self.dense = dense  # semantic search: off unless asked for, until Benchmark C decides (ADR-002)
+        self._stores: dict[Path, object] = {}
+        self._embedder = None  # the connection to the worker used for queries
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._shown: set[tuple] = set()
         self._stop = threading.Event()
@@ -88,16 +92,40 @@ class Engine:
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
         hits = []
+        note, covered, chunks, nearest = self._dense(index, view, query)
         if not late or time.monotonic() < until:
             try:
                 with deadline(index.conn, until, self._stop):
-                    hits = run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families) or []
+                    hits = run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families,
+                                      dense=nearest) or []
             except apsw.InterruptError:
                 late = True
                 _reset(index.conn)
         if self._stop.is_set():
             raise Cancelled
-        return render.Answer(query, hits, pending, late, _elapsed(started))
+        return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
+
+    def embed(self, cwd: Path | str | None = None, budget_seconds: float = float("inf"), batch: int | None = None,
+              stop=None, progress=None):
+        """Give the chunks of this worktree their vectors (slow: about a hundred a second).
+        Starts the worker if needed. Returns an embedder.EmbedReport."""
+        from . import embedder
+        from .embed import worker
+        from .embed.client import EmbedPool, Unavailable
+
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None)
+        store = self._store(index, view)
+        try:
+            sock = worker.ensure()
+        except Unavailable as exc:
+            have, total = store.coverage(index)
+            return embedder.EmbedReport(0, total - have, 0.0, str(exc))
+        pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
+        try:
+            return embedder.embed_pending(index, store, pool, budget_seconds, batch or embedder.BATCH * worker.slots(),
+                                          stop, progress)
+        finally:
+            pool.close()
 
     def symbol(self, name: str, k: int = 20, cwd: Path | str | None = None,
                timeout_ms: int | None = None) -> SymbolAnswer:
@@ -141,6 +169,7 @@ class Engine:
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
             "sources": linked, **({"sources_error": problem} if problem else {}),
+            "vectors": self._vector_status(index, view),
         }
 
     # ---- text for an agent, with the session's memory ----------------------------------------
@@ -158,6 +187,47 @@ class Engine:
 
     def _view(self, cwd: Path | str | None) -> View:
         return build_view(Path(cwd) if cwd is not None else self.default_cwd)
+
+    def _store(self, index: Index, view: View):
+        from .embed.client import VECTOR_KIND
+        from .vectors import VectorStore  # numpy is loaded only when vectors are used
+
+        store = self._stores.get(view.root)
+        if store is None:
+            store = self._stores[view.root] = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
+        return store
+
+    def _vector_status(self, index: Index, view: View) -> dict:
+        from .embed.client import VECTOR_KIND
+
+        have, total = index.conn.execute(
+            "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v LEFT JOIN chunk_vectors cv "
+            "ON cv.chunk_id = v.chunk_id AND cv.kind = ?", (VECTOR_KIND,)).fetchall()[0]
+        return {"enabled": self.dense, "kind": VECTOR_KIND, "with_vector": have, "chunks": total}
+
+    def _dense(self, index: Index, view: View, query: str):
+        """How vectors take part in this query: (note, chunks covered, chunks, the function
+        that ranks by vector or None). Nothing here may fail or delay the query."""
+        if not self.dense:
+            return "", 0, 0, None
+        from .embed import worker
+        from .embed.client import EmbedClient, Unavailable
+
+        store = self._store(index, view)
+        covered, chunks = store.coverage(index)
+        if covered == 0:
+            return "no chunk of this worktree has a vector yet (`aleph embed run` makes them)", 0, chunks, None
+        sock = worker.available()
+        if sock is None:
+            return "the embedding worker is not running", covered, chunks, None
+        if self._embedder is None or self._embedder.socket_path != sock:
+            self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
+        try:
+            vector = self._embedder.embed([query], kind="query")[0]
+        except Unavailable as exc:
+            return str(exc), covered, chunks, None
+        return "used", covered, chunks, lambda limit, scoped: [chunk_id for chunk_id, _ in
+                                                               store.search(index, vector, limit, scoped)]
 
     def _index(self, view: View) -> Index:
         index = self._indexes.get(view.root)

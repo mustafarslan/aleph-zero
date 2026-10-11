@@ -27,8 +27,8 @@ def worker(short_dir):
     sock = short_dir / "w.sock"
     proc = subprocess.Popen([sys.executable, str(FAKE), "--host", str(sock), "-c", "64"])
     deadline = time.time() + 10
-    while not sock.exists() and time.time() < deadline:
-        time.sleep(0.02)
+    while time.time() < deadline and not (sock.exists() and EmbedClient(sock).healthy()):
+        time.sleep(0.02)  # the socket file appears before the server accepts connections
     yield sock
     proc.terminate()
     proc.wait(timeout=10)
@@ -51,9 +51,10 @@ def test_vectors_are_256_wide_unit_length_and_differ_by_text(worker):
 
 def test_many_requests_use_one_connection(worker):
     client = EmbedClient(worker, capacity=64)
+    opened = metric(client, "fake:connections_total")   # includes this client's own connection
     for i in range(200):
         client.embed([f"value {i}"], kind="document")
-    assert metric(client, "fake:connections_total") == 1  # one per request once exhausted the machine's ports
+    assert metric(client, "fake:connections_total") == opened  # one per request once exhausted the machine's ports
     client.close()
 
 
@@ -70,6 +71,7 @@ def test_input_over_the_capacity_is_truncated_by_tokens_not_rejected(worker):
     long_text = " ".join(f"word{i}" for i in range(500))
     assert client.token_count(long_text) > 64
     assert client.embed([long_text], kind="document").shape == (1, 256)
+    assert client.embed(["OLDSTYLE " + long_text], kind="document").shape == (1, 256)  # both ways the server refuses
     client.close()
 
 
@@ -92,3 +94,20 @@ def test_the_identity_of_a_vector_names_model_prefixes_and_width():
     assert embed_client.VECTOR_KIND == "embeddinggemma-2-q8/p1/256"
     assert embed_client.QUERY_PREFIX == "task: code retrieval | query: "
     assert embed_client.DOCUMENT_PREFIX == "title: none | text: "
+
+
+def test_a_pool_embeds_through_several_connections_and_keeps_the_order(worker):
+    from aleph_zero.embed.client import EmbedPool
+
+    texts = [f"chunk number {i}" for i in range(50)]
+    single = EmbedClient(worker, capacity=64)
+    expected = single.embed(texts, kind="document")
+    opened = metric(single, "fake:connections_total")
+    pool = EmbedPool(worker, capacity=64, connections=4)
+    rows = pool.embed(texts, kind="document")
+    assert rows.shape == (50, 256) and np.allclose(rows, expected)
+    assert metric(single, "fake:connections_total") == opened + 4   # the pool's four
+    assert pool.embed([], kind="document").shape == (0, 256)
+    with pytest.raises(Unavailable):
+        pool.embed(["fine", "DIE now", "fine"], kind="document")
+    pool.close()
