@@ -111,6 +111,25 @@ def _doctor(args) -> int:
     return 1 if any(row.level == "FAIL" for row in rows) else 0
 
 
+def _embed(args) -> int:
+    from .embed import setup, worker
+
+    if args.action == "setup":
+        say = lambda text: print(text, flush=True)  # noqa: E731
+        binary = setup.install_binary(args.llama_source, say)
+        model = setup.install_model(args.model_file, say)
+        print(f"installed {binary}\ninstalled {model}")
+    elif args.action == "stop":
+        worker.stop()
+        print("stopped")
+    else:
+        known = worker.state()
+        print(f"installed: {'yes' if setup.installed() else 'no'} ({worker.home()})")
+        print(f"running: {'yes' if worker.available() else 'no'}"
+              + (f" (worker pid {known['worker_pid']})" if known.get("worker_pid") and worker.available() else ""))
+    return 0
+
+
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
@@ -174,6 +193,15 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--fetch-grammars", action="store_true", help="download missing grammars (uses the network)")
     health.set_defaults(run=_doctor)
 
+    embed = commands.add_parser("embed", help="the embedding worker: install, status, stop")
+    embedding = embed.add_subparsers(dest="action", required=True)
+    installing = embedding.add_parser("setup", help="build the worker and download the model (uses the network)")
+    installing.add_argument("--llama-source", type=Path, help="an existing llama.cpp checkout to build from")
+    installing.add_argument("--model-file", type=Path, help="a local copy of the model file, instead of downloading")
+    embedding.add_parser("status")
+    embedding.add_parser("stop")
+    embed.set_defaults(run=_embed)
+
     gc = commands.add_parser("gc", help="drop content no view has used recently")
     gc.add_argument("--days", type=float, default=30.0)
     gc.set_defaults(run=_gc)
@@ -181,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.run(args)
-    except (gitio.GitError, StoreError, outline.OutlineError, ValueError) as exc:
+    except (gitio.GitError, StoreError, outline.OutlineError, ValueError, RuntimeError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
 

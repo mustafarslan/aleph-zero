@@ -24,7 +24,7 @@ class Row:
 
 
 def check(cwd: Path) -> list[Row]:
-    rows = [_git(), _sqlite(), _tree_sitter(), _grammars()]
+    rows = [_git(), _sqlite(), _tree_sitter(), _grammars(), _worker()]
     try:
         info = gitio.repo_info(cwd)
     except gitio.GitError:
@@ -70,6 +70,16 @@ def _grammars() -> Row:
         return Row("FAIL", "grammars", f"grammars: {have} of {len(wanted)} load; missing: {', '.join(missing)}. "
                                        "Run `aleph doctor --fetch-grammars` (uses the network)")
     return Row("ok", "grammars", f"grammars: {have} of {len(wanted)} load")
+
+
+def _worker() -> Row:
+    from .embed import setup, worker  # only doctor and the embed commands look at these
+
+    if not setup.installed():
+        return Row("note", "embedding worker", "embedding worker: not installed, so search is by words and names only. "
+                                               "`aleph embed setup` builds it and downloads the model (310 MB, uses the network)")
+    running = "running" if worker.available() else "not running (it starts when vectors are needed)"
+    return Row("ok", "embedding worker", f"embedding worker: installed in {worker.home()}, {running}")
 
 
 def _index(path: Path) -> Row:
