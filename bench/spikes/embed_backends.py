@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -137,15 +139,32 @@ class GgufEmbedder:
         self._conn = None
         self.connections_opened = 0
         self._port = None if socket_path else _free_port()
+        # The server's own words are the only explanation when it refuses a model.
+        self._log = tempfile.TemporaryFile()
         self._proc = subprocess.Popen(
             server_command(files[0], threads, n_ctx, gpu, port=self._port, socket_path=socket_path),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=self._log,
         )
         self.pid = self._proc.pid
+        try:
+            self._wait_until_ready()
+        except BaseException:
+            self.close()
+            raise
+
+    def _server_log_tail(self, limit: int = 2000) -> str:
+        self._log.seek(0, os.SEEK_END)
+        self._log.seek(max(0, self._log.tell() - limit))
+        return self._log.read().decode(errors="replace").strip()
+
+    def _wait_until_ready(self) -> None:
         deadline = time.time() + 120
         while True:
             if self._proc.poll() is not None:
-                raise UnsupportedModel(f"llama-server exited with code {self._proc.returncode} while loading {files[0].name}")
+                raise UnsupportedModel(
+                    f"llama-server exited with code {self._proc.returncode} while loading "
+                    f"{self.files[0].name}: {self._server_log_tail()}"
+                )
             try:
                 if self._request("GET", "/health", None, timeout=2)[0] == 200:
                     # Drop the probe connection: it carries the 2 s health-check timeout,
@@ -157,8 +176,7 @@ class GgufEmbedder:
             except (OSError, http.client.HTTPException):
                 pass
             if time.time() > deadline:
-                self.close()
-                raise UnsupportedModel("llama-server did not become ready within 120 s")
+                raise UnsupportedModel(f"llama-server did not become ready within 120 s: {self._server_log_tail()}")
             time.sleep(0.05)
 
     def _connect(self, timeout: float):
@@ -224,15 +242,23 @@ class GgufEmbedder:
             self._conn = None
         if self._proc.poll() is None:
             self._proc.terminate()
-            self._proc.wait(timeout=20)
+            try:
+                self._proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+        self._log.close()
 
 
 class OnnxEmbedder:
+    """Runs the ONNX export in this process, so `pid` is the caller's own."""
+
     def __init__(self, files: list[Path], threads: int, n_ctx: int) -> None:
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
         self.files = files
+        self.pid = os.getpid()
         options = ort.SessionOptions()
         options.intra_op_num_threads = threads
         self._session = ort.InferenceSession(str(files[0]), options, providers=["CPUExecutionProvider"])
@@ -245,6 +271,14 @@ class OnnxEmbedder:
         self._extra = empty_modality_inputs(specs, provided={"input_ids", "attention_mask"})
         self._tokenizer = Tokenizer.from_file(str(_download(*TOKENIZER)))
         self._tokenizer.enable_truncation(max_length=n_ctx)
+        self._counter = Tokenizer.from_file(str(_download(*TOKENIZER)))
+
+    def token_count(self, text: str) -> int:
+        """Tokens before truncation, like the worker's count."""
+        return len(self._counter.encode(text).ids)
+
+    def close(self) -> None:
+        self._session = None
 
     def embed(self, texts: list[str]) -> np.ndarray:
         rows = []

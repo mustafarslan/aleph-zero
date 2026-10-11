@@ -135,3 +135,57 @@ def test_requests_do_not_inherit_the_two_second_health_check_timeout():
         assert embedder._conn.timeout >= 120
     finally:
         embedder.close()
+
+
+def _fake_server(tmp_path, monkeypatch, script: str):
+    """Stand in for llama-server with a shell script, and record the child it becomes."""
+    binary = tmp_path / "llama-server"
+    binary.write_text("#!/bin/sh\n" + script)
+    binary.chmod(0o755)
+    monkeypatch.setitem(embed_backends.LLAMA_SERVERS, "cpu", binary)
+    started = []
+    real_popen = embed_backends.subprocess.Popen
+
+    def popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(embed_backends.subprocess, "Popen", popen)
+    return started
+
+
+def test_worker_child_is_stopped_when_start_up_fails_unexpectedly(tmp_path, monkeypatch):
+    started = _fake_server(tmp_path, monkeypatch, "exec sleep 60\n")
+
+    def broken_request(self, *args, **kwargs):
+        raise ValueError("not a connection error")
+
+    monkeypatch.setattr(embed_backends.GgufEmbedder, "_request", broken_request)
+    with pytest.raises(ValueError):
+        embed_backends.GgufEmbedder([tmp_path / "model.gguf"], threads=1, n_ctx=64)
+    assert started[0].poll() is not None, "the llama-server child was left running"
+
+
+def test_worker_that_dies_while_loading_reports_what_it_printed(tmp_path, monkeypatch):
+    _fake_server(tmp_path, monkeypatch, "echo 'error: unknown model architecture' >&2\nexit 3\n")
+    with pytest.raises(embed_backends.UnsupportedModel) as caught:
+        embed_backends.GgufEmbedder([tmp_path / "model.gguf"], threads=1, n_ctx=64)
+    assert "code 3" in str(caught.value)
+    assert "unknown model architecture" in str(caught.value)
+
+
+_ONNX_Q4 = embed_backends.DATA / "onnx-community__embeddinggemma-2-ONNX" / "onnx" / "model_q4.onnx"
+
+
+@pytest.mark.skipif(not _ONNX_Q4.exists(), reason="needs the ONNX q4 export under bench/data")
+def test_onnx_embedder_offers_the_same_surface_as_the_worker():
+    import os
+
+    embedder = embed_backends.load("onnx-q4", threads=1, n_ctx=64)
+    try:
+        assert embedder.pid == os.getpid()  # the model lives in this process
+        assert embedder.token_count("def read_blob(oid): ...") > 3
+    finally:
+        embedder.close()
+    embedder.close()  # closing twice is harmless
