@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -34,6 +35,8 @@ class Index:
         self._pending = 0
         self._deferred: dict[str, float] = {}  # blob git does not have -> when we last asked
         self._path_tokens: dict[str, tuple[frozenset[str], frozenset[str]]] | None = None
+        self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
+        self._scope: tuple | None = None
 
     def sync(self, view: View, budget_seconds: float = 5.0) -> SyncReport:
         """Index every blob of the view the index has not seen, within a time budget,
@@ -101,6 +104,34 @@ class Index:
             }
         return self._path_tokens
 
+    def narrow(self, view: View, kind: str, paths: Callable[[str], bool] | None, key: object) -> None:
+        """Fill temp.scope_chunks with the view's chunks of `kind` ('any', 'code', 'docs')
+        in files whose path `paths` accepts. `key` names the filter, so repeating a
+        query does not rebuild the table."""
+        if not self.serves(view):
+            raise ValueError("this view is not the one the index was last synced to; call sync(view) first")
+        if self._scope == (self._view_epoch, kind, key):
+            return
+        of_kind = {"any": "", "code": " WHERE c.kind != 'doc'", "docs": " WHERE c.kind = 'doc'"}[kind]
+        conn = self.conn
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM temp.scope_chunks")
+        if paths is None:
+            conn.execute(
+                "INSERT INTO temp.scope_chunks(chunk_id) SELECT v.chunk_id FROM temp.view_chunks v "
+                "JOIN chunks c ON c.chunk_id = v.chunk_id" + of_kind
+            )
+        else:
+            conn.execute("DELETE FROM temp.scope_blobs")
+            conn.executemany("INSERT OR IGNORE INTO temp.scope_blobs(blob_oid) VALUES (?)",
+                             ((oid,) for path, oid in view.files.items() if paths(path)))
+            conn.execute(
+                "INSERT INTO temp.scope_chunks(chunk_id) SELECT DISTINCT bc.chunk_id FROM blob_chunks bc "
+                "JOIN temp.scope_blobs s ON s.blob_oid = bc.blob_oid JOIN chunks c ON c.chunk_id = bc.chunk_id" + of_kind
+            )
+        conn.execute("COMMIT")
+        self._scope = (self._view_epoch, kind, key)
+
     def counts(self) -> dict[str, int]:
         one = lambda sql: self.conn.execute(sql).fetchall()[0][0]  # noqa: E731
         return {
@@ -121,6 +152,7 @@ class Index:
         self.conn.execute("COMMIT")
 
     def _refresh_view_chunks(self) -> None:
+        self._view_epoch += 1
         self.conn.execute("BEGIN")
         self.conn.execute("DELETE FROM temp.view_chunks")
         self.conn.execute(

@@ -28,6 +28,11 @@ TYPICAL = [
 ]
 # Words in a large share of all chunks: the posting lists are as long as they get.
 COMMON = ["self", "return", "self return", "def self return None", "import from", "test", "if not self"]
+# The same question asked with a filter: the filter narrows the view inside the query.
+FILTERED = [
+    ("QuerySet filter", "docs", None), ("migration", "code", "django/db/*"), ("self return", "code", "tests/*"),
+    ("csrf token", "any", "docs/*"), ("cache backend", "docs", "docs/topics/*"), ("test", "code", "django/contrib/admin/*"),
+]
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -79,6 +84,14 @@ def measure(repo: Path, runs: int) -> dict:
             if statistics.median(times) > slowest[1]:
                 slowest = (query, round(statistics.median(times), 2))
         result["queries"][label] = {"fts_only": summary(fts), "search": summary(full), "slowest": slowest}
+    first, repeat = [], []
+    for query, kind, glob in FILTERED:
+        for _ in range(max(3, runs // 4)):
+            index.narrow(view, "any", None, object())  # forget the scope: time a filter seen for the first time
+            first += timed(lambda: search(index, view, query, k=8, kind=kind, path_glob=glob), 1)
+        repeat += timed(lambda: search(index, view, query, k=8, kind=kind, path_glob=glob), runs)
+    result["queries"]["filtered"] = {"first_use": summary(first), "repeated": summary(repeat)}
+    result["sync_unchanged"] = summary(timed(lambda: index.sync(view), runs))
     result["private_mb"] = round(memstat.private_bytes() / 1e6, 1)
     return result
 

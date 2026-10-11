@@ -25,3 +25,15 @@ def test_match_expression_quotes_each_term():
 
 def test_the_view_filter_uses_the_form_that_runs_the_text_match_first():
     assert "+rowid IN (SELECT chunk_id FROM temp.view_chunks)" in lexical.SEARCH_SQL
+
+
+def test_words_in_any_script_are_kept_whole():
+    assert lexical.expand("Die Übersicht") == "Die Übersicht"
+    assert lexical.query_terms("設定") == ["設定"]
+    assert lexical.query_terms("Привет, мир") == ["привет", "мир"]
+    assert lexical.split_identifier("größe") == []
+
+
+def test_identifiers_with_non_ascii_letters_split_on_case_too():
+    assert lexical.split_identifier("getÜbersicht") == ["get", "übersicht"]
+    assert lexical.split_identifier("ΑλφαΒήτα2") == ["αλφα", "βήτα", "2"]

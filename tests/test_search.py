@@ -34,7 +34,7 @@ def test_hit_carries_the_line_range_and_the_text(repo):
 def test_an_uncommitted_edit_is_searchable_and_the_old_content_is_gone(repo):
     repo.write("src/billing/invoice.py", "def render_receipt(order):\n    return 'zebra_marker'\n")
     assert _paths(_find(repo, "zebra_marker")) == ["src/billing/invoice.py"]
-    assert _find(repo, "Invoice total") == [] or "Invoice total" not in _find(repo, "Invoice total")[0].text
+    assert all("Invoice total" not in hit.text for hit in _find(repo, "Invoice total"))
 
 
 def test_a_deleted_file_is_never_returned(repo):
@@ -104,6 +104,8 @@ def test_singular_and_plural_match(repo):
 def test_file_names_with_spaces_and_non_ascii_letters_are_searchable(repo):
     repo.write("src/naïve module.py", "def wombat_counter():\n    return 3\n")
     assert _paths(_find(repo, "wombat_counter")) == ["src/naïve module.py"]
+    by_name = _find(repo, "naïve")
+    assert by_name[0].path == "src/naïve module.py" and "path" in by_name[0].sources
 
 
 def test_query_full_of_search_syntax_is_treated_as_words(repo):
@@ -113,3 +115,43 @@ def test_query_full_of_search_syntax_is_treated_as_words(repo):
 
 def test_searching_an_empty_repository_returns_nothing(empty_repo):
     assert _find(empty_repo, "anything") == []
+
+
+def test_text_in_other_scripts_is_searchable(repo):
+    repo.write("docs/uebersicht.md", "# Übersicht\n\nDie Größe der Rechnung.\n")
+    repo.write("src/greeting.py", "# Привет, мир\ndef greet():\n    return 'здравствуйте'\n")
+    assert _paths(_find(repo, "Größe")) == ["docs/uebersicht.md"]
+    assert _paths(_find(repo, "ubersicht")) == ["docs/uebersicht.md"]  # the index folds diacritics
+    assert _paths(_find(repo, "привет")) == ["src/greeting.py"]
+
+
+def test_filters_narrow_the_candidates_before_they_are_cut_off(repo):
+    for i in range(90):  # far more matching code than the candidate pool holds
+        repo.write(f"src/gen/client_{i}.py", f"def handle_invoice_{i}(invoice):\n    return invoice.total * {i}\n")
+    assert _paths(_find(repo, "invoice", kind="docs")) == ["docs/guide.md"]
+    assert _paths(_find(repo, "invoice", path_glob="docs/*")) == ["docs/guide.md"]
+    assert _paths(_find(repo, "invoice", kind="code", path_glob="src/billing/*")) == ["src/billing/invoice.py"]
+    assert len(_find(repo, "invoice", k=8)) == 8  # an unfiltered query after a filtered one sees everything again
+
+
+def test_search_refuses_a_view_the_index_was_not_synced_to(repo):
+    index = Index(open_db(index_path(repo.root)))
+    main = build_view(repo.root)
+    index.sync(main)
+    assert search(index, main, "token store")
+    repo.write("src/feature_only.py", "def quokka_feature():\n    return 1\n")
+    edited = build_view(repo.root)
+    with pytest.raises(ValueError, match="sync"):
+        search(index, edited, "feature only")
+    index.sync(edited)
+    assert search(index, edited, "feature only")[0].path == "src/feature_only.py"
+    index.sync(main)
+    assert search(index, main, "feature only") == []
+
+
+def test_a_word_that_cannot_tell_files_apart_is_not_a_path_match(repo):
+    for i in range(40):
+        repo.write(f"src/mod_{i}.py", f"value_{i} = {i}\n")
+    assert not any("path" in hit.sources for hit in _find(repo, "py", k=50))   # every file's extension
+    assert not any("path" in hit.sources for hit in _find(repo, "mod", k=50))  # forty files tie
+    assert "path" in _find(repo, "invoice")[0].sources                         # one file is named for it

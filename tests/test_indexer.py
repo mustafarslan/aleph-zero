@@ -218,3 +218,18 @@ def test_a_failed_sync_does_not_leave_the_index_answering_for_the_wrong_view(rep
 def test_an_empty_repository_syncs_to_nothing(empty_repo):
     report = _index(empty_repo).sync(build_view(empty_repo.root))
     assert (report.indexed, report.skipped, report.pending) == (0, 0, 0)
+
+
+def test_content_indexed_by_an_older_version_is_indexed_again(repo, monkeypatch):
+    from aleph_zero import indexer
+    from aleph_zero.chunking import model
+
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
+    monkeypatch.setattr(model, "CHUNKER_VERSION", model.CHUNKER_VERSION + 1)
+    assert index.sync(view).indexed == 3
+    assert search(index, view, "render_invoice")[0].path == "src/billing/invoice.py"
+    collect_garbage(index.conn, max_age_days=30)
+    assert _total(index, "chunks") == _total(index, "chunk_fts") == index.counts()["chunks_in_view"]

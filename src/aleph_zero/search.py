@@ -1,8 +1,10 @@
 """Search over the current view: candidate generators, fusion, and hits mapped back to paths."""
 from __future__ import annotations
 
+import fnmatch
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from fnmatch import fnmatch
 
 from . import lexical
 from .indexer import Index
@@ -10,6 +12,7 @@ from .view import View
 
 RRF_K = 60
 PATH_CANDIDATES = 5
+PATH_TIE_LIMIT = 25
 
 
 @dataclass(frozen=True)
@@ -38,17 +41,27 @@ def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...
                   key=lambda item: (-item[1], item[0]))
 
 
-def path_ranking(index: Index, view: View, terms: list[str]) -> list[int]:
+def path_ranking(index: Index, view: View, terms: list[str],
+                 accept: Callable[[str], bool] | None = None) -> list[int]:
     """First chunk of the files whose path matches the query's words, best first.
-    A multi-word query must match at least two words, so one common word does not flood it."""
+
+    A multi-word query must match at least two words and a one-word query must match
+    the file's own name, so a common word or an extension does not match everything.
+    When too many files tie for best, the path says nothing and no file is proposed."""
     need = min(2, len(terms))
     scored: list[tuple[int, str]] = []
     for path, (words, name_words) in index.path_tokens(view).items():
+        if accept is not None and not accept(path):
+            continue
         matched = sum(term in words for term in terms)
-        if matched >= need:
-            scored.append((-(matched + sum(term in name_words for term in terms)), path))
+        in_name = sum(term in name_words for term in terms)
+        if matched >= need and (len(terms) > 1 or in_name):
+            scored.append((-(matched + in_name), path))
+    scored.sort()
+    if not scored or sum(score == scored[0][0] for score, _ in scored) > PATH_TIE_LIMIT:
+        return []
     chunk_ids: list[int] = []
-    for _, path in sorted(scored)[:PATH_CANDIDATES]:
+    for _, path in scored[:PATH_CANDIDATES]:
         rows = index.conn.execute(
             "SELECT chunk_id FROM blob_chunks WHERE blob_oid = ? AND ord = 0", (view.files[path],)).fetchall()
         if rows:
@@ -78,13 +91,21 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     synced view can be returned."""
     if kind not in ("any", "code", "docs"):
         raise ValueError(f"kind must be 'any', 'code' or 'docs', not {kind!r}")
+    if not index.serves(view):
+        raise ValueError("this view is not the one the index was last synced to; call index.sync(view) first")
     terms = lexical.query_terms(query)
     if not terms:
         return []
+    # Filters narrow the candidates before ranking: applied afterwards, a filter that
+    # few chunks pass would find nothing among the best fifty of everything.
+    accept = re.compile(fnmatch.translate(path_glob)).match if path_glob is not None else None
+    scoped = kind != "any" or accept is not None
+    if scoped:
+        index.narrow(view, kind, accept, path_glob)
     pool = max(50, k * 6)
     fused = rrf({
-        "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool)],
-        "path": path_ranking(index, view, terms),
+        "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],
+        "path": path_ranking(index, view, terms, accept),
     })[:pool]
     if not fused:
         return []
@@ -106,6 +127,6 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
             if kind == "code" and chunk_kind == "doc":
                 continue
             for path in view.paths_for(oid):
-                if path_glob is None or fnmatch(path, path_glob):
+                if accept is None or accept(path):
                     hits.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources))
     return arrange(hits, k, kind)

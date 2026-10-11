@@ -79,4 +79,7 @@ def open_db(path: Path) -> apsw.Connection:
     # The current view, per connection: which blobs and chunks a query may return.
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_blobs(blob_oid TEXT PRIMARY KEY) WITHOUT ROWID")
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_chunks(chunk_id INTEGER PRIMARY KEY)")
+    # A query's kind or path filter narrows the view before candidates are ranked.
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_blobs(blob_oid TEXT PRIMARY KEY) WITHOUT ROWID")
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_chunks(chunk_id INTEGER PRIMARY KEY)")
     return conn
