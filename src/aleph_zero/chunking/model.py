@@ -15,7 +15,7 @@ TOKENS_PER_CHAR = 0.2919
 
 @dataclass(frozen=True)
 class Chunk:
-    kind: str          # 'doc' for documentation, 'block' for a window of any other text
+    kind: str          # 'doc', 'block' (a window of text), 'module', or a definition's kind
     symbol: str        # the name a reader would search for; empty for a plain window
     signature: str     # one line that introduces the chunk (a heading, later a function signature)
     breadcrumb: str    # where the chunk sits: "Guide > Install", later "Class > method"
@@ -23,6 +23,10 @@ class Chunk:
     text: str          # the chunk's source text, exactly as in the file
     start_line: int    # 1-based, inclusive
     end_line: int      # 1-based, inclusive
+    # The whole definition this chunk belongs to, when it is one piece of a long function
+    # or the part of a class its methods do not cover. 0 when the chunk stands alone.
+    scope_start_line: int = 0
+    scope_end_line: int = 0
 
 
 def normalize(text: str) -> str:
@@ -34,7 +38,8 @@ def normalize(text: str) -> str:
 def chunk_hash(family: str, chunk: Chunk) -> str:
     """Identity of a chunk. Paths and line numbers are not part of it, so a chunk that
     moves, or whose file is renamed, keeps its hash and everything derived from it."""
-    payload = "\0".join((str(CHUNKER_VERSION), family, chunk.kind, chunk.breadcrumb, normalize(chunk.text)))
+    payload = "\0".join((str(CHUNKER_VERSION), family, chunk.kind, chunk.breadcrumb, chunk.symbol,
+                         chunk.signature, normalize(chunk.text)))
     return hashlib.sha256(payload.encode("utf-8", "surrogateescape")).hexdigest()
 
 
