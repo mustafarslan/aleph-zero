@@ -1,0 +1,43 @@
+[project]
+name = "aleph-zero"
+version = "0.0.1"
+description = "Local-first code intelligence for coding agents"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { file = "LICENSE" }
+dependencies = [
+  "mcp>=2.3,<3",
+  "tree-sitter>=0.26,<0.27",
+  "tree-sitter-language-pack>=1.21,<2",
+  "numpy>=2.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+bench = [
+  "huggingface-hub>=0.30",
+  "llama-cpp-python>=0.3.36",
+  "onnxruntime>=1.31",
+  "tokenizers>=0.23",
+  "pyarrow>=17",
+  "nanobind>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aleph_zero"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# Always uv's own CPython build, so the bundled SQLite is the same everywhere.
+python-preference = "only-managed"
+
+# llama-cpp-python has no wheels on PyPI, and the macOS arm64 wheels on its own
+# index (0.3.35, 0.3.36; cpu and metal) fail zip integrity checks as of 2026-10-11.
+# It is therefore built from the PyPI sdist. Sync with:
+#   CMAKE_ARGS="-DGGML_METAL=OFF" uv sync --group dev --group bench
