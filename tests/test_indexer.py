@@ -233,3 +233,22 @@ def test_content_indexed_by_an_older_version_is_indexed_again(repo, monkeypatch)
     assert search(index, view, "render_invoice")[0].path == "src/billing/invoice.py"
     collect_garbage(index.conn, max_age_days=30)
     assert _total(index, "chunks") == _total(index, "chunk_fts") == index.counts()["chunks_in_view"]
+
+
+def test_view_follows_other_sessions_even_when_the_number_of_unindexed_blobs_is_unchanged(repo):
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    repo.write("src/okapi.py", "def first():\n    return 'quollword'\n")
+    repo.write("src/tapir.py", "def tapir():\n    return 2\n")
+    view = build_view(repo.root)
+    assert index.sync(view, budget_seconds=0.0).pending == 2
+
+    other = Index(open_db(index_path(repo.root)))  # another session indexes one of the two...
+    only_okapi = View(view.root, view.common_dir, view.object_format, view.tree,
+                      {"src/okapi.py": view.files["src/okapi.py"]}, frozenset({"src/okapi.py"}))
+    assert other.sync(only_okapi).indexed == 1
+    with_token = view.files["src/auth/token_store.py"]  # ...and a third collects something we had
+    other.conn.execute("DELETE FROM blobs WHERE blob_oid = ?", (with_token,))
+
+    assert index.sync(view, budget_seconds=0.0).pending == 2  # two again, but not the same two
+    assert [hit.path for hit in search(index, view, "quollword")] == ["src/okapi.py"]  # found by content

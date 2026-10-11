@@ -63,3 +63,13 @@ Expected result: about 5 ms for a query when nothing changed since the last one,
 
 - M1c's gate must include a test that edits a file and queries immediately, in a loop, and never sees the old content.
 - The one-shot command line keeps option A; it has no process to hold a watcher.
+
+## Views consulted
+
+**agy (no boost):** ranked the options E > A > C > D > B > F. Listed seven ways option D returns a stale view (nested directories, nested and global ignore files, symlinked directories, case-only renames, hard links, overwrites within timestamp resolution, sparse checkouts). Confirmed that `git status` under `GIT_OPTIONAL_LOCKS=0` is always correct and only slower. Called the `index.lock` collision risk of option B severe. Proposed option E in the form adopted here: events as a flag only, a full rebuild when it is set, overflow sets it.
+
+**Advisor:** rejected option D for the same reason (the invalidation rules would be ours to maintain, and git already enforces them). First recommended option B, run sparingly, and option C as an opt-in; withdrew both after agy's lock-collision point, noting that the untracked cache also lives in the index file a background reader cannot write. Placed option E in M1c, where a long-lived process exists, and asked for the per-session hash cache keyed on a file's own stat.
+
+**Author (Claude):** profiled the steps above and initially leaned towards option D. Dropped it after both reviews. Added the synchronous event flush before trusting the flag, since event delivery is asynchronous and an edit made just before a query must not be missed.
+
+**Where they differed:** only on option B, and on when to build option E (agy: now; advisor: with the server in M1c). All three converge on rejecting D and on E as the design.

@@ -33,6 +33,7 @@ class Index:
         self.conn = conn
         self._fingerprint: str | None = None
         self._pending = 0
+        self._missing: frozenset[str] = frozenset()  # unindexed blobs of the view at the last sync
         self._deferred: dict[str, float] = {}  # blob git does not have -> when we last asked
         self._path_tokens: dict[str, tuple[frozenset[str], frozenset[str]]] | None = None
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
@@ -58,6 +59,7 @@ class Index:
         todo = [oid for oid in missing if self._deferred.get(oid, retry_before) <= retry_before]
         indexed = skipped = 0
         left = len(missing)
+        stored: set[str] = set()
         deadline = started + budget_seconds
         with gitio.BlobReader(view.root) as reader:
             for offset in range(0, len(todo), BATCH):
@@ -82,8 +84,10 @@ class Index:
                         else:
                             skipped += 1
                 left -= len(prepared)
-        if changed or indexed or skipped or len(missing) != self._pending:
-            self._refresh_view_chunks()
+                stored.update(item[0] for item in prepared)
+        if changed or indexed or skipped or frozenset(missing) != self._missing:
+            self._refresh_view_chunks()  # also when another session indexed or collected something
+        self._missing = frozenset(missing) - stored
         self._pending = left
         self._touch()
         self._fingerprint = view.fingerprint
