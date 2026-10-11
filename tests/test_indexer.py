@@ -1,0 +1,136 @@
+import multiprocessing
+
+from aleph_zero.indexer import Index, collect_garbage
+from aleph_zero.store import index_path, open_db
+from aleph_zero.view import build_view
+
+
+def _index(repo):
+    return Index(open_db(index_path(repo.root)))
+
+
+def _total(index, table):
+    return index.conn.execute(f"SELECT count(*) FROM {table}").fetchall()[0][0]
+
+
+def test_first_sync_indexes_every_file_and_the_second_does_nothing(repo):
+    index = _index(repo)
+    first = index.sync(build_view(repo.root))
+    assert (first.indexed, first.skipped, first.pending) == (3, 0, 0)
+    again = index.sync(build_view(repo.root))
+    assert (again.indexed, again.pending) == (0, 0)
+    assert index.counts()["blobs_in_view"] == 3
+
+
+def test_editing_one_file_indexes_one_blob_without_committing(repo):
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    repo.write("src/billing/invoice.py", "def render_invoice(order):\n    return 'new'\n")
+    report = index.sync(build_view(repo.root))
+    assert report.indexed == 1
+
+
+def test_identical_content_at_two_paths_is_stored_once(repo):
+    repo.write("src/billing/copy.py", (repo.root / "src/billing/invoice.py").read_text())
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    assert _total(index, "blobs") == 3
+
+
+def test_a_chunk_shared_by_two_different_files_is_stored_once(repo):
+    shared = "".join(f"shared_line_{i} = {i}\n" for i in range(40))
+    repo.write("a.py", shared)
+    repo.write("b.py", shared + "".join(f"only_in_b_{i} = {i}\n" for i in range(20)))
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    rows = index.conn.execute(
+        "SELECT chunk_id, count(DISTINCT blob_oid) FROM blob_chunks GROUP BY chunk_id HAVING count(DISTINCT blob_oid) > 1").fetchall()
+    assert len(rows) == 1 and rows[0][1] == 2
+
+
+def test_switching_branches_back_and_forth_reindexes_nothing(repo):
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    repo.git("checkout", "-q", "-b", "feature")
+    repo.write("src/billing/invoice.py", "feature = True\n")
+    repo.commit("feature work")
+    assert index.sync(build_view(repo.root)).indexed == 1
+    repo.git("checkout", "-q", "main")
+    assert index.sync(build_view(repo.root)).indexed == 0
+    repo.git("checkout", "-q", "feature")
+    assert index.sync(build_view(repo.root)).indexed == 0
+
+
+def test_an_exhausted_budget_reports_pending_and_a_later_sync_finishes(repo):
+    index = _index(repo)
+    assert index.sync(build_view(repo.root), budget_seconds=0.0).pending == 3
+    assert index.counts()["chunks_in_view"] == 0
+    done = index.sync(build_view(repo.root))
+    assert (done.indexed, done.pending) == (3, 0)
+
+
+def test_a_binary_file_is_recorded_once_and_not_retried(repo):
+    (repo.root / "logo.bin").write_bytes(b"\x00\x01\x02\x03")
+    index = _index(repo)
+    assert index.sync(build_view(repo.root)).skipped == 1
+    repo.write("touch.txt", "anything\n")  # changes the view, forcing a real sync
+    assert index.sync(build_view(repo.root)).skipped == 0
+    assert index.conn.execute("SELECT kind FROM blobs WHERE kind LIKE 'skip:%'").fetchall() == [("skip:binary",)]
+
+
+def test_garbage_collection_drops_old_content_but_never_the_current_view(repo):
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    repo.write("src/billing/invoice.py", "replaced = True\n")
+    repo.commit("replace")
+    index.sync(build_view(repo.root))
+    assert _total(index, "blobs") == 4
+    removed = collect_garbage(index.conn, max_age_days=0, now=2_000_000_000)
+    assert removed == {"blobs_removed": 1, "chunks_removed": 1}
+    assert _total(index, "blobs") == 3
+    assert index.sync(build_view(repo.root)).indexed == 0
+
+
+def _sync_in_child(root, queue):
+    from pathlib import Path
+
+    index = Index(open_db(index_path(Path(root))))
+    report = index.sync(build_view(Path(root)), budget_seconds=30)
+    queue.put((report.indexed + report.skipped, report.pending))
+
+
+def test_two_processes_indexing_the_same_repository_agree(repo):
+    for i in range(120):
+        repo.write(f"pkg/module_{i}.py", f"def function_{i}():\n    return {i}\n")
+    repo.commit("many files")
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    workers = [context.Process(target=_sync_in_child, args=(str(repo.root), queue)) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    results = [queue.get(timeout=60) for _ in workers]
+    for worker in workers:
+        worker.join()
+        assert worker.exitcode == 0
+    assert all(pending == 0 for _, pending in results)
+    assert sum(done for done, _ in results) >= 123  # together they covered every blob
+    index = _index(repo)
+    assert index.sync(build_view(repo.root)).indexed == 0
+    assert _total(index, "blobs") == 123
+    assert _total(index, "chunks") == _total(index, "chunk_fts")
+    orphans = index.conn.execute(
+        "SELECT count(*) FROM blob_chunks bc LEFT JOIN chunks c ON c.chunk_id = bc.chunk_id WHERE c.chunk_id IS NULL").fetchall()
+    assert orphans == [(0,)]
+
+
+def test_a_file_that_vanishes_between_status_and_read_is_skipped_not_fatal(repo):
+    repo.write("ephemeral.py", "here_then_gone = 1\n")
+    view = build_view(repo.root)          # the view still lists the file
+    (repo.root / "ephemeral.py").unlink()  # ...and it disappears before indexing
+    report = _index(repo).sync(view)
+    assert (report.indexed, report.skipped, report.pending) == (3, 1, 0)
+
+
+def test_an_empty_repository_syncs_to_nothing(empty_repo):
+    report = _index(empty_repo).sync(build_view(empty_repo.root))
+    assert (report.indexed, report.skipped, report.pending) == (0, 0, 0)
