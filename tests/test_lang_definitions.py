@@ -216,3 +216,21 @@ def test_everything_the_language_pack_finds_is_found(name, file):
     ours = {d.name for d in found(name, file=file)}
     assert theirs - ours == set()
     assert len(ours) > len(theirs)
+
+
+def test_an_export_macro_in_front_of_a_declaration_does_not_become_part_of_the_name():
+    source = (
+        "GGML_API ggml_backend_t ggml_backend_cuda_init(void);\n"
+        "XXH_PUBLIC_API XXH_errorcode\nXXH64_update(XXH64_state_t* state, const void* input);\n"
+        "GGML_API struct ggml_tensor * ggml_new(struct ggml_context * ctx);\n"
+        "static inline LLAMA_API int32_t llama_n(const struct llama_model * model) { return 1; }\n"
+    )
+    # Headers are read with the C++ grammar, which recovers all four.
+    assert listing(found("cpp", source)) == [
+        ("function", "ggml_backend_cuda_init"), ("function", "XXH64_update"),
+        ("function", "ggml_new"), ("function", "llama_n"),
+    ]
+    # The C grammar loses a prototype behind an unknown macro when the return type is a
+    # plain name (it reads `MACRO type` as a variable and the rest as a call). Known limit.
+    in_c = [d.qualified for d in found("c", source) if d.kind == "function"]
+    assert in_c == ["XXH64_update", "ggml_new", "llama_n"]

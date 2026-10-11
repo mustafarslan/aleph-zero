@@ -338,6 +338,13 @@ def _drill(node: Node, itself: bool = False) -> tuple[Node | None, bool]:
     current, is_function = node, False
     for _ in range(12):
         if current.type in _NAME_KINDS and (itself or current is not node):
+            if current.type == "qualified_identifier" and b"::" not in (current.text or b""):
+                # `EXPORT_MACRO type name(...)`: an unknown macro makes the parser read
+                # "type name" as a qualified name. The real name is its last part.
+                inner = current.child_by_field_name("name")
+                if inner is not None:
+                    current = inner
+                    continue
             return current, is_function
         if current.type == "function_declarator":
             is_function = True
