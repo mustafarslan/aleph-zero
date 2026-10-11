@@ -7,9 +7,9 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import gitio, outline, symbols
+from . import gitio, outline, render
+from .engine import Engine
 from .indexer import Index, collect_garbage
-from .search import search
 from .store import StoreError, index_file, open_db
 from .view import build_view
 
@@ -38,51 +38,37 @@ def _index(args) -> int:
 
 
 def _search(args) -> int:
-    index, view = _open(args.cwd)
-    report = index.sync(view)
-    hits = search(index, view, args.query, k=args.k, kind=args.kind, path_glob=args.glob)
+    engine = Engine(args.cwd)
+    answer = engine.search(args.query, k=args.k, kind=args.kind, path_glob=args.glob, lang=args.lang,
+                           timeout_ms=args.timeout_ms)
     if args.json:
-        print(json.dumps({"pending": report.pending, "hits": [asdict(hit) for hit in hits]}, indent=2))
-        return 0
-    for hit in hits:
-        label = hit.breadcrumb or hit.symbol
-        print(f"{hit.path}:{hit.start_line}-{hit.end_line}  {hit.kind}" + (f"  {label}" if label else ""))
-        first = next((line.strip() for line in hit.text.splitlines() if line.strip()), "")
-        print(f"    {first[:160]}")
-    if report.pending:
-        print(f"note: {report.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
+        print(json.dumps(render.as_json(answer), indent=2))
+    else:
+        print(engine.render(answer, detail=args.detail, budget_tokens=args.budget_tokens))
     return 0
 
 
 def _symbol(args) -> int:
-    index, view = _open(args.cwd)
-    report = index.sync(view)
-    found = symbols.lookup(index, view, args.name, limit=args.k)
+    found = Engine(args.cwd).symbol(args.name, k=args.k, timeout_ms=args.timeout_ms)
     if args.json:
-        print(json.dumps({"pending": report.pending, "symbols": [asdict(hit) for hit in found]}, indent=2))
+        print(json.dumps(asdict(found), indent=2))
         return 0
-    for hit in found:
+    for hit in found.symbols:
         print(f"{hit.path}:{hit.line}  {hit.kind}  {hit.qualified}")
         print(f"    {hit.signature[:160]}")
-    if report.pending:
-        print(f"note: {report.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
+    if found.pending:
+        print(f"note: {found.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
     return 0
 
 
 def _outline(args) -> int:
-    view = build_view(args.cwd)
-    result = outline.of(view, args.path)
+    result = Engine(args.cwd).outline(args.path)
     print(json.dumps(asdict(result), indent=2) if args.json else outline.text(result))
     return 0
 
 
 def _status(args) -> int:
-    index, view = _open(args.cwd)
-    report = index.sync(view, budget_seconds=0.0)
-    counts = index.counts()
-    counts.update({"root": str(view.root), "files_in_view": len(view.files), "dirty": len(view.dirty),
-                   "pending": report.pending, "index": str(index_file(view.common_dir))})
-    print(json.dumps(counts, indent=2))
+    print(json.dumps(Engine(args.cwd).status(), indent=2))
     return 0
 
 
@@ -108,12 +94,17 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("-k", type=int, default=8)
     find.add_argument("--kind", choices=("any", "code", "docs"), default="any")
     find.add_argument("--glob", help="only paths matching this pattern")
+    find.add_argument("--lang", help="only files in this language: python, ts, go, rust, java, cpp, markdown, ...")
+    find.add_argument("--detail", choices=render.DETAILS, default="snippets")
+    find.add_argument("--budget-tokens", type=int, default=render.DEFAULT_BUDGET, help="ceiling for the text answer")
+    find.add_argument("--timeout-ms", type=int, help="answer within this time, marked partial if cut short")
     find.add_argument("--json", action="store_true")
     find.set_defaults(run=_search)
 
     symbol = commands.add_parser("symbol", help="where a name is defined in the current view")
     symbol.add_argument("name", help="a name, or a qualified one: TokenStore.get, auth::TokenStore")
     symbol.add_argument("-k", type=int, default=20)
+    symbol.add_argument("--timeout-ms", type=int)
     symbol.add_argument("--json", action="store_true")
     symbol.set_defaults(run=_symbol)
 
@@ -132,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.run(args)
-    except (gitio.GitError, StoreError, outline.OutlineError) as exc:
+    except (gitio.GitError, StoreError, outline.OutlineError, ValueError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
 

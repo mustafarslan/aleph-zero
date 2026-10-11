@@ -4,6 +4,9 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,8 +24,31 @@ def _env() -> dict[str, str]:
     return {**os.environ, **_ENV}
 
 
+_DEADLINE: ContextVar[float | None] = ContextVar("aleph_git_deadline", default=None)
+
+
+@contextmanager
+def until(deadline: float | None):
+    """Inside this block every git call must finish by `deadline` (a time.monotonic()
+    value) or raise GitError. A caller that stops waiting also stops the work."""
+    token = _DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def _run(command: list[str]) -> subprocess.CompletedProcess:
+    deadline = _DEADLINE.get()
+    timeout = None if deadline is None else max(deadline - time.monotonic(), 0.001)
+    try:
+        return subprocess.run(command, capture_output=True, env=_env(), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise GitError(f"{' '.join(command[3:5])} timed out") from None
+
+
 def git(cwd: Path, *args: str) -> bytes:
-    proc = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, env=_env())
+    proc = _run(["git", "-C", str(cwd), *args])
     if proc.returncode != 0:
         detail = proc.stderr.decode(errors="replace").strip()[:300]
         raise GitError(f"git {' '.join(args)} failed in {cwd}: {detail}")
@@ -40,11 +66,9 @@ class RepoInfo:
 def repo_info(cwd: Path) -> RepoInfo:
     """Everything a view needs to know about the repository, in one git process.
     Four separate calls cost about 17 ms; a query pays this every time."""
-    proc = subprocess.run(
+    proc = _run(
         ["git", "-C", str(cwd), "rev-parse", "--show-toplevel", "--show-object-format",
-         "--path-format=absolute", "--git-common-dir", "--verify", "--quiet", "HEAD^{tree}"],
-        capture_output=True, env=_env(),
-    )
+         "--path-format=absolute", "--git-common-dir", "--verify", "--quiet", "HEAD^{tree}"])
     lines = proc.stdout.decode().splitlines()
     if len(lines) < 3:  # with no commits yet git prints three lines and exits 1
         detail = proc.stderr.decode(errors="replace").strip()[:300]

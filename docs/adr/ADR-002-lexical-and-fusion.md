@@ -64,17 +64,18 @@ With source code chunked by definition, Django has 70,481 chunks (was 37,466 lin
 | eslint | JavaScript | 2,303 | 19,814 | 5,277 | 3.5 s | 200 / 200 |
 | tokio | Rust | 875 | 16,190 | 10,536 | 2.2 s | 200 / 200 |
 | nest | TypeScript | 2,307 | 10,130 | 7,820 | 1.6 s | 200 / 200 |
-| llama.cpp | C++, C, Python, TypeScript | 3,768 | 70,590 | 55,023 | 12.1 s | 199 / 200 |
+| llama.cpp | C++, C, Python, TypeScript | 3,768 | 70,590 | 55,023 | 12.1 s | 200 / 200 |
 
-The one miss is a C++ destructor (`~name`), which ranks behind the type of the same name. This is a sanity check on unique names, not a retrieval benchmark: the benchmark with real questions and a BM25 baseline is M1c's gate.
+This is a sanity check on unique names, not a retrieval benchmark: the benchmark with real questions and a BM25 baseline is M1c's gate.
 
 The check found three defects, each fixed with a test: files that open with the same lines shared their first chunk, and the path generator proposed that chunk once per file; a JavaScript `#private` member could not be found without its marker; and a C++ declaration behind an unknown export macro took its return type as part of its name.
 
 ## Fusion as built
 
 - Three generators: lexical (FTS5), symbol (a name written in the query that is exactly a definition's name), path (files whose path matches the query's words).
-- Lexical and symbol are fused by reciprocal rank over chunks; the symbol generator's vote counts twice (`GENERATOR_WEIGHT`). A file proposed for its path adds a vote to its own first chunk, in that file only.
-- A word of a longer query that names more than 25 definitions (`get`, `main`) proposes no symbol; asked for by itself it proposes the ten best.
+- Lexical and symbol are fused by reciprocal rank over chunks, with equal weights. A file proposed for its path adds a vote to its own first chunk, in that file only.
+- **A query that is one name** puts that name's definitions first, in the order the lookup gives them, ahead of everything else. Rank fusion cannot keep that order: first and second place differ by 1/61 against 1/62, so a short test double outranked `QuerySet.get_or_create` on text length alone.
+- **In a longer query** only identifier-shaped words count as names (an underscore, a digit, an inner capital, a qualifier): in a sentence `total` is a word, `refresh_token` is a name. A name with more than 25 definitions proposes none.
 - Among definitions with one name: the exact spelling first, then types and functions before fields, then code before tests.
 - The pieces of one long definition are one result. One chunk held by many files is listed in three of them and the other files are counted.
 - A chunk's line range is tight for functions, methods and module-level code. A class chunk is what its methods do not cover, so its range is the class and may skip over them.

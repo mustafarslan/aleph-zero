@@ -50,13 +50,15 @@ def as_json(answer: Answer) -> dict:
 
 
 def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "snippets",
-         already_shown: Callable[[Hit], bool] | None = None) -> str:
+         already_shown: Callable[[Hit], bool] | None = None,
+         printed: Callable[[Hit], None] | None = None) -> str:
     """The answer as text of at most `budget_tokens` estimated tokens.
 
     `detail` chooses what the budget is spent on: 'locations' (one or two lines per
     result), 'snippets' (the first lines of each), 'full' (whole chunks). With
     `already_shown`, text this session has seen before is replaced by a pointer,
-    except under 'full', which is how a caller asks to see it again."""
+    except under 'full', which is how a caller asks to see it again. `printed` is
+    called for every hit whose text went into the answer."""
     if detail not in DETAILS:
         raise ValueError(f"detail must be one of {DETAILS}, not {detail!r}")
     notes = _notes(answer)
@@ -85,7 +87,8 @@ def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "sni
     if detail != "locations":
         for position in range(shown):
             entry = entries[position]
-            if detail != "full" and already_shown is not None and already_shown(entry.hit):
+            pointer = detail != "full" and already_shown is not None and already_shown(entry.hit)
+            if pointer:
                 options = ["    (shown earlier in this session)"]
             elif detail == "full":
                 options = [_body(entry.text, None), _body(entry.text, SNIPPET_LINES), _body(entry.text, SHORT_SNIPPET_LINES)]
@@ -96,6 +99,8 @@ def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "sni
                 break  # lower results keep their location line only
             bodies[position] = chosen
             spent += estimate_tokens(chosen) + 1
+            if printed is not None and not pointer:
+                printed(entry.hit)
     lines: list[str] = []
     for position in range(shown):
         lines.append(heads[position])

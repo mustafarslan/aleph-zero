@@ -15,10 +15,14 @@ PATH_CANDIDATES = 5
 PATH_TIE_LIMIT = 25
 COPIES_SHOWN = 3  # places listed for one chunk that many files share
 SYMBOL_CANDIDATES = 10
-# A name written in the query that is exactly a definition's name is stronger evidence than
-# a text match: its order decides between otherwise equal candidates. A starting value, tuned in M2.
-GENERATOR_WEIGHT = {"symbol": 2.0}
+# How much one generator's vote counts in the fusion. All equal until the M2 benchmark says
+# otherwise: in a longer query, a word that happens to be a definition's name is one vote
+# among others. A query that is a single name is handled apart (see `search`).
+GENERATOR_WEIGHT: dict[str, float] = {}
 SYMBOL_TIE_LIMIT = 25
+# What makes a word of a longer query look like an identifier: an underscore, a digit, a
+# capital after the first letter, or a qualifier.
+_SHAPED = re.compile(r"_|\d|\.|::|(?<=.)[A-Z]")
 _IDENTIFIER = re.compile(r"[^\W\d]\w*(?:(?:\.|::)[^\W\d]\w*)*")
 
 
@@ -84,23 +88,24 @@ def path_ranking(index: Index, view: View, terms: list[str],
     return list(dict.fromkeys(keys))
 
 
-def symbol_ranking(index: Index, query: str, scoped: bool) -> list[int]:
-    """Chunks that define a name written in the query, best first. A word of a longer
-    query that names more than SYMBOL_TIE_LIMIT definitions (`get`, `main`) says nothing
-    about which one is meant, and proposes none."""
+def symbol_ranking(index: Index, query: str, scoped: bool) -> tuple[list[int], bool]:
+    """Chunks that define a name written in the query, best first, and whether the query
+    is that one name and nothing else. A word of a longer query that names more than
+    SYMBOL_TIE_LIMIT definitions (`get`, `main`) says nothing about which one is meant,
+    and proposes none."""
     written = _IDENTIFIER.findall(query)
     alone = len(written) == 1
     chunk_ids: list[int] = []
     for name in written:
-        if not alone and name.lower() in lexical.STOPWORDS:
-            continue
+        if not alone and not _SHAPED.search(name):
+            continue  # in a sentence, a plain word is a word; `refresh_token` and `TokenStore` are names
         found = symbols.rows(index, name, scoped)
         if not alone and len(found) > SYMBOL_TIE_LIMIT:
             continue
         for row in found[:SYMBOL_CANDIDATES]:
             if row[7] not in chunk_ids:
                 chunk_ids.append(row[7])
-    return chunk_ids
+    return chunk_ids, alone
 
 
 def merge_pieces(hits: list[Hit]) -> list[Hit]:
@@ -114,6 +119,16 @@ def merge_pieces(hits: list[Hit]) -> list[Hit]:
         seen.add(key)
         kept.append(hit)
     return kept
+
+
+def _path_filter(path_glob: str | None, families: frozenset[str] | None) -> Callable[[str], bool] | None:
+    """Which paths a query may return: those matching the glob, in one of the families."""
+    matches = re.compile(fnmatch.translate(path_glob)).match if path_glob is not None else None
+    if families is None:
+        return matches
+    if matches is None:
+        return lambda path: filters.family(path) in families
+    return lambda path: bool(matches(path)) and filters.family(path) in families
 
 
 def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
@@ -133,7 +148,7 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
 
 
 def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
-           path_glob: str | None = None) -> list[Hit]:
+           path_glob: str | None = None, families: frozenset[str] | None = None) -> list[Hit]:
     """Hits for `query` in `view`. Call `index.sync(view)` first: only blobs of the
     synced view can be returned."""
     if kind not in ("any", "code", "docs"):
@@ -145,15 +160,25 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         return []
     # Filters narrow the candidates before ranking: applied afterwards, a filter that
     # few chunks pass would find nothing among the best fifty of everything.
-    accept = re.compile(fnmatch.translate(path_glob)).match if path_glob is not None else None
+    accept = _path_filter(path_glob, families)
     scoped = kind != "any" or accept is not None
     if scoped:
-        index.narrow(view, kind, accept, path_glob)
+        index.narrow(view, kind, accept, (path_glob, families))
     pool = max(50, k * 6)
+    named, bare_name = symbol_ranking(index, query, scoped)
     fused = rrf({
         "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],
-        "symbol": symbol_ranking(index, query, scoped),
+        "symbol": named,
     })[:pool]
+    if bare_name and named:
+        # The query is one name: its definitions come first, in the order the lookup gives
+        # them (exact spelling, kind, code before tests). Rank fusion cannot keep that order,
+        # since first and second place differ by 1/61 against 1/62.
+        order = {chunk_id: position for position, chunk_id in enumerate(named)}
+        fused.sort(key=lambda item: (order.get(item[0], len(order)),))
+        top = fused[0][1] if fused else 0.0
+        fused = [(chunk_id, max(score, top) + (len(order) - order[chunk_id]) if chunk_id in order else score, sources)
+                 for chunk_id, score, sources in fused]
     by_chunk = {chunk_id: (score, sources) for chunk_id, score, sources in fused}
     # A file proposed for its path votes for its own first chunk, in that file only.
     by_file = {key: 1.0 / (RRF_K + rank)

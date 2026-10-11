@@ -158,3 +158,25 @@ def test_a_test_framework_is_not_test_code(repo):
     index, view = _ready(repo)
     assert [hit.path for hit in symbols.lookup(index, view, "Client")] == ["framework/test/client.py", "zz/other.py"]
     assert [hit.path for hit in symbols.lookup(index, view, "Widget")] == ["zz/Widget.java", "src/test/java/ClientTests.java"]
+
+
+def test_for_a_bare_name_the_order_of_its_definitions_decides_not_their_length(repo):
+    long_body = "".join(f"        step_{i} = self.prepare(defaults, {i})\n" for i in range(25))
+    repo.write("app/models.py", f"class QuerySet:\n    def get_or_create(self, defaults=None):\n{long_body}        return defaults\n")
+    repo.write("tests/fakes.py", "class BookManager:\n    def get_or_create(self):\n        return super().get_or_create()\n")
+    for i in range(12):  # shorter chunks that match the words better than the real, long definition
+        repo.write(f"app/caller_{i}.py", f"def get_or_create_for_{i}(qs):\n    return qs.get_or_create()  # get_or_create\n")
+    index, view = _ready(repo)
+    hits = search(index, view, "get_or_create")
+    assert [hit.breadcrumb for hit in hits[:2]] == ["QuerySet.get_or_create", "BookManager.get_or_create"]
+
+
+def test_in_a_longer_query_a_name_is_one_vote_among_others(repo):
+    repo.write("app/total.py", "def total():\n    return 0\n")
+    index, view = _ready(repo)
+    hits = search(index, view, "render invoice total")
+    assert hits[0].symbol == "render_invoice"  # the text match on all three words, not the function named `total`
+    assert not any("symbol" in hit.sources for hit in hits)   # plain words of a sentence are not names
+    shaped = search(index, view, "where is refresh_token called")
+    assert shaped[0].symbol == "refresh_token" and "symbol" in shaped[0].sources
+    assert "symbol" in search(index, view, "total")[0].sources  # asked for by itself, any word is a name
