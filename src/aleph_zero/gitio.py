@@ -20,6 +20,10 @@ class GitError(RuntimeError):
     """A git command failed, or the directory is not inside a repository."""
 
 
+class GitTimeout(GitError):
+    """Work on the repository ran past the caller's deadline."""
+
+
 def _env() -> dict[str, str]:
     return {**os.environ, **_ENV}
 
@@ -44,7 +48,15 @@ def _run(command: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(command, capture_output=True, env=_env(), timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise GitError(f"{' '.join(command[3:5])} timed out") from None
+        raise GitTimeout("git timed out before the time limit") from None
+
+
+def check_deadline() -> None:
+    """Raise GitTimeout if the deadline set by `until` has passed. Called from loops that
+    read the working tree, which git's own timeout does not cover."""
+    deadline = _DEADLINE.get()
+    if deadline is not None and time.monotonic() > deadline:
+        raise GitTimeout("reading the worktree timed out before the time limit")
 
 
 def git(cwd: Path, *args: str) -> bytes:
@@ -137,9 +149,11 @@ def status(cwd: Path) -> list[str]:
             paths.append(token.split(b" ", 10)[10])
         elif tag == b"? ":
             (directories if token.endswith(b"/") else paths).append(token[2:])
-    if directories:
-        listed = git(cwd, "ls-files", "--others", "--exclude-standard", "-z", "--",
-                     *(os.fsdecode(directory) for directory in directories))
+    for batch in _batches(directories):
+        # Literal: a directory may be named `:(top)x` or `-n`, which git would otherwise
+        # read as pathspec magic or an option and silently list nothing for.
+        listed = _git_bytes(cwd, [b"--literal-pathspecs", b"ls-files", b"--others", b"--exclude-standard", b"-z",
+                                  b"--", *batch])
         paths.extend(path for path in listed.split(b"\0") if path)
     return [path.decode("utf-8", "surrogateescape") for path in paths]
 
@@ -167,6 +181,28 @@ class Readers:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+def _batches(items: list[bytes], limit: int = 100_000) -> list[list[bytes]]:
+    """Split arguments so that no command line exceeds what the system accepts."""
+    batches: list[list[bytes]] = []
+    size = 0
+    for item in items:
+        if not batches or size + len(item) + 1 > limit:
+            batches.append([])
+            size = 0
+        batches[-1].append(item)
+        size += len(item) + 1
+    return batches
+
+
+def _git_bytes(cwd: Path, args: list[bytes]) -> bytes:
+    """Like `git`, for arguments that are paths and may not be valid text."""
+    proc = _run([b"git", b"-C", os.fsencode(cwd), *args])
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip()[:300]
+        raise GitError(f"git {args[1].decode()} failed in {cwd}: {detail}")
+    return proc.stdout
 
 
 def untracked_cache_enabled(cwd: Path) -> bool:

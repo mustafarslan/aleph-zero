@@ -74,6 +74,7 @@ class Index:
         self._paths: dict[Key, list[str]] = {}
         self._path_words: tuple[dict[str, list[str]], dict[str, list[str]]] | None = None
         self._path_names: frozenset[str] = frozenset()
+        self._store_seconds = 0.002  # what storing one blob has cost lately; sizes the last batch before a deadline
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
         self._scope: tuple | None = None
 
@@ -102,11 +103,20 @@ class Index:
         stored: set[Key] = set()
         deadline = started + budget_seconds
         with gitio.Readers() as reader:
-            for offset in range(0, len(todo), BATCH):
+            offset = 0
+            size = 4  # small batches first, so the cost of storing is known before a large one is committed to
+            while offset < len(todo):
                 if time.monotonic() >= deadline or (stop is not None and stop()):
                     break
+                batch = todo[offset:offset + size]
+                offset += len(batch)
+                size = min(BATCH, size * 2)
                 prepared = []
-                for key in todo[offset:offset + BATCH]:
+                for key in batch:
+                    # Stop while there is still time to store what is already prepared.
+                    if time.monotonic() + len(prepared) * self._store_seconds >= deadline or (
+                            stop is not None and stop()):
+                        break
                     item = self._prepare(view, reader, key)
                     if item is not None:
                         prepared.append(item)
@@ -116,6 +126,7 @@ class Index:
                         self._deferred[key] = time.monotonic()
                 if not prepared:
                     continue
+                storing = time.monotonic()
                 with transaction(self.conn):
                     for item in prepared:
                         if not self._store(item):
@@ -124,6 +135,8 @@ class Index:
                             indexed += 1
                         else:
                             skipped += 1
+                per_blob = (time.monotonic() - storing) / len(prepared)
+                self._store_seconds = max(per_blob, 0.5 * self._store_seconds)  # remembers large files for a while
                 left -= len(prepared)
                 stored.update(item.key for item in prepared)
         if changed or indexed or skipped or frozenset(missing) != self._missing:

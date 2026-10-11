@@ -83,7 +83,10 @@ class Engine:
                timeout_ms: int | None = None) -> render.Answer:
         families = _families(lang)
         started, until = _limits(timeout_ms)
-        index, view, pending, late = self._ready(cwd, started, until)
+        try:
+            index, view, pending, late = self._ready(cwd, started, until)
+        except gitio.GitTimeout:
+            return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
         hits = []
         if not late or time.monotonic() < until:
             try:
@@ -99,7 +102,10 @@ class Engine:
     def symbol(self, name: str, k: int = 20, cwd: Path | str | None = None,
                timeout_ms: int | None = None) -> SymbolAnswer:
         started, until = _limits(timeout_ms)
-        index, view, pending, late = self._ready(cwd, started, until)
+        try:
+            index, view, pending, late = self._ready(cwd, started, until)
+        except gitio.GitTimeout:
+            return SymbolAnswer(name, [], 0, True, _elapsed(started))
         found = []
         try:
             with deadline(index.conn, until, self._stop):
@@ -111,19 +117,30 @@ class Engine:
             raise Cancelled
         return SymbolAnswer(name, found, pending, late, _elapsed(started))
 
-    def outline(self, path: str, cwd: Path | str | None = None) -> outlines.Outline:
-        return outlines.of(self._view(cwd), path)
+    def outline(self, path: str, cwd: Path | str | None = None,
+                timeout_ms: int | None = None) -> outlines.Outline:
+        """Raises gitio.GitTimeout when the worktree cannot be read within the limit."""
+        with gitio.until(_limits(timeout_ms)[1]):
+            return outlines.of(self._view(cwd), path)
 
-    def status(self, cwd: Path | str | None = None) -> dict:
-        index, view, pending, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)  # report, do not index
+    def status(self, cwd: Path | str | None = None, timeout_ms: int | None = None) -> dict:
+        """Never indexes. Raises gitio.GitTimeout when the worktree cannot be read within the limit."""
+        with gitio.until(_limits(timeout_ms)[1]):
+            view = self._view(cwd)
+        index = self._index(view)
+        pending = index.sync(view, budget_seconds=0.0).pending
         counts = index.counts()
+        try:
+            linked, problem = sources.describe(view.common_dir), ""
+        except sources.SourceError as exc:
+            linked, problem = [], str(exc)
         return {
             "root": str(view.root), "files_in_view": len(view.files), "dirty": len(view.dirty), "pending": pending,
             "chunks_in_view": counts["chunks_in_view"], "symbols_in_view": counts["symbols_in_view"],
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
-            "sources": sources.describe(view.common_dir),
+            "sources": linked, **({"sources_error": problem} if problem else {}),
         }
 
     # ---- text for an agent, with the session's memory ----------------------------------------
@@ -142,15 +159,19 @@ class Engine:
     def _view(self, cwd: Path | str | None) -> View:
         return build_view(Path(cwd) if cwd is not None else self.default_cwd)
 
+    def _index(self, view: View) -> Index:
+        index = self._indexes.get(view.root)
+        if index is None:
+            index = self._indexes[view.root] = Index(open_db(index_file(view.common_dir)))
+        return index
+
     def _ready(self, cwd: Path | str | None, started: float, until: float | None,
                sync_seconds: float = SYNC_SECONDS) -> tuple[Index, View, int, bool]:
         """The index of the worktree containing `cwd`, synced to its current view within
         the time allowed. Returns (index, view, files still pending, out of time)."""
         with gitio.until(until):
             view = self._view(cwd)
-        index = self._indexes.get(view.root)
-        if index is None:
-            index = self._indexes[view.root] = Index(open_db(index_file(view.common_dir)))
+        index = self._index(view)
         if until is None:
             budget = sync_seconds
         else:

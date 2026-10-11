@@ -77,3 +77,12 @@ def test_outline_command(repo, capsys):
     assert payload["path"] == "src/auth/token_store.py" and payload["items"][0]["kind"] == "constant"
     assert cli.main(["--cwd", str(repo.root), "outline", "nope.py"]) == 2
     assert "not a file in this worktree" in capsys.readouterr().err
+
+
+def test_two_sections_with_the_same_heading_are_two_items_and_hidden_counts_are_true(repo):
+    repo.write("docs/twice.md", "# A\n\n## X\n\nfirst\n\n## X\n\nsecond\n")
+    assert [(item.name, item.start_line) for item in _outline(repo, "docs/twice.md").items] == [("A", 1), ("X", 3), ("X", 7)]
+    repo.write("gen/flat.py", "".join(f"def function_number_{i}(argument_one, argument_two):\n    return {i}\n\n\n" for i in range(3000)))
+    text = outline.text(_outline(repo, "gen/flat.py"), budget_tokens=600)
+    shown = text.count("  function  ")
+    assert f"(+{3000 - shown} more definitions not shown)" in text

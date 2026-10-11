@@ -108,3 +108,11 @@ def test_json_form_carries_the_same_facts():
     assert payload["hits"][0]["duplicates"] == 2 and payload["hits"][0]["text"] == same
     assert set(payload["hits"][0]) >= {"path", "start_line", "end_line", "scope_start_line", "scope_end_line",
                                        "kind", "symbol", "signature", "breadcrumb", "score", "sources"}
+
+
+def test_even_notes_and_the_left_out_line_stay_inside_a_tiny_budget():
+    hits = [hit(path=f"src/m{i}.py", breadcrumb=f"f{i}") for i in range(30)]
+    for budget in (1, 5, 20, 40):
+        out = render.text(answer(*hits, pending=12, timed_out=True, elapsed_ms=9), budget_tokens=budget)
+        assert estimate_tokens(out) <= budget, budget
+    assert estimate_tokens(render.text(render.Answer(query="word " * 5000), budget_tokens=1500)) < 100

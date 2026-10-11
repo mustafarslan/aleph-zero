@@ -37,6 +37,7 @@ class View:
     files: dict[str, str]      # every path of the view, linked sources included as `name:path`
     dirty: frozenset[str]
     mounts: tuple[Mount, ...] = ()
+    mounted: frozenset[str] = frozenset()  # the paths of `files` that come from a linked source
 
     @cached_property
     def fingerprint(self) -> str:
@@ -61,11 +62,11 @@ class View:
 
     def locate(self, path: str) -> tuple[Path, str, str]:
         """Where a path of the view really is: (repository, path inside it, object format)."""
-        name, colon, inside = path.partition(":")
-        mount = self._mounted.get(name) if colon else None
-        if mount is not None and inside in mount.files:
+        if path in self.mounted:
+            name, _, inside = path.partition(":")
+            mount = self._mounted[name]
             return mount.root, inside, mount.object_format
-        return self.root, path, self.object_format
+        return self.root, path, self.object_format  # also a real file that is spelled `name:path`
 
     def read(self, path: str, readers: gitio.Readers,
              max_bytes: int | None = None) -> bytes | gitio.TooLarge | None:
@@ -128,7 +129,9 @@ def worktree_files(cwd: Path) -> tuple[gitio.RepoInfo, dict[str, str], frozenset
     files = dict(_tree_files(root, info.common_dir, tree)) if tree else {}
     dirty: set[str] = set()
     listings: dict[Path, frozenset[str]] = {}
-    for path in gitio.status(root):
+    for number, path in enumerate(gitio.status(root)):
+        if number % 64 == 0:
+            gitio.check_deadline()  # thousands of changed files are hashed here, outside any git call
         oid = _dirty_blob(root, path, fmt, listings)
         if oid is None:
             files.pop(path, None)  # deleted, renamed away, unreadable, or too large to index
@@ -148,11 +151,17 @@ def build_view(cwd: Path) -> View:
 
     info, files, dirty = worktree_files(cwd)
     mounts = tuple(sources.mounts(info.common_dir))
+    mounted: set[str] = set()
     if mounts:
         dirty = set(dirty)
         for mount in mounts:
             for inside, oid in mount.files.items():
-                files.setdefault(f"{mount.name}:{inside}", oid)  # a real path of that spelling wins
-            dirty.update(f"{mount.name}:{inside}" for inside in mount.dirty)
+                path = f"{mount.name}:{inside}"
+                if path in files:
+                    continue  # a real file of that spelling wins; the source's file is hidden
+                files[path] = oid
+                mounted.add(path)
+                if inside in mount.dirty:
+                    dirty.add(path)
         dirty = frozenset(dirty)
-    return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts)
+    return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts, frozenset(mounted))

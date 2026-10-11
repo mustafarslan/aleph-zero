@@ -121,3 +121,42 @@ def test_source_commands(repo, docs_repo, capsys):
     assert "docs:guides/auth.md" in capsys.readouterr().out
     assert cli.main(["--cwd", str(repo.root), "source", "remove", "docs"]) == 0
     assert cli.main(["--cwd", str(repo.root), "source", "remove", "docs"]) == 2
+
+
+def test_two_repositories_linking_the_same_url_do_not_share_a_clone(repo, docs_repo, tmp_path, monkeypatch, make_repo):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(docs_repo.root), str(remote)], check=True)
+    second = make_repo(tmp_path / "second-repo")
+    second.write("a.py", "x = 1\n")
+    second.commit("init")
+    sources.add(repo.root, remote.as_uri(), name="hb")
+    sources.add(second.root, remote.as_uri(), name="hb")
+    sources.remove(repo.root, "hb")
+    assert paths(Engine(second.root).search("wombat_rotator")) == ["hb:guides/auth.md"]
+
+
+def test_a_real_file_spelled_like_a_source_path_is_indexed_and_wins(repo, docs_repo):
+    docs_repo.write("guide.md", "# Linked\n\nThe linked one mentions linkedonlyword.\n")
+    docs_repo.commit("guide")
+    repo.write("docs:guide.md", "# Real\n\nThe real one mentions realonlyword.\n")
+    sources.add(repo.root, str(docs_repo.root), name="docs")
+    engine = Engine(repo.root)
+    assert paths(engine.search("realonlyword")) == ["docs:guide.md"]
+    assert engine.status()["pending"] == 0
+    assert paths(engine.search("linkedonlyword")) == []  # hidden by the real file of the same spelling
+
+
+def test_odd_source_lists_and_self_links(repo, docs_repo):
+    with pytest.raises(sources.SourceError, match="this repository"):
+        sources.add(repo.root, str(repo.root), name="me")
+    sources.add(repo.root, str(docs_repo.root), name="docs")
+    listing = repo.root / ".git" / "aleph-zero" / "sources.json"
+    entries = json.loads(listing.read_text())
+    entries[0]["added_by_a_newer_version"] = True       # an unknown key is ignored, not fatal
+    listing.write_text(json.dumps(entries))
+    engine = Engine(repo.root)
+    assert paths(engine.search("wombat_rotator")) == ["docs:guides/auth.md"]
+    listing.write_text("{ not json")
+    status = engine.status()                             # status still answers and says what is wrong
+    assert status["sources"] == [] and "sources.json" in status["sources_error"]

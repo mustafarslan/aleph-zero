@@ -85,7 +85,8 @@ def _doc_items(family: str, text: str) -> list[Item]:
     for chunk in chunks:
         if not chunk.breadcrumb:
             continue  # text before the first heading
-        if items and items[-1].qualified == chunk.breadcrumb:  # a long section came out as several chunks
+        if items and items[-1].qualified == chunk.breadcrumb and not _opens_section(chunk):
+            # a long section came out as several chunks
             last = items[-1]
             items[-1] = Item(last.depth, last.kind, last.name, last.qualified, last.signature,
                              last.start_line, chunk.end_line)
@@ -93,6 +94,13 @@ def _doc_items(family: str, text: str) -> list[Item]:
         items.append(Item(chunk.breadcrumb.count(" > "), "section", chunk.symbol, chunk.breadcrumb, chunk.symbol,
                           chunk.start_line, chunk.end_line))
     return items
+
+
+def _opens_section(chunk) -> bool:
+    """True if the chunk starts with its section's heading, so it is a section of its own
+    and not the continuation of the one before, even when both have the same title."""
+    opening = [line.strip().strip("#").strip() for line in chunk.text.split("\n")[:2]]
+    return chunk.symbol in opening
 
 
 def text(outline: Outline, budget_tokens: int = DEFAULT_BUDGET) -> str:
@@ -107,7 +115,8 @@ def text(outline: Outline, budget_tokens: int = DEFAULT_BUDGET) -> str:
         rendered = _lines(head, kept, len(outline.items) - len(kept), budget_tokens)
         if rendered is not None:
             return rendered
-    return _lines(head, [item for item in outline.items if item.depth == 0], 0, budget_tokens, cut=True) or head
+    top = [item for item in outline.items if item.depth == 0]
+    return _lines(head, top, len(outline.items) - len(top), budget_tokens, cut=True) or head
 
 
 def _lines(head: str, items: list[Item], hidden: int, budget: int, cut: bool = False) -> str | None:

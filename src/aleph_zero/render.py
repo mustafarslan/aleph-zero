@@ -11,11 +11,13 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from .chunking import estimate_tokens
+from .chunking.model import TOKENS_PER_CHAR
 from .search import Hit
 
 DEFAULT_BUDGET = 1500   # estimated tokens; the estimate is approximate for Claude's tokenizer
 SNIPPET_LINES = 8
 SHORT_SNIPPET_LINES = 3
+ECHO_LIMIT = 80         # characters of the query repeated in a "no results" answer
 DETAILS = ("locations", "snippets", "full")
 
 
@@ -63,7 +65,8 @@ def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "sni
         raise ValueError(f"detail must be one of {DETAILS}, not {detail!r}")
     notes = _notes(answer)
     if not answer.hits:
-        return "\n".join([f'no results for "{answer.query}"', *notes])
+        asked = answer.query if len(answer.query) <= ECHO_LIMIT else answer.query[:ECHO_LIMIT].rstrip() + "…"
+        return _within("\n".join([f'no results for "{asked}"', *notes]), budget_tokens)
     entries = _entries(answer.hits)
     heads = [_head(entry) for entry in entries]
     spent = estimate_tokens("\n".join(notes)) + (1 if notes else 0)
@@ -108,7 +111,16 @@ def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "sni
             lines.append(bodies[position])
     if omitted:
         lines.append(omitted)
-    return "\n".join([*lines, *notes])
+    return _within("\n".join([*lines, *notes]), budget_tokens)
+
+
+def _within(text_out: str, budget_tokens: int) -> str:
+    """The last line of defence for the ceiling: with a budget too small even for the
+    notes, the text is cut and says so. Normal budgets never reach this."""
+    if estimate_tokens(text_out) <= budget_tokens:
+        return text_out
+    room = max(0, int(budget_tokens / TOKENS_PER_CHAR) - 1)
+    return text_out[:room].rstrip() + "…" if room else ""
 
 
 def _notes(answer: Answer) -> list[str]:

@@ -68,14 +68,15 @@ def expand(text: str) -> str:
 
 
 def query_terms(query: str) -> list[str]:
-    terms: list[str] = []
+    terms: dict[str, None] = {}  # ordered, with constant-time membership
     for match in _WORD.finditer(query):
         token = match.group()
         for term in [token.lower(), *split_identifier(token)]:
-            if term not in terms:
-                terms.append(term)
+            terms.setdefault(term)
+        if len(terms) >= 2 * MAX_TERMS:
+            break  # a pasted log of thousands of words: the rest would be cut anyway
     kept = [term for term in terms if term not in STOPWORDS]
-    return (kept or terms)[:MAX_TERMS]
+    return (kept or list(terms))[:MAX_TERMS]
 
 
 def select_terms(conn, terms: list[str]) -> list[str]:
@@ -87,6 +88,8 @@ def select_terms(conn, terms: list[str]) -> list[str]:
     is returned as it is."""
     if len(terms) <= LONG_QUERY:
         return terms
+    # Line numbers and addresses of a pasted traceback are in few chunks, but by accident.
+    terms = [term for term in terms if not term.isdigit()] or terms
     tokenize = conn.fts5_tokenizer(*TOKENIZER)
     stems: dict[str, str] = {}
     for term in terms:

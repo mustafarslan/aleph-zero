@@ -19,9 +19,11 @@ from .engine import Cancelled, Engine
 from .store import StoreError
 
 # Versions of the protocol this server speaks, newest first. A client proposing one of
-# them gets it; any other proposal gets the newest. The 2026 handshake (`server/discover`)
-# is answered with "method not found", on which clients fall back to `initialize`.
-PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+# them gets it; any other proposal gets the newest. Older versions allowed several requests
+# in one message, which this server does not read, so they are not offered. The 2026
+# handshake (`server/discover`) is answered with "method not found", on which clients fall
+# back to `initialize`.
+PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18")
 SERVER_INFO = {"name": "aleph-zero", "version": "0.1.0"}
 
 INSTRUCTIONS = """\
@@ -53,7 +55,7 @@ _COMMON = {
     "format": {"type": "string", "enum": ["text", "json"], "default": "text"},
     "cwd": {"type": "string", "description": "A directory inside the worktree to ask about. Default: the session's."},
 }
-_TIMEOUT = {"timeout_ms": {"type": "integer", "minimum": 1,
+_TIMEOUT = {"timeout_ms": {"type": "integer", "minimum": 1, "maximum": 600_000,
                            "description": "Answer within this time; a partial answer says so."}}
 TOOLS = [
     {
@@ -76,7 +78,8 @@ TOOLS = [
         "description": "List what a file defines (functions, classes, fields, headings) with line ranges, "
                        "instead of reading the whole file.",
         "inputSchema": {"type": "object", "required": ["path"], "properties": {
-            "path": {"type": "string", "description": "A path relative to the top of the worktree."}, **_COMMON}},
+            "path": {"type": "string", "description": "A path relative to the top of the worktree."},
+            **_COMMON, **_TIMEOUT}},
     },
     {
         "name": "symbol",
@@ -90,7 +93,7 @@ TOOLS = [
     {
         "name": "status",
         "description": "Report what is indexed for this worktree: files, chunks, symbols and files still pending.",
-        "inputSchema": {"type": "object", "properties": {**_COMMON}},
+        "inputSchema": {"type": "object", "properties": {**_COMMON, **_TIMEOUT}},
     },
 ]
 _SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
@@ -104,14 +107,16 @@ class _BadArguments(ValueError):
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     """Answer requests from `incoming` on `outgoing` until the input closes."""
     write_lock = threading.Lock()
+    state = threading.Lock()      # guards the three names below
     calls: queue.Queue = queue.Queue()
-    cancelled: set = set()
+    waiting: set = set()          # ids of calls queued and not yet started
+    cancelled: set = set()        # of those, the ones withdrawn before they started
     running: list = [None]
 
     def send(message: dict) -> None:
         with write_lock:
             try:
-                outgoing.write(json.dumps(message, ensure_ascii=False) + "\n")
+                outgoing.write(json.dumps(message) + "\n")  # ASCII: any path can be written
                 outgoing.flush()
             except (BrokenPipeError, ValueError):
                 pass  # the client has gone; there is nobody to tell
@@ -122,15 +127,19 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             if item is None:
                 return
             ident, name, arguments = item
-            if ident in cancelled:
-                cancelled.discard(ident)
-                continue
-            running[0] = ident
+            with state:
+                waiting.discard(ident)
+                if ident in cancelled:
+                    cancelled.discard(ident)
+                    continue
+                running[0] = ident
             try:
                 result = _call(engine, name, arguments)
             except Cancelled:
                 result = None  # a cancelled request is not answered
-            finally:
+            except BaseException as exc:  # noqa: BLE001 - nothing may end this thread: later calls would hang
+                result = _failure(name, f"failed unexpectedly: {type(exc).__name__}: {exc}")
+            with state:
                 running[0] = None
                 engine.resume()
             if result is not None:
@@ -148,22 +157,27 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             send(_error(None, -32700, "Parse error: the message is not JSON"))
             continue
         if not isinstance(message, dict) or not isinstance(message.get("method"), str):
-            send(_error(message.get("id") if isinstance(message, dict) else None, -32600,
-                        "Invalid request: expected an object with a method"))
+            ident = message.get("id") if isinstance(message, dict) else None
+            send(_error(ident if _is_id(ident) else None, -32600, "Invalid request: expected an object with a method"))
             continue
-        method, ident, params = message["method"], message.get("id"), message.get("params") or {}
+        method, ident, params = message["method"], message.get("id"), message.get("params")
+        params = params if isinstance(params, dict) else {}
+        if "id" in message and not _is_id(ident):
+            send(_error(None, -32600, "Invalid request: an id is a string or a number"))
+            continue
         if method == "notifications/cancelled":
-            target = params.get("requestId") if isinstance(params, dict) else None
-            if target is not None:
-                if running[0] == target:
-                    engine.cancel()
-                else:
-                    cancelled.add(target)
+            target = params.get("requestId")
+            if _is_id(target):
+                with state:
+                    if running[0] == target:
+                        engine.cancel()
+                    elif target in waiting:
+                        cancelled.add(target)  # a request never made is not remembered
             continue
         if ident is None:
             continue  # any other notification: nothing to answer
         if method == "initialize":
-            proposed = params.get("protocolVersion") if isinstance(params, dict) else None
+            proposed = params.get("protocolVersion")
             send({"jsonrpc": "2.0", "id": ident, "result": {
                 "protocolVersion": proposed if proposed in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {"listChanged": False}},
@@ -173,18 +187,28 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
         elif method == "tools/list":
             send({"jsonrpc": "2.0", "id": ident, "result": {"tools": TOOLS}})
         elif method == "tools/call":
-            name = params.get("name") if isinstance(params, dict) else None
-            if name not in _SCHEMAS:
+            name = params.get("name")
+            if not isinstance(name, str) or name not in _SCHEMAS:
                 send(_error(ident, -32602, f"Unknown tool: {name}"))
                 continue
-            arguments = params.get("arguments") or {}
-            calls.put((ident, name, arguments if isinstance(arguments, dict) else {}))
+            with state:
+                waiting.add(ident)
+            calls.put((ident, name, params.get("arguments")))
         else:
             send(_error(ident, -32601, f"Method not found: {method}"))
     engine.cancel()  # the client is gone: whatever is running has no reader
     calls.put(None)
     worker.join(timeout=5)
     return 0
+
+
+def _is_id(value) -> bool:
+    """A JSON-RPC id: a string or a number. Anything else cannot be echoed or tracked."""
+    return isinstance(value, (str, int, float)) and not isinstance(value, bool)
+
+
+def _failure(name: str, reason: str) -> dict:
+    return {"content": [{"type": "text", "text": f"{name} {reason}"}], "isError": True}
 
 
 def _error(ident, code: int, message: str) -> dict:
@@ -198,18 +222,23 @@ def _call(engine: Engine, name: str, arguments: dict) -> dict:
         text = _run(engine, name, _checked(name, arguments))
     except Cancelled:
         raise
+    except gitio.GitTimeout:
+        text = "note: stopped at the time limit before the worktree could be read; no answer. Try a longer timeout_ms."
     except (_BadArguments, gitio.GitError, StoreError, outline.OutlineError, ValueError) as exc:
-        return {"content": [{"type": "text", "text": f"{name} failed: {exc}"}], "isError": True}
+        return _failure(name, f"failed: {exc}")
     except Exception as exc:  # noqa: BLE001 - a defect in the tool must not take the server down
-        return {"content": [{"type": "text", "text": f"{name} failed unexpectedly: {type(exc).__name__}: {exc}"}],
-                "isError": True}
+        return _failure(name, f"failed unexpectedly: {type(exc).__name__}: {exc}")
     return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
-def _checked(name: str, arguments: dict) -> dict:
+def _checked(name: str, arguments) -> dict:
     schema = _SCHEMAS[name]
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        raise _BadArguments("arguments must be an object")
     for required in schema.get("required", ()):
-        if required not in arguments:
+        if arguments.get(required) is None:
             raise _BadArguments(f"missing required argument: {required}")
     checked = {}
     for key, value in arguments.items():
@@ -248,9 +277,9 @@ def _run(engine: Engine, name: str, args: dict) -> str:
             lines.append(f"note: {found.pending} files are not indexed yet; results may be incomplete")
         return "\n".join(lines)
     if name == "outline":
-        result = engine.outline(args["path"], cwd=cwd)
+        result = engine.outline(args["path"], cwd=cwd, timeout_ms=args.get("timeout_ms"))
         return json.dumps(asdict(result)) if as_json else outline.text(result)
-    status = engine.status(cwd=cwd)
+    status = engine.status(cwd=cwd, timeout_ms=args.get("timeout_ms"))
     return json.dumps(status) if as_json else "\n".join(f"{key}: {value}" for key, value in status.items())
 
 

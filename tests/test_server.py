@@ -1,4 +1,5 @@
 import json
+import select
 import subprocess
 import sys
 import time
@@ -24,7 +25,9 @@ class Client:
         self.proc.stdin.write((payload if isinstance(payload, str) else json.dumps(payload)) + "\n")
         self.proc.stdin.flush()
 
-    def read(self):
+    def read(self, seconds=15):
+        ready, _, _ = select.select([self.proc.stdout], [], [], seconds)
+        assert ready, f"no answer from the server within {seconds} s"
         line = self.proc.stdout.readline()
         assert line, "the server closed its output: " + self.proc.stderr.read()[-400:]
         return json.loads(line)
@@ -52,7 +55,11 @@ class Client:
 
     def close(self):
         self.proc.stdin.close()
-        code = self.proc.wait(timeout=10)
+        try:
+            code = self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            code = self.proc.wait()
         self.proc.stdout.close()
         self.proc.stderr.close()
         return code
@@ -202,3 +209,58 @@ def test_the_sdk_client_can_list_and_call_our_tools(repo):
     names, result = anyio.run(run)
     assert sorted(names) == ["outline", "search", "status", "symbol"]
     assert result.is_error is False and "src/billing/invoice.py:1-3" in result.content[0].text
+
+
+def test_ids_of_a_wrong_type_are_refused_and_the_server_lives(client):
+    client.start()
+    client.send({"jsonrpc": "2.0", "id": {"a": 1}, "method": "tools/call", "params": {"name": "status", "arguments": {}}})
+    assert client.read()["error"]["code"] == -32600
+    client.send({"jsonrpc": "2.0", "id": True, "method": "ping"})
+    assert client.read()["error"]["code"] == -32600
+    client.send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": [1]}})
+    client.send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": "nonsense"})
+    assert "root:" in client.text("status")          # tool calls still run
+    client.send({"jsonrpc": "2.0", "id": "text-id", "method": "ping"})
+    assert client.read() == {"jsonrpc": "2.0", "id": "text-id", "result": {}}
+
+
+def test_a_cancellation_for_a_request_never_made_does_not_swallow_a_later_one(client):
+    client.start()
+    client.send({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 7}})
+    client.send({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "status", "arguments": {}}})
+    reply = client.read()
+    assert reply["id"] == 7 and reply["result"]["isError"] is False
+
+
+def test_arguments_that_are_null_or_absurd_are_argument_errors(client):
+    client.start()
+    for arguments, word in (({"query": None}, "query"), ({"query": "x", "timeout_ms": 10**30}, "timeout_ms"),
+                            ({"query": "x", "k": 0}, "k")):
+        result = client.request("tools/call", {"name": "search", "arguments": arguments})["result"]
+        assert result["isError"] is True and word in result["content"][0]["text"]
+        assert "unexpectedly" not in result["content"][0]["text"]
+    not_an_object = client.request("tools/call", {"name": "search", "arguments": ["x"]})["result"]
+    assert not_an_object["isError"] is True
+
+
+def test_only_protocol_versions_without_batching_are_offered(client):
+    assert client.start("2024-11-05")["protocolVersion"] == LATEST
+    assert server.PROTOCOL_VERSIONS == ("2025-11-25", "2025-06-18")
+
+
+def test_a_time_limit_shorter_than_git_needs_is_a_marked_answer_not_an_error(client, repo):
+    client.start()
+    result = client.call("search", query="render_invoice", timeout_ms=1)["result"]
+    assert result["isError"] is False and "time limit" in result["content"][0]["text"]
+    assert "render_invoice" in client.text("search", query="render_invoice")
+    for tool, arguments in (("outline", {"path": "docs/guide.md"}), ("status", {})):
+        slow = client.call(tool, timeout_ms=1, **arguments)["result"]
+        assert slow["isError"] is False and "time limit" in slow["content"][0]["text"]
+
+
+def test_a_query_with_no_results_does_not_echo_five_thousand_words(client):
+    from aleph_zero.chunking import estimate_tokens
+
+    client.start()
+    text = client.text("search", query=" ".join(f"zzqword{i}" for i in range(5000)))
+    assert text.startswith('no results for "zzqword0 ') and estimate_tokens(text) < 100

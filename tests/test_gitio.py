@@ -134,4 +134,19 @@ def test_status_asks_git_in_the_form_its_untracked_cache_can_answer(repo, monkey
     repo.write("fresh/top.py", "a = 1\n")
     seen.clear()
     gitio.status(repo.root)
-    assert len(seen) == 2 and "ls-files" in seen[1]  # a new directory is listed by a second call
+    assert len(seen) == 2 and b"ls-files" in seen[1]  # a new directory is listed by a second call
+
+
+def test_untracked_directories_with_pathspec_magic_in_their_names_are_listed(repo):
+    repo.write(":weird/inside.py", "a = 1\n")
+    repo.write(":(top)odd/inside.py", "b = 2\n")
+    repo.write("-dash/inside.py", "c = 3\n")
+    assert sorted(gitio.status(repo.root)) == [":(top)odd/inside.py", ":weird/inside.py", "-dash/inside.py"] or \
+        sorted(gitio.status(repo.root)) == sorted([":(top)odd/inside.py", ":weird/inside.py", "-dash/inside.py"])
+
+
+def test_thousands_of_untracked_directories_do_not_overflow_the_command_line(repo):
+    long_name = "directory_with_a_long_name_" + "x" * 150
+    for i in range(7000):  # their names alone are longer than one command line may be
+        repo.write(f"{long_name}_{i}/f.py", "a = 1\n")
+    assert len(gitio.status(repo.root)) == 7000

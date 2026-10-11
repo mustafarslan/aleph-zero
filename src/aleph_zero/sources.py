@@ -49,10 +49,12 @@ def _file(common_dir: Path) -> Path:
 
 def _load(common_dir: Path) -> list[Source]:
     try:
-        return [Source(**entry) for entry in json.loads(_file(common_dir).read_text())]
+        entries = json.loads(_file(common_dir).read_text())
+        known = Source.__dataclass_fields__
+        return [Source(**{key: value for key, value in entry.items() if key in known}) for entry in entries]
     except FileNotFoundError:
         return []
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, AttributeError) as exc:
         raise SourceError(f"{_file(common_dir)} is not readable: {exc}") from exc
 
 
@@ -68,9 +70,13 @@ def load(cwd: Path) -> list[Source]:
     return _load(gitio.common_dir(cwd))
 
 
-def clone_dir(location: str) -> Path:
+def clone_dir(common_dir: Path, location: str) -> Path:
+    """Where a URL source of one repository is cloned. The repository is part of the name:
+    two repositories linking the same URL each keep their own clone, so removing or
+    re-adding a source in one cannot take it away from the other."""
     base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    return base / "aleph-zero" / "sources" / hashlib.sha256(location.encode()).hexdigest()[:16]
+    key = hashlib.sha256(f"{common_dir}\0{location}".encode()).hexdigest()[:16]
+    return base / "aleph-zero" / "sources" / key
 
 
 def add(cwd: Path, location: str, name: str | None = None, ref: str | None = None) -> Source:
@@ -85,14 +91,16 @@ def add(cwd: Path, location: str, name: str | None = None, ref: str | None = Non
         raise SourceError(f"there is already a source named {name}")
     if is_url:
         source = Source(name, "url", location, ref)
-        _clone(source)
+        _clone(common_dir, source)
     else:
         resolved = Path(location).expanduser().resolve()
         try:
-            gitio.repo_info(resolved)
+            linked = gitio.repo_info(resolved)
         except gitio.GitError as exc:
             raise SourceError(f"{location} is not a git repository") from exc
-        source = Source(name, "path", str(resolved))
+        if linked.common_dir == common_dir:
+            raise SourceError(f"{location} is this repository; its files are searched already")
+        source = Source(name, "path", str(linked.root))  # the whole repository that contains the path
     _save(common_dir, [*found, source])
     return source
 
@@ -106,7 +114,7 @@ def remove(cwd: Path, name: str) -> None:
     _save(common_dir, kept)
     gone = next(source for source in found if source.name == name)
     if gone.kind == "url":
-        shutil.rmtree(clone_dir(gone.location), ignore_errors=True)
+        shutil.rmtree(clone_dir(common_dir, gone.location), ignore_errors=True)
 
 
 def refresh(cwd: Path, name: str | None = None) -> dict[str, str]:
@@ -126,9 +134,9 @@ def refresh(cwd: Path, name: str | None = None) -> dict[str, str]:
         before = source.tree
         try:
             with gitio.until(time.monotonic() + FETCH_SECONDS):
-                gitio.git(clone_dir(source.location), "fetch", "--quiet", "--prune", "origin",
+                gitio.git(clone_dir(common_dir, source.location), "fetch", "--quiet", "--prune", "origin",
                           "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
-            _resolve(source)
+            _resolve(common_dir, source)
             source.last_error = ""
             report[source.name] = "unchanged" if source.tree == before else "updated"
         except gitio.GitError as exc:
@@ -149,7 +157,7 @@ def mounts(common_dir: Path) -> list[Mount]:
         return out
     for source in found:
         try:
-            out.append(_mount(source))
+            out.append(_mount(common_dir, source))
         except (gitio.GitError, OSError):
             continue
     return out
@@ -163,7 +171,7 @@ def describe(common_dir: Path) -> list[dict]:
         row = {"name": source.name, "kind": source.kind, "location": source.location, "ref": source.ref,
                "files": 0, "age_seconds": None, "last_error": source.last_error}
         try:
-            row["files"] = len(_mount(source).files)
+            row["files"] = len(_mount(common_dir, source).files)
         except (gitio.GitError, OSError) as exc:
             row["last_error"] = str(exc)[:200]
         if source.kind == "url" and source.fetched_at:
@@ -172,33 +180,33 @@ def describe(common_dir: Path) -> list[dict]:
     return rows
 
 
-def _mount(source: Source) -> Mount:
+def _mount(common_dir: Path, source: Source) -> Mount:
     if source.kind == "path":
         info, files, dirty = worktree_files(Path(source.location))
         return Mount(source.name, info.root, info.object_format, files, dirty)
-    directory = clone_dir(source.location)
+    directory = clone_dir(common_dir, source.location)
     if source.tree is None or not directory.is_dir():
         raise gitio.GitError(f"the clone of {source.location} is missing; add the source again")
     return Mount(source.name, directory, source.object_format, tree_files(directory, source.tree), frozenset())
 
 
-def _clone(source: Source) -> None:
-    directory = clone_dir(source.location)
+def _clone(common_dir: Path, source: Source) -> None:
+    directory = clone_dir(common_dir, source.location)
     shutil.rmtree(directory, ignore_errors=True)
     directory.parent.mkdir(parents=True, exist_ok=True)
     try:
         with gitio.until(time.monotonic() + CLONE_SECONDS):
-            gitio.git(directory.parent, "clone", "--quiet", "--bare", source.location, str(directory))
-        _resolve(source)
+            gitio.git(directory.parent, "clone", "--quiet", "--bare", "--", source.location, str(directory))
+        _resolve(common_dir, source)
     except gitio.GitError as exc:
         shutil.rmtree(directory, ignore_errors=True)
         raise SourceError(f"could not clone {source.location}: {exc}") from exc
 
 
-def _resolve(source: Source) -> None:
+def _resolve(common_dir: Path, source: Source) -> None:
     """Record the tree a URL source now points at."""
-    directory = clone_dir(source.location)
-    source.tree = gitio.git(directory, "rev-parse", "--verify", "--quiet",
+    directory = clone_dir(common_dir, source.location)
+    source.tree = gitio.git(directory, "rev-parse", "--verify", "--quiet", "--end-of-options",
                             f"{source.ref or 'HEAD'}^{{tree}}").decode().strip()
     source.object_format = gitio.git(directory, "rev-parse", "--show-object-format").decode().strip()
     source.fetched_at = time.time()

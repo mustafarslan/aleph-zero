@@ -60,7 +60,7 @@ def test_a_cold_index_under_a_time_limit_answers_in_time_and_says_it_is_partial(
     engine = Engine(default_cwd=repo.root)
     started = time.monotonic()
     first = engine.search("function_399_29", timeout_ms=150)
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 0.3
     assert first.timed_out and first.pending > 0
     later = engine.search("function_399_29")  # no limit: the index is finished and the answer is whole
     assert not later.timed_out and later.pending == 0
@@ -77,7 +77,7 @@ def test_a_query_that_runs_past_its_deadline_is_interrupted(repo, monkeypatch):
     monkeypatch.setattr(engine_module, "run_search", endless)
     started = time.monotonic()
     answer = engine.search("render_invoice", timeout_ms=200)
-    assert time.monotonic() - started < 1.5
+    assert time.monotonic() - started < 0.4
     assert answer.timed_out and answer.hits == []
     monkeypatch.undo()
     assert paths(engine.search("render_invoice"))[0] == "src/billing/invoice.py"  # the connection is still usable
@@ -103,3 +103,54 @@ def test_text_shown_once_in_a_session_is_pointed_to_the_second_time(repo):
 def test_outside_a_repository_is_an_error_the_caller_can_show(tmp_path):
     with pytest.raises(gitio.GitError):
         Engine(default_cwd=tmp_path).search("anything")
+
+
+def test_a_time_limit_is_kept_within_a_file_or_two_while_indexing(repo):
+    body = "".join(f"def function_{j}(value):\n    return value + {j}  # {'x' * 60}\n\n\n" for j in range(900))
+    for i in range(120):
+        repo.write(f"big/module_{i}.py", body.replace("function_", f"function_{i}_"))
+    repo.commit("large files")
+    engine = Engine(default_cwd=repo.root)
+    started = time.monotonic()
+    answer = engine.search("function_5_5", timeout_ms=300)
+    took = time.monotonic() - started
+    assert answer.timed_out and answer.pending > 0
+    assert took < 0.45, f"a 300 ms limit took {took * 1000:.0f} ms"
+
+
+def test_a_cancellation_stops_indexing_promptly(repo):
+    import threading
+
+    body = "".join(f"def function_{j}(value):\n    return value + {j}  # {'x' * 60}\n\n\n" for j in range(900))
+    for i in range(120):
+        repo.write(f"big/module_{i}.py", body.replace("function_", f"function_{i}_"))
+    repo.commit("large files")
+    engine = Engine(default_cwd=repo.root)
+    outcome = {}
+
+    def run():
+        try:
+            engine.search("function_5_5")
+            outcome["result"] = "answered"
+        except engine_module.Cancelled:
+            outcome["result"] = "cancelled"
+        outcome["at"] = time.monotonic()
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    time.sleep(0.2)
+    asked = time.monotonic()
+    engine.cancel()
+    worker.join(timeout=10)
+    assert outcome["result"] == "cancelled" and outcome["at"] - asked < 0.4
+    engine.resume()
+    assert engine.search("function_5_5").hits  # and the engine still works
+
+
+def test_building_the_view_of_a_very_dirty_tree_respects_the_time_limit(repo):
+    for i in range(3000):
+        repo.write(f"scratch/file_{i}.txt", f"untracked {i}\n" * 200)
+    engine = Engine(default_cwd=repo.root)
+    started = time.monotonic()
+    answer = engine.search("untracked", timeout_ms=60)
+    assert time.monotonic() - started < 0.25 and answer.timed_out

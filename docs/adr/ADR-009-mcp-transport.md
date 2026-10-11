@@ -28,7 +28,9 @@ The server speaks JSON-RPC over stdio itself. It imports neither `mcp` nor `pyda
 
 The SDK did these for us; each is a test in `tests/test_server.py`:
 
-- Protocol version negotiation in `initialize`: answer with the client's version when we support it, otherwise with our latest.
+- Protocol version negotiation in `initialize`: answer with the client's version when we support it, otherwise with our latest. Only `2025-11-25` and `2025-06-18` are offered: the two older versions allowed several requests in one message, which this server does not read.
+- Request ids are strings or numbers. Anything else (an object, a list, `true`) is refused with -32600, since it can be neither echoed nor tracked; the independent review showed such an id ending the worker thread.
+- A cancellation is remembered only for a call that is actually queued, so one for a request never made cannot swallow a later request with that id.
 - `tools/list` with JSON Schema for every tool and `_meta["anthropic/alwaysLoad"]` on `search`.
 - A tool that fails returns a result with `isError: true` and a message. JSON-RPC errors are for the protocol only (unknown method, malformed request), because clients treat the two differently.
 - `notifications/cancelled` stops a running call.

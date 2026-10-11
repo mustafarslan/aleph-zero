@@ -59,3 +59,20 @@ def test_a_long_query_keeps_its_rarest_words(tmp_path):
     assert lexical.select_terms(conn, short) == short                 # a short query is left alone
     long_query = f"common shared words appear in every chunk {filler} wombat_rotator"
     assert lexical.search(conn, long_query, 5)[0][0] == 8             # and the search finds the chunk with the rare word
+
+
+def test_bare_numbers_are_not_the_rarest_words_of_a_long_query_and_huge_queries_are_cheap(tmp_path):
+    import time
+
+    from aleph_zero.chunking import Chunk
+    from aleph_zero.store import open_db
+
+    conn = open_db(tmp_path / "index.db")
+    for number in range(50):
+        lexical.insert(conn, number + 1, Chunk("block", "", "", "", "", f"queryset defaults line {number} 0xdeadbeef", 1, 1))
+    words = " ".join(f"word{chr(97 + i % 26)}{chr(97 + i // 26)}" for i in range(30))
+    kept = lexical.select_terms(conn, lexical.query_terms(f"{words} queryset defaults 7 13 42 197"))
+    assert "queryset" in kept and not any(term.isdigit() for term in kept)
+    started = time.perf_counter()
+    lexical.search(conn, " ".join(f"unknownword{i}" for i in range(5000)), 10)
+    assert time.perf_counter() - started < 0.1
