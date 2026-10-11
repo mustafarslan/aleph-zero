@@ -5,7 +5,7 @@ process per machine holds it, on the GPU when there is one, and serves every
 session's queries and all indexing. Budget:
 
     sessions x session_baseline + worker <= 1024 MB     (4 sessions)
-    worker <= 600 MB while indexing at the 512-token cap
+    worker <= 600 MB while indexing at the 4096-token capacity
 """
 import argparse
 import json
@@ -24,7 +24,7 @@ SESSIONS = 4
 SESSION_BASELINE_MB = 60.8  # Task 3: private memory of the bare MCP server
 MACHINE_LIMIT_MB = 1024.0
 WORKER_LIMIT_MB = 600.0
-TOKEN_CAP = 512
+TOKEN_CAP = 4096
 
 
 def code_chunk(lines: int, tag: str) -> str:
@@ -59,14 +59,14 @@ def evaluate(name: str) -> dict:
         queries = timed(embedder, [embed_backends.QUERY_PREFIX + f"where is the request handler defined {i}" for i in range(40)])
         report["query_ms"] = round(statistics.median(queries), 1)
         report["private_after_queries_mb"] = private_mb(embedder.pid)
-        typical, large = code_chunk(11, "x"), code_chunk(18, "x")
+        typical, large = code_chunk(11, "x"), code_chunk(165, "x")
         report["typical_chunk_tokens"] = embedder.token_count(typical)
         report["large_chunk_tokens"] = embedder.token_count(large)
         embedder.embed([code_chunk(11, "warm")])
         typical_ms = timed(embedder, [code_chunk(11, f"t{i}") for i in range(64)])
         report["typical_chunk_ms"] = round(statistics.median(typical_ms), 1)
         report["typical_chunks_per_second"] = round(1e3 / statistics.mean(typical_ms), 1)
-        large_ms = timed(embedder, [code_chunk(18, f"l{i}") for i in range(32)])
+        large_ms = timed(embedder, [code_chunk(165, f"l{i}") for i in range(32)])
         report["large_chunk_ms"] = round(statistics.median(large_ms), 1)
         report["private_after_indexing_mb"] = private_mb(embedder.pid)
         report["rss_after_indexing_mb"] = round(memstat.rss_bytes(embedder.pid) / 1e6, 1)
@@ -92,7 +92,7 @@ def lifecycle(name: str, requests: int = 500) -> dict:
             readings = []
             for i in range(requests):
                 kind = i % 5
-                text = code_chunk(18 if kind == 0 else 11, f"r{i}") if kind < 2 else embed_backends.QUERY_PREFIX + f"query {i}"
+                text = code_chunk(165 if kind == 0 else 11, f"r{i}") if kind < 2 else embed_backends.QUERY_PREFIX + f"query {i}"
                 embedder.embed([text])
                 if i >= 100 and i % 50 == 0:
                     readings.append(private_mb(pid))

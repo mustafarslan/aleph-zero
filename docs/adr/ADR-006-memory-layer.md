@@ -76,9 +76,16 @@ Not planned: a lock inside the kernel. The `flock` in Aleph covers it.
 
 **Where they differ:** agy treats tombstones and scores as blocking; the advisor treats them as needed before stale memories pile up. This ADR follows the advisor and records agy's point as the direction for the second iteration: once tombstone and supersede are bound, move the stale and deleted flags into Trace so Aeon prunes inside the index.
 
+## Measurements (M0 probe, 2026-10-11, Aeon `v4` at `05e36d6`)
+
+- **Build:** the core extension built out of tree for Python 3.13 in 2.5 s (CMake 4.3.1, Ninja, Homebrew SIMDe 0.8.2). The Aeon checkout was not modified.
+- **Import:** loading the extension alone pulled in neither PyTorch nor sentence-transformers; the probe process ended at 75.5 MB private.
+- **Open-per-operation is viable.** Lock, open, search, close: 1.9 ms at 5,000 events and 10.9 ms at 50,000. Lock, open, append, close: 2.2 ms and 10.4 ms. Bulk appends cost 0.08 ms each. Disk: 9.5 MB and 86.1 MB.
+- **Nothing lost under the lock.** Two processes interleaving 500 appends each ended with 1,000 events, 500 distinct texts per session and unique ids.
+- **Crowding is real and the over-ask fixes it.** With 60 events from one session and 5 from another sharing an embedding, `semantic_search(top_k=5)` returned none of the 5; `top_k=100` returned all 5. The catalogue filter therefore asks Aeon for 10–20× the results it needs.
+
 ## Open points for the M6 spec
 
-- Whether open-per-operation is fast enough at 5k and 50k events (M0 probe), or a session holds the store open for a whole exchange.
 - Whether memory is per repository only, or also per developer across repositories.
 - Stored conversation text is plaintext on disk and cannot yet be erased through Python. Acceptable for personal use; a consent and erasure story is required before public release.
 - How a wheel is produced so that installing the `memory` extra does not need a C++ toolchain.

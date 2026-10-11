@@ -19,7 +19,6 @@ dependencies = [
 dev = ["pytest>=8"]
 bench = [
   "huggingface-hub>=0.30",
-  "llama-cpp-python>=0.3.36",
   "onnxruntime>=1.31",
   "tokenizers>=0.23",
   "pyarrow>=17",
@@ -40,7 +39,6 @@ testpaths = ["tests"]
 # Always uv's own CPython build, so the bundled SQLite is the same everywhere.
 python-preference = "only-managed"
 
-# llama-cpp-python has no wheels on PyPI, and the macOS arm64 wheels on its own
-# index (0.3.35, 0.3.36; cpu and metal) fail zip integrity checks as of 2026-10-11.
-# It is therefore built from the PyPI sdist. Sync with:
-#   CMAKE_ARGS="-DGGML_METAL=OFF" uv sync --group dev --group bench
+# The embed worker is llama.cpp's own server, built by bench/spikes/build_llama.sh.
+# llama-cpp-python is not used: 0.3.36 cannot load EmbeddingGemma 2 and its macOS
+# arm64 wheels are corrupt upstream (ADR-001).

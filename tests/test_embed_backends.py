@@ -96,3 +96,26 @@ def test_input_longer_than_the_token_cap_is_truncated_not_rejected():
         assert rows.shape == (2, embed_backends.EXPECTED_DIM)
     finally:
         embedder.close()
+
+
+def test_gpu_worker_uses_one_cpu_thread_and_cpu_worker_eight():
+    # Measured: on Metal 1 thread and 8 threads both give ~59 chunks/s, but 8 threads
+    # burn 183% of a core against 17%. On CPU, 8 threads is the optimum.
+    assert embed_backends.worker_threads(gpu=True) == 1
+    assert embed_backends.worker_threads(gpu=False) == 8
+
+
+@pytest.mark.skipif(
+    not embed_backends.LLAMA_SERVERS["cpu"].exists()
+    or not (embed_backends.DATA / "unsloth__embeddinggemma-2-GGUF" / "embeddinggemma-2-UD-Q4_K_XL.gguf").exists(),
+    reason="needs the llama-server build and the Q4 model under bench/data (bench/spikes/build_llama.sh)",
+)
+def test_many_requests_reuse_one_connection():
+    # A connection per request exhausted the ephemeral port range after ~16k calls.
+    embedder = embed_backends.load("gguf-q4", n_ctx=64)
+    try:
+        for i in range(300):
+            assert embedder.token_count(f"value_{i}") > 0
+        assert embedder.connections_opened == 1
+    finally:
+        embedder.close()

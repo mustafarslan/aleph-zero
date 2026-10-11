@@ -134,6 +134,8 @@ class GgufEmbedder:
         self.files = files
         self._n_ctx = n_ctx
         self.socket_path = socket_path
+        self._conn = None
+        self.connections_opened = 0
         self._port = None if socket_path else _free_port()
         self._proc = subprocess.Popen(
             server_command(files[0], threads, n_ctx, gpu, port=self._port, socket_path=socket_path),
@@ -146,26 +148,40 @@ class GgufEmbedder:
                 raise UnsupportedModel(f"llama-server exited with code {self._proc.returncode} while loading {files[0].name}")
             try:
                 if self._request("GET", "/health", None, timeout=2)[0] == 200:
+                    self.connections_opened = 1  # attempts refused during start-up do not count
                     return
-            except OSError:
+            except (OSError, http.client.HTTPException):
                 pass
             if time.time() > deadline:
                 self.close()
                 raise UnsupportedModel("llama-server did not become ready within 120 s")
             time.sleep(0.05)
 
-    def _request(self, method: str, path: str, body: dict | None, timeout: float = 120) -> tuple[int, bytes]:
+    def _connect(self, timeout: float):
+        self.connections_opened += 1
         if self.socket_path:
-            conn = _UnixConnection(str(self.socket_path), timeout)
-        else:
-            conn = http.client.HTTPConnection("127.0.0.1", self._port, timeout=timeout)
-        try:
-            payload = None if body is None else json.dumps(body)
-            conn.request(method, path, body=payload, headers={"Content-Type": "application/json"})
-            response = conn.getresponse()
-            return response.status, response.read()
-        finally:
-            conn.close()
+            return _UnixConnection(str(self.socket_path), timeout)
+        return http.client.HTTPConnection("127.0.0.1", self._port, timeout=timeout)
+
+    def _request(self, method: str, path: str, body: dict | None, timeout: float = 120) -> tuple[int, bytes]:
+        """One keep-alive connection for the worker's lifetime; reconnect once if it drops.
+
+        A connection per request exhausts the ephemeral port range after ~16k calls.
+        """
+        payload = None if body is None else json.dumps(body)
+        for attempt in (0, 1):
+            if self._conn is None:
+                self._conn = self._connect(timeout)
+            try:
+                self._conn.request(method, path, body=payload, headers={"Content-Type": "application/json"})
+                response = self._conn.getresponse()
+                return response.status, response.read()
+            except (http.client.HTTPException, OSError):
+                self._conn.close()
+                self._conn = None
+                if attempt == 1:
+                    raise
+        raise AssertionError("unreachable")
 
     def token_count(self, text: str) -> int:
         status, data = self._request("POST", "/tokenize", {"content": text})
@@ -199,6 +215,9 @@ class GgufEmbedder:
         return _normalize(np.stack(rows))
 
     def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
         if self._proc.poll() is None:
             self._proc.terminate()
             self._proc.wait(timeout=20)
@@ -236,10 +255,17 @@ class OnnxEmbedder:
         return _normalize(np.stack(rows))
 
 
-def load(name: str, threads: int = 8, n_ctx: int = 512, socket_path: Path | None = None):
-    """n_ctx is the token cap: 512 by decision (ADR-001). 8 threads is the measured CPU optimum."""
+def worker_threads(gpu: bool) -> int:
+    """CPU threads for the embed worker: the GPU needs one, the CPU path peaks at eight."""
+    return 1 if gpu else 8
+
+
+def load(name: str, threads: int | None = None, n_ctx: int = 4096, socket_path: Path | None = None):
+    """n_ctx is the worker's token capacity: 4096 (ADR-001). Threads default to worker_threads()."""
     files = fetch(name)
     backend = CONFIGS[name][0]
+    gpu = backend == "gguf-gpu"
+    threads = worker_threads(gpu) if threads is None else threads
     if backend == "onnx":
         return OnnxEmbedder(files, threads, n_ctx)
-    return GgufEmbedder(files, threads, n_ctx, gpu=backend == "gguf-gpu", socket_path=socket_path)
+    return GgufEmbedder(files, threads, n_ctx, gpu=gpu, socket_path=socket_path)
