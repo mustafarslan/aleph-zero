@@ -155,3 +155,19 @@ def test_a_word_that_cannot_tell_files_apart_is_not_a_path_match(repo):
     assert not any("path" in hit.sources for hit in _find(repo, "py", k=50))   # every file's extension
     assert not any("path" in hit.sources for hit in _find(repo, "mod", k=50))  # forty files tie
     assert "path" in _find(repo, "invoice")[0].sources                         # one file is named for it
+
+
+def test_the_same_bytes_under_two_treatments_are_chunked_once_for_each(repo):
+    text = "# Notes\n\nThe walrusword lives here.\n"
+    repo.write("notes.md", text)
+    repo.write("notes.cfg", text)
+    assert {hit.path: hit.kind for hit in _find(repo, "walrusword")} == {"notes.md": "doc", "notes.cfg": "block"}
+    assert _paths(_find(repo, "walrusword", kind="code")) == ["notes.cfg"]
+    assert _paths(_find(repo, "walrusword", kind="docs")) == ["notes.md"]
+    assert _paths(_find(repo, "walrusword", path_glob="*.cfg")) == ["notes.cfg"]
+
+
+def test_a_lockfiles_bytes_under_another_name_are_indexed(repo):
+    repo.write("uv.lock", "ocelotword = 1\n")
+    repo.write("config/settings.toml", "ocelotword = 1\n")
+    assert _paths(_find(repo, "ocelotword")) == ["config/settings.toml"]

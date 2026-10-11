@@ -55,10 +55,10 @@ def test_long_markdown_section_is_split_and_keeps_its_breadcrumb():
     assert chunks[0].start_line == 1 and chunks[-1].end_line == 101
 
 
-def test_chunk_file_picks_markdown_by_suffix_and_windows_otherwise():
-    assert chunk_file("README.md", "doc", "# T\n\nbody\n")[0].breadcrumb == "T"
-    assert chunk_file("notes.txt", "doc", "plain\n")[0].kind == "doc"
-    assert chunk_file("a.py", "text", "x = 1\n")[0].kind == "block"
+def test_chunk_file_picks_the_chunker_by_family():
+    assert chunk_file("markdown", "doc", "# T\n\nbody\n")[0].breadcrumb == "T"
+    assert chunk_file("prose", "doc", "plain\n")[0].kind == "doc"
+    assert chunk_file("text", "text", "x = 1\n")[0].kind == "block"
 
 
 def test_token_estimate_uses_the_measured_ratio():

@@ -9,7 +9,7 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -53,6 +53,16 @@ def _retry_while_busy(action, seconds: float = 10.0):
             time.sleep(0.05)
 
 
+def _drop_everything(conn: apsw.Connection) -> None:
+    """Remove every table. Virtual tables go first: they own their shadow tables."""
+    for virtual in (True, False):
+        names = [row[0] for row in conn.execute(
+            "SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+            "AND (sql LIKE 'CREATE VIRTUAL%') = ?", (virtual,))]
+        for name in names:
+            conn.execute(f'DROP TABLE IF EXISTS main."{name}"')
+
+
 def open_db(path: Path) -> apsw.Connection:
     version = tuple(int(part) for part in apsw.sqlite_lib_version().split("."))
     if version < MIN_SQLITE:
@@ -66,20 +76,26 @@ def open_db(path: Path) -> apsw.Connection:
     conn.pragma("foreign_keys", True)
     conn.pragma("temp_store", "memory")
 
-    def create_schema_if_new() -> int:
+    def create_schema() -> int:
         with transaction(conn):
-            if conn.pragma("user_version") == 0:  # checked under the write lock
+            found = conn.pragma("user_version")  # checked under the write lock
+            if 0 < found < SCHEMA_VERSION:
+                _drop_everything(conn)  # the index is a cache: an older one is rebuilt
+                found = 0
+            if found == 0:
                 conn.execute(_SCHEMA.read_text())
                 conn.pragma("user_version", SCHEMA_VERSION)
         return conn.pragma("user_version")
 
-    found = _retry_while_busy(create_schema_if_new)
+    found = _retry_while_busy(create_schema)
     if found != SCHEMA_VERSION:
         raise StoreError(f"{path} has schema version {found}; this build reads version {SCHEMA_VERSION}")
     # The current view, per connection: which blobs and chunks a query may return.
-    conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_blobs(blob_oid TEXT PRIMARY KEY) WITHOUT ROWID")
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_blobs("
+                 "blob_oid TEXT NOT NULL, family TEXT NOT NULL, PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_chunks(chunk_id INTEGER PRIMARY KEY)")
     # A query's kind or path filter narrows the view before candidates are ranked.
-    conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_blobs(blob_oid TEXT PRIMARY KEY) WITHOUT ROWID")
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_blobs("
+                 "blob_oid TEXT NOT NULL, family TEXT NOT NULL, PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS scope_chunks(chunk_id INTEGER PRIMARY KEY)")
     return conn

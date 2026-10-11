@@ -1,9 +1,13 @@
+-- One row per (content, treatment). The family is what a path selects: a language,
+-- Markdown, plain text. The same bytes under two families are chunked once for each.
 CREATE TABLE IF NOT EXISTS blobs (
-    blob_oid        TEXT PRIMARY KEY,
+    blob_oid        TEXT NOT NULL,
+    family          TEXT NOT NULL,
     kind            TEXT NOT NULL,      -- 'doc', 'text', or 'skip:<reason>'
     size            INTEGER NOT NULL,
     chunker_version INTEGER NOT NULL,
-    last_seen_at    INTEGER NOT NULL    -- unix seconds; garbage collection is by age
+    last_seen_at    INTEGER NOT NULL,   -- unix seconds; garbage collection is by age
+    PRIMARY KEY (blob_oid, family)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -17,12 +21,14 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 CREATE TABLE IF NOT EXISTS blob_chunks (
-    blob_oid   TEXT NOT NULL REFERENCES blobs(blob_oid) ON DELETE CASCADE,
+    blob_oid   TEXT NOT NULL,
+    family     TEXT NOT NULL,
     ord        INTEGER NOT NULL,
     chunk_id   INTEGER NOT NULL REFERENCES chunks(chunk_id),
     start_line INTEGER NOT NULL,
     end_line   INTEGER NOT NULL,
-    PRIMARY KEY (blob_oid, ord)
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS blob_chunks_by_chunk ON blob_chunks(chunk_id);

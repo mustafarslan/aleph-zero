@@ -79,8 +79,8 @@ def markdown_chunks(text: str) -> list[Chunk]:
     return chunks
 
 
-def chunk_file(path: str, kind: str, text: str) -> list[Chunk]:
-    """Chunks for a file with no language-specific chunker (those arrive with the language layer)."""
-    if PurePosixPath(path).suffix.lower() in {".md", ".mdx"}:
+def chunk_file(family: str, kind: str, text: str) -> list[Chunk]:
+    """Chunks for a family with no language-specific chunker."""
+    if family == "markdown":
         return markdown_chunks(text)
     return window_chunks(text, kind="doc" if kind == "doc" else "block")

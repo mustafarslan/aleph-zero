@@ -5,7 +5,9 @@ from pathlib import PurePosixPath
 
 MAX_BYTES = 300_000
 MAX_AVERAGE_LINE = 500
-DOC_SUFFIXES = {".md", ".mdx", ".rst", ".txt"}
+MARKDOWN_SUFFIXES = {".md", ".mdx"}
+PROSE_SUFFIXES = {".rst", ".txt"}
+DOC_FAMILIES = {"markdown", "prose"}
 LOCKFILES = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock", "poetry.lock",
     "uv.lock", "go.sum", "composer.lock", "Gemfile.lock",
@@ -13,10 +15,23 @@ LOCKFILES = {
 _LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 
 
-def classify(path: str, data: bytes) -> tuple[str, str | None]:
+def family(path: str) -> str:
+    """The treatment a path selects. The index holds one set of chunks per (blob, family),
+    so the same bytes at `notes.md` and `notes.py` are each chunked their own way."""
+    pure = PurePosixPath(path)
+    if pure.name in LOCKFILES:
+        return "lockfile"
+    suffix = pure.suffix.lower()
+    if suffix in MARKDOWN_SUFFIXES:
+        return "markdown"
+    if suffix in PROSE_SUFFIXES:
+        return "prose"
+    return "text"
+
+
+def classify(family: str, data: bytes) -> tuple[str, str | None]:
     """('doc' | 'text', decoded text) for an indexable file, or ('skip:<reason>', None)."""
-    name = PurePosixPath(path).name
-    if name in LOCKFILES:
+    if family == "lockfile":
         return "skip:lockfile", None
     if len(data) > MAX_BYTES:
         return "skip:too-large", None
@@ -33,5 +48,4 @@ def classify(path: str, data: bytes) -> tuple[str, str | None]:
     lines = text.count("\n") + 1
     if len(text) / lines > MAX_AVERAGE_LINE:
         return "skip:minified", None
-    kind = "doc" if PurePosixPath(path).suffix.lower() in DOC_SUFFIXES else "text"
-    return kind, text
+    return ("doc" if family in DOC_FAMILIES else "text"), text

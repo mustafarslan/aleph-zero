@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from . import lexical
+from . import filters, lexical
 from .indexer import Index
 from .view import View
 
@@ -63,7 +63,8 @@ def path_ranking(index: Index, view: View, terms: list[str],
     chunk_ids: list[int] = []
     for _, path in scored[:PATH_CANDIDATES]:
         rows = index.conn.execute(
-            "SELECT chunk_id FROM blob_chunks WHERE blob_oid = ? AND ord = 0", (view.files[path],)).fetchall()
+            "SELECT chunk_id FROM blob_chunks WHERE blob_oid = ? AND family = ? AND ord = 0",
+            (view.files[path], filters.family(path))).fetchall()
         if rows:
             chunk_ids.append(rows[0][0])
     return chunk_ids
@@ -112,21 +113,21 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     marks = ",".join("?" * len(fused))
     occurrences: dict[int, list[tuple]] = {}
     for row in index.conn.execute(
-        "SELECT bc.chunk_id, bc.blob_oid, bc.start_line, bc.end_line, c.kind, c.symbol, c.signature, "
+        "SELECT bc.chunk_id, bc.blob_oid, bc.family, bc.start_line, bc.end_line, c.kind, c.symbol, c.signature, "
         "c.breadcrumb, c.text FROM blob_chunks bc JOIN chunks c ON c.chunk_id = bc.chunk_id "
-        "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid "
-        f"WHERE bc.chunk_id IN ({marks}) ORDER BY bc.blob_oid, bc.ord",
+        "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
+        f"WHERE bc.chunk_id IN ({marks}) ORDER BY bc.blob_oid, bc.family, bc.ord",
         [chunk_id for chunk_id, _, _ in fused],
     ):
         occurrences.setdefault(row[0], []).append(row[1:])
     hits: list[Hit] = []
     for chunk_id, score, sources in fused:
-        for oid, start, end, chunk_kind, symbol, signature, breadcrumb, text in occurrences.get(chunk_id, ()):
+        for oid, family, start, end, chunk_kind, symbol, signature, breadcrumb, text in occurrences.get(chunk_id, ()):
             if kind == "docs" and chunk_kind != "doc":
                 continue
             if kind == "code" and chunk_kind == "doc":
                 continue
-            for path in view.paths_for(oid):
+            for path in index.paths_for(oid, family):
                 if accept is None or accept(path):
                     hits.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, score, sources))
     return arrange(hits, k, kind)
