@@ -36,6 +36,7 @@ CONFIGS: dict[str, tuple[str, str, list[str]]] = {
 
 
 EXPECTED_DIM = 768
+TRUNCATION_MARGIN = 8  # room for the special tokens the server adds back
 
 
 class FetchError(RuntimeError):
@@ -131,6 +132,7 @@ class GgufEmbedder:
         if not binary.exists():
             raise UnsupportedModel(f"llama-server is not built at {binary}; run bench/spikes/build_llama.sh")
         self.files = files
+        self._n_ctx = n_ctx
         self.socket_path = socket_path
         self._port = None if socket_path else _free_port()
         self._proc = subprocess.Popen(
@@ -171,10 +173,23 @@ class GgufEmbedder:
             raise UnsupportedModel(f"tokenize failed with HTTP {status}")
         return len(json.loads(data)["tokens"])
 
+    def _truncate(self, text: str) -> str:
+        """Cut text to the token cap. The server rejects over-length input instead of truncating it."""
+        status, data = self._request("POST", "/tokenize", {"content": text})
+        if status != 200:
+            raise UnsupportedModel(f"tokenize failed with HTTP {status}")
+        tokens = json.loads(data)["tokens"][: self._n_ctx - TRUNCATION_MARGIN]
+        status, data = self._request("POST", "/detokenize", {"tokens": tokens})
+        if status != 200:
+            raise UnsupportedModel(f"detokenize failed with HTTP {status}")
+        return json.loads(data)["content"]
+
     def embed(self, texts: list[str]) -> np.ndarray:
         rows = []
         for text in texts:
             status, data = self._request("POST", "/v1/embeddings", {"input": text})
+            if status == 500 and b"too large" in data:
+                status, data = self._request("POST", "/v1/embeddings", {"input": self._truncate(text)})
             if status != 200:
                 raise UnsupportedModel(f"embedding failed with HTTP {status}: {data[:200].decode(errors='replace')}")
             vector = np.asarray(json.loads(data)["data"][0]["embedding"], dtype=np.float32)

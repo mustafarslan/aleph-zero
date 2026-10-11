@@ -80,3 +80,19 @@ def test_llama_server_can_listen_on_a_private_unix_socket(tmp_path):
 def test_gpu_and_cpu_configs_exist_for_the_worker():
     assert embed_backends.CONFIGS["gguf-q8-gpu"][0] == "gguf-gpu"
     assert embed_backends.CONFIGS["gguf-q4"][0] == "gguf"
+
+
+@pytest.mark.skipif(
+    not embed_backends.LLAMA_SERVERS["cpu"].exists()
+    or not (embed_backends.DATA / "unsloth__embeddinggemma-2-GGUF" / "embeddinggemma-2-UD-Q4_K_XL.gguf").exists(),
+    reason="needs the llama-server build and the Q4 model under bench/data (bench/spikes/build_llama.sh)",
+)
+def test_input_longer_than_the_token_cap_is_truncated_not_rejected():
+    embedder = embed_backends.load("gguf-q4", n_ctx=64)
+    try:
+        long_text = embed_backends.DOC_PREFIX + " ".join(f"token_{i}" for i in range(400))
+        assert embedder.token_count(long_text) > 64
+        rows = embedder.embed([long_text, embed_backends.QUERY_PREFIX + "short"])
+        assert rows.shape == (2, embed_backends.EXPECTED_DIM)
+    finally:
+        embedder.close()
