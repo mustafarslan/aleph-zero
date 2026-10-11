@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import gitio, outline, render, sources
+from . import doctor, gitio, outline, render, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -101,6 +101,16 @@ def _source(args) -> int:
     return 0
 
 
+def _doctor(args) -> int:
+    if args.fetch_grammars:
+        from .lang import parse
+
+        print(f"fetched grammars ({parse.ensure_grammars()} downloaded)")
+    rows = doctor.check(args.cwd)
+    print(doctor.text(rows))
+    return 1 if any(row.level == "FAIL" for row in rows) else 0
+
+
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
@@ -159,6 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     actions.add_parser("remove").add_argument("name")
     actions.add_parser("refresh", help="fetch URL sources now").add_argument("name", nargs="?")
     source.set_defaults(run=_source)
+
+    health = commands.add_parser("doctor", help="check that everything Aleph needs is in place")
+    health.add_argument("--fetch-grammars", action="store_true", help="download missing grammars (uses the network)")
+    health.set_defaults(run=_doctor)
 
     gc = commands.add_parser("gc", help="drop content no view has used recently")
     gc.add_argument("--days", type=float, default=30.0)
