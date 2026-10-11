@@ -87,6 +87,9 @@ class LanguageProfile:
     #: `type_spec` is a class when it holds a `struct_type`, an interface when it holds
     #: an `interface_type`, and an alias otherwise.
     type_refinement: Mapping[str, str] = field(default_factory=dict)
+    #: Statements that hold one declaration and nothing else, whose lines belong to it:
+    #: `type X struct{}` around a Go type_spec, `export const f = ...` around a declarator.
+    holders: frozenset[str] = frozenset()
     #: True where a name is reached by following `declarator` fields: C and C++.
     declarator_chain: bool = False
     #: Tokens that make a value a constant: `const`, `constexpr`, `readonly`.

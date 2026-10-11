@@ -51,7 +51,7 @@ def test_every_node_kind_named_in_a_profile_exists_in_its_grammar(name):
     language = parse.language(profile)
     kinds = (set(profile.function_like) | set(profile.anonymous) | set(profile.types) | set(profile.values)
              | set(profile.wrappers) | set(profile.comment_kinds) | set(profile.string_kinds)
-             | set(profile.type_refinement) | set(profile.imports.statement_kinds)
+             | set(profile.type_refinement) | set(profile.holders) | set(profile.imports.statement_kinds)
              | set(profile.imports.relative_kinds) | set(profile.imports.wildcard_kinds)
              | set(profile.imports.alias_kinds) | set(profile.imports.string_kinds) | set(profile.imports.call_kinds))
     unknown = sorted(kind for kind in kinds if language.id_for_node_kind(kind, True) is None)
