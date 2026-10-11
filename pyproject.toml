@@ -25,6 +25,9 @@ bench = [
   "nanobind>=2.0",
 ]
 
+[project.scripts]
+aleph = "aleph_zero.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
