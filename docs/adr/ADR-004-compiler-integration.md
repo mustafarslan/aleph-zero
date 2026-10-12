@@ -50,7 +50,7 @@ The protocol and the limit were written into the plan before the first run. Each
 | go | scip-go 0.2.7 | go-kit | not measured | | | import-only until measured |
 | typescript | scip-typescript 0.4.0 | typescript-nest | not measured | | | import-only until measured |
 | javascript | scip-typescript 0.4.0 | javascript-eslint | not measured | | | import-only until measured |
-| rust | rust-analyzer rust-analyzer 0.0.0 (65ac641199 2026-10-04) | rust-ripgrep | not measured | | | import-only until measured |
+| rust | rust-analyzer 0.0.0 (65ac641199 2026-10-04) | rust-ripgrep | not measured | | | import-only until measured |
 
 - **Four of six could not be measured here.** On a fresh copy their dependencies could not be installed without the network: Go lacked a module in the local cache, Rust a crate, and npm ended with a dependency-resolution error for both nest and eslint (whether the network would have changed that was not tried). An indexer run without its project's dependencies resolves nothing outside the project, so it was not run: a smaller figure from a degenerate run would say nothing. They are import-only until measured; finishing the measurement needs the network once, which is the owner's call (DEFERRED).
 - The Java figure is with Maven's local repository already filled, offline. oxn's 361 s was a cold build.
