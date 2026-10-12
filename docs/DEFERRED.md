@@ -55,6 +55,8 @@ Things that are not being done now on purpose. Each entry says what it is, why i
   - *agy:* keep fetching and indexing in sequence (running them beside the embedding saves about 2% and competes for memory); check mains power and disk before starting.
   - *Mine:* both taken. Not built: indexing the next repository while the GPU embeds the current one, for agy's reason. The lid: a MacBook throttles hard when closed under load ([an M3 Air fell to about half its GPU speed in 20 minutes](https://www.cultofmac.com/850542/m3-macbook-air-performance-clamshell-mode/)); leave it open.
 
+- **Small things the review of the long-run controls left (2026-10-12, none changes a result).** A status whose process id was taken by another process reads as "running". A pause asked for during a long fetch waits until that repository is indexed too. `run` has no heat guard of its own (it embeds one text a question). "Going on" can be said twice after a wait. With `--away` the guard reads the hottest of all sensors, so a part other than the chip at 97 °C would end the run (the same command takes it up). Say if any of these should be closed before the run.
+
 ## 1b. Benchmarks for the languages other than Python
 
 - **What:** the gate is read per language (ADR-002), and Loc-Bench is Python only. For C++, C, Go, Java, JavaScript, TypeScript and Rust there are no questions yet, so those languages have no verdict and search by meaning stays off for projects written mainly in them.
