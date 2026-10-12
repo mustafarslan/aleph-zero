@@ -202,6 +202,16 @@ def watch(command: list[str], cwd: Path, limit: float | None = None, time_limit:
             "processes": most, "samples": samples, "hottest_c": round(hottest, 1), "stopped": stopped, "last_lines": tail}
 
 
+_INFERRED = frozenset({"{}", '{"compilerOptions":{"allowJs":true}}'})      # what scip-typescript writes for a project with no tsconfig
+
+
+def _inferred(file: Path) -> bool:
+    try:
+        return file.stat().st_size < 200 and "".join(file.read_text().split()) in _INFERRED
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def run(root: Path, language: str, out: Path, limit: float | None = None, time_limit: float | None = None,
         files: list[str] | None = None, named: bool = True) -> dict:
     """Run the indexer for `language` on the worktree at `root`, writing to `out`. An indexer that runs
@@ -241,7 +251,9 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
             found = watch(command, where, limit, TIME_LIMIT_SECONDS if time_limit is None else time_limit)
         finally:
             for name in indexer.leaves:
-                if name not in mine and (where / name).is_file():
+                # Removed only when it was not there before and is what the indexer itself writes: a file of
+                # that name with anything else in it was put there by the owner while the indexer ran.
+                if name not in mine and (where / name).is_file() and _inferred(where / name):
                     (where / name).unlink()
     if found["stopped"]:
         raise CannotRun(f"{indexer.program} was stopped: {found['stopped']} (peak {found['peak_mb']} MB, {found['seconds']} s). "

@@ -534,3 +534,14 @@ def test_an_older_build_s_write_never_replaces_a_newer_build_s_row(repo, monkeyp
     assert older.conn.execute("SELECT chunker_version FROM blobs WHERE blob_oid = ? AND family = ?", key).fetchall() == [(indexer.CHUNKER_VERSION + 1,)]
     older.conn.execute("UPDATE blobs SET chunker_version = ? WHERE blob_oid = ? AND family = ?", (indexer.CHUNKER_VERSION - 1, *key))
     assert older._store(item) is True                        # an older row is still replaced: that is an upgrade
+
+
+def test_the_first_question_finds_a_path_whose_word_ends_in_a_capital_sigma(repo):
+    """Lower-casing a whole path and lower-casing one word of it disagree on a final sigma."""
+    from aleph_zero.search import path_ranking
+
+    repo.write("docs/ΟΔΟΣ.md", "# Οδός\n")              # lower-cased whole: `οδοσ.md`; its one word alone: `οδος`
+    fresh, view = _index(repo), build_view(repo.root)
+    fresh.sync(view)
+    first = path_ranking(fresh, view, ["οδος"])
+    assert first and first == path_ranking(fresh, view, ["οδος"])             # the second builds the maps, and agrees

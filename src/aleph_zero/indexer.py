@@ -262,7 +262,10 @@ class Index:
         if self._path_words is None and terms is not None and not self._paths_asked:
             self._paths_asked = True
             wanted = set(terms)
-            return _path_words((path for path in view.files if any(term in path.lower() for term in wanted)), wanted)
+            # A word lower-cased alone ends in a final sigma where the same word inside a longer text does not.
+            plain = [term.replace("ς", "σ") for term in wanted]
+            return _path_words((path for path in view.files
+                                if any(term in path.lower().replace("ς", "σ") for term in plain)), wanted)
         if self._path_words is None:
             self._path_words = _path_words(view.files, None)
         return self._path_words

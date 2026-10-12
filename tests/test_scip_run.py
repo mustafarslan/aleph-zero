@@ -157,3 +157,23 @@ def test_naming_less_memory_than_the_default_does_not_unlock_an_indexer_measured
     with pytest.raises(indexers.CannotRun, match="--lang python"):  # and never because it happens to be the main language
         engine.scip_run()
     assert Engine(repo.root).scip_run("python")["imported"]["documents"] == 4
+
+
+def test_a_file_that_appears_during_the_run_and_is_not_what_the_indexer_infers_is_left(project, tmp_path, monkeypatch):
+    """The indexer infers `{}` or `{"compilerOptions":{"allowJs":true}}`. Anything else of that name was written
+    by the owner while it ran, and is theirs."""
+    import dataclasses
+
+    repo, made = project
+    script = (f"import pathlib, shutil, sys\npathlib.Path('tsconfig.json').write_text(CONTENT)\n"
+              f"shutil.copy({str(made)!r}, sys.argv[-1])\n")
+    monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", "3072")
+    for content, stays in (('{"compilerOptions":{"allowJs":true}}', False), ('{}\n', False), ('{"compilerOptions": {"strict": true}}', True)):
+        (repo.root / "tsconfig.json").unlink(missing_ok=True)
+        stand = dataclasses.replace(stand_in(tmp_path, script.replace("CONTENT", repr(content))), on_demand=False, leaves=("tsconfig.json",))
+        monkeypatch.setitem(indexers.INDEXERS, "python", stand)
+        try:
+            Engine(repo.root).scip_run("python")
+        except indexers.CannotRun:
+            pass        # a file of the owner's that appeared makes the run's result unusable; it must still be there
+        assert (repo.root / "tsconfig.json").exists() is stays, content
