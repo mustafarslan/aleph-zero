@@ -27,7 +27,8 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import NamedTuple
@@ -38,6 +39,7 @@ from .lang.definitions import Definition
 
 CANDIDATE_LIMIT = 20
 HOPS = 6
+FILES_KEPT = 500            # records of files a graph keeps loaded (some 15 KB each); the least recently used go first
 # The three extensions over oxn's resolver, switchable so each can be measured apart (ADR-003).
 FEATURES = frozenset({"reexports", "packages", "receivers"})
 MANIFESTS = ("go.mod", "Cargo.toml", "package.json", "tsconfig.json", "tsconfig.base.json")
@@ -75,14 +77,166 @@ class FileFacts:
     fields: list[tuple[str, str, str]] = field(default_factory=list)   # (type, field, the field's type as written)
 
 
-@dataclass(frozen=True)
-class Target:
+class Target(NamedTuple):
     path: str
     name: str
     qualified: str
     kind: str
     start_line: int
     end_line: int
+
+
+class Source:
+    """Where a graph gets its facts. A graph asks for one file at a time, as a question reaches it, so a
+    view of a hundred thousand files costs what the question touches and not what the view holds."""
+
+    def paths(self) -> Collection[str]:
+        """Every code file there is: asked whether a path exists, and listed by directory."""
+        raise NotImplementedError
+
+    def facts(self, path: str) -> FileFacts | None:
+        raise NotImplementedError
+
+    def named(self, group: str, name: str) -> list[Target]:
+        """Every definition of that exact name in the languages of `group`."""
+        raise NotImplementedError
+
+    def type_files(self, group: str, simple: str) -> list[str]:
+        """The files that may declare a part of a type of that name (a base, a field): a superset is fine."""
+        raise NotImplementedError
+
+    def signature(self, target: Target) -> str:
+        raise NotImplementedError
+
+
+class InMemory(Source):
+    """Facts handed over whole: the tests, and the grader's corpora read from disk."""
+
+    def __init__(self, files: dict[str, FileFacts]) -> None:
+        self._files = files
+        self._named: dict[tuple[str, str], list[Target]] = {}
+        self._types: dict[tuple[str, str], dict[str, None]] = {}
+        for path, facts in files.items():
+            group = _group(facts.family)
+            for definition in facts.definitions:
+                if definition.kind not in _UNNAMED:
+                    self._named.setdefault((group, definition.name), []).append(Target(
+                        path, definition.name, definition.qualified, definition.kind, definition.start_line, definition.end_line))
+            for owner in [kind for kind, _ in facts.bases] + [kind for kind, _, _ in facts.fields]:
+                self._types.setdefault((group, owner.rsplit(".", 1)[-1]), {})[path] = None
+
+    def paths(self) -> Collection[str]:
+        return self._files.keys()
+
+    def facts(self, path: str) -> FileFacts | None:
+        return self._files.get(path)
+
+    def named(self, group: str, name: str) -> list[Target]:
+        return self._named.get((group, name), [])
+
+    def type_files(self, group: str, simple: str) -> list[str]:
+        return list(self._types.get((group, simple), ()))
+
+    def signature(self, target: Target) -> str:
+        return next((definition.signature for definition in self._files[target.path].definitions
+                     if definition.qualified == target.qualified and definition.start_line == target.start_line), "")
+
+
+class _File:
+    """One file's facts, indexed for lookup. Built when a question first reaches the file."""
+    __slots__ = ("family", "definitions", "bindings", "top", "members", "kinds", "bound", "wild", "published", "package",
+                 "bases", "fields", "imported")
+
+    def __init__(self, path: str, facts: FileFacts) -> None:
+        self.family, self.bindings = facts.family, facts.bindings
+        # Every definition, in the file's order (a call names its caller by position), as the one record kept of it.
+        self.definitions = [Target(path, d.name, d.qualified, d.kind, d.start_line, d.end_line) for d in facts.definitions]
+        self.top: dict[str, list[Target]] = {}          # name -> the file's own names
+        self.members: dict[str, list[Target]] = {}      # 'Owner.name' -> what an owner holds
+        self.kinds: dict[str, str] = {}                 # qualified -> kind
+        self.bound: dict[str, list[Binding]] = {}       # local name -> its import bindings
+        self.wild: list[Binding] = []                   # imports of everything a module has
+        self.published: dict[str, list[Binding]] = {}   # a name it publishes -> its own name for it
+        self.package = ""                               # the package it says it belongs to
+        self.bases: dict[str, list[str]] = {}           # type -> what it is built on, as written
+        self.fields: dict[str, dict[str, str]] = {}     # type -> field -> its type as written
+        self.imported = frozenset(binding.local for binding in facts.bindings if binding.kind == "import")
+        for target in self.definitions:
+            if target.kind in _VALUES and target.name in self.imported and "." not in target.qualified:
+                continue    # `const Thing = require('./thing')` declares nothing: the name is the import
+            self.kinds[target.qualified] = target.kind
+            if target.kind in _UNNAMED:
+                continue
+            holder, key = (self.members, target.qualified) if "." in target.qualified else (self.top, target.name)
+            holder.setdefault(key, []).append(target)
+        for binding in facts.bindings:
+            if binding.kind == "package":
+                self.package = binding.local
+            elif binding.kind == "export":
+                self.published.setdefault(binding.local, []).append(binding)
+            elif binding.local == "*":
+                self.wild.append(binding)
+            else:
+                self.bound.setdefault(binding.local, []).append(binding)
+        for kind, base in facts.bases:
+            self.bases.setdefault(kind, []).append(base)
+        for kind, name, stated in facts.fields:
+            self.fields.setdefault(kind, {}).setdefault(name, stated)
+
+
+class _PerFile:
+    """`graph._top[path]` and its like: one attribute of each file's record, read as a table by path."""
+
+    def __init__(self, graph: Graph, attribute: str, empty) -> None:
+        self._graph, self._attribute, self._empty = graph, attribute, empty
+
+    def get(self, path: str, default=None):
+        file = self._graph._of(path)
+        return getattr(file, self._attribute) if file is not None else default
+
+    def __getitem__(self, path: str):
+        file = self._graph._of(path)
+        return getattr(file, self._attribute) if file is not None else self._empty()
+
+    def __contains__(self, path: str) -> bool:
+        return self._graph._of(path) is not None
+
+
+class _Files:
+    """`graph.files`: the files a graph knows, each loaded when asked for."""
+
+    def __init__(self, graph: Graph, paths: Collection[str]) -> None:
+        self._graph, self._paths = graph, paths
+
+    def __contains__(self, path: object) -> bool:
+        return path in self._paths
+
+    def __iter__(self):
+        return iter(self._paths)
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def get(self, path: str, default=None):
+        file = self._graph._of(path)
+        return file if file is not None else default
+
+    def __getitem__(self, path: str) -> _File:
+        file = self._graph._of(path)
+        if file is None:
+            raise KeyError(path)
+        return file
+
+
+class _Lookup:
+    """A table the graph reads with `.get(key, default)`, answered by a function."""
+
+    def __init__(self, answer) -> None:
+        self._answer = answer
+
+    def get(self, key, default=None):
+        found = self._answer(key)
+        return found if found else default
 
 
 @dataclass(frozen=True)
@@ -105,72 +259,122 @@ class Edge:
 
 
 class Graph:
-    def __init__(self, files: dict[str, FileFacts], manifests: dict[str, bytes] | None = None,
+    def __init__(self, source: Source | dict[str, FileFacts], manifests: dict[str, bytes] | None = None,
                  features: frozenset[str] | set[str] = FEATURES) -> None:
-        self.files = files
+        self.source = InMemory(source) if isinstance(source, dict) else source
         self.features = frozenset(features)
-        self._top: dict[str, dict[str, list[Target]]] = {}        # path -> name -> the file's own names
-        self._members: dict[str, dict[str, list[Target]]] = {}    # path -> 'Owner.name' -> what an owner holds
-        self._kinds: dict[str, dict[str, str]] = {}               # path -> qualified -> kind
-        self._named: dict[tuple[str, str], list[Target]] = {}     # (language group, name) -> every definition
-        self._methods: dict[tuple[str, str], list[Target]] = {}   # (language group, 'Type.name') -> wherever declared
-        self._bound: dict[str, dict[str, list[Binding]]] = {}     # path -> local name -> its import bindings
-        self._wild: dict[str, list[Binding]] = {}                 # path -> imports of everything a module has
-        self._published: dict[str, dict[str, list[Binding]]] = {}  # path -> a name it publishes -> its own name for it
-        self._package: dict[str, str] = {}                        # path -> the package it says it belongs to
-        self._packages: dict[tuple[str, str], list[str]] = {}     # (language group, package) -> its files
-        self._bases: dict[tuple[str, str], list[str]] = {}        # (path, type) -> what it is built on, as written
-        self._bases_named: dict[tuple[str, str], list[tuple[str, str]]] = {}  # (group, simple type) -> (path, base)
-        self._fields: dict[tuple[str, str], dict[str, str]] = {}  # (path, type) -> field -> its type as written
-        self._fields_named: dict[tuple[str, str], list[tuple[str, str, str]]] = {}  # (group, simple type) -> (path, field, type)
-        self._dirs: dict[str, list[str]] = {}                     # directory -> its files
-        self._python: dict[str, list[tuple[str, str]]] = {}       # 'a/b.py' -> (file, the directory it is rooted in)
-        for path, facts in files.items():
-            self._index(path, facts)
+        paths = self.source.paths()
+        self.files = _Files(self, paths)
+        self._loaded: OrderedDict[str, _File | None] = OrderedDict()   # the files questions have reached, most recent last
+        self._top = _PerFile(self, "top", dict)             # path -> name -> the file's own names
+        self._members = _PerFile(self, "members", dict)     # path -> 'Owner.name' -> what an owner holds
+        self._kinds = _PerFile(self, "kinds", dict)         # path -> qualified -> kind
+        self._bound = _PerFile(self, "bound", dict)         # path -> local name -> its import bindings
+        self._wild = _PerFile(self, "wild", list)           # path -> imports of everything a module has
+        self._published = _PerFile(self, "published", dict)  # path -> a name it publishes -> its own name for it
+        self._package = _PerFile(self, "package", str)      # path -> the package it says it belongs to
+        self._named = _Lookup(lambda key: self.source.named(*key))              # (language group, name) -> every definition
+        self._methods = _Lookup(self._methods_named)                            # (language group, 'Type.name') -> wherever declared
+        self._packages = _Lookup(self._package_files)                           # (language group, package) -> its files
+        self._bases = _Lookup(lambda key: (self._of(key[0]) or _NO_FILE).bases.get(key[1]))        # (path, type) -> its bases
+        self._fields = _Lookup(lambda key: (self._of(key[0]) or _NO_FILE).fields.get(key[1]))      # (path, type) -> field -> type
+        self._bases_named = _Lookup(self._bases_of_name)    # (group, simple type) -> (path, base), wherever declared
+        self._fields_named = _Lookup(self._fields_of_name)  # (group, simple type) -> (path, field, type)
+        self._python = _Lookup(self._python_rooted)         # 'a/b.py' -> (file, the directory it is rooted in)
+        self._dirs: dict[str, list[str]] = {}               # directory -> its files
+        for path in paths:
+            self._dirs.setdefault(_parent(path), []).append(path)
+        self._basenames: dict[str, list[str]] | None = None  # a file's own name -> the files called so; built when first needed
+        self._java_packages: dict[str, list[str]] = {}
+        self._rooted: dict[str, list[tuple[str, str]]] = {}  # what `_python_rooted` has answered
+        self._go_names: dict[str, str] = {}                 # a Go import path -> the name its package gives itself
         self._read_layout(manifests or {})
-        self._name_go_packages()
 
     # ---- building -----------------------------------------------------------------------------
 
-    def _index(self, path: str, facts: FileFacts) -> None:
-        group = _group(facts.family)
-        top, members, kinds = self._top.setdefault(path, {}), self._members.setdefault(path, {}), self._kinds.setdefault(path, {})
-        imported = {binding.local for binding in facts.bindings if binding.kind == "import"}
-        for definition in facts.definitions:
-            if definition.kind in _VALUES and definition.name in imported and "." not in definition.qualified:
-                continue    # `const Thing = require('./thing')` declares nothing: the name is the import
-            kinds[definition.qualified] = definition.kind
-            if definition.kind in _UNNAMED:
-                continue
-            target = Target(path, definition.name, definition.qualified, definition.kind, definition.start_line, definition.end_line)
-            if "." in definition.qualified:
-                members.setdefault(definition.qualified, []).append(target)
-                self._methods.setdefault((group, ".".join(definition.qualified.split(".")[-2:])), []).append(target)
-            else:
-                top.setdefault(definition.name, []).append(target)
-            self._named.setdefault((group, definition.name), []).append(target)
-        bound, wild, published = self._bound.setdefault(path, {}), self._wild.setdefault(path, []), self._published.setdefault(path, {})
-        for binding in facts.bindings:
-            if binding.kind == "package":
-                self._package[path] = binding.local
-                self._packages.setdefault((group, binding.local), []).append(path)
-            elif binding.kind == "export":
-                published.setdefault(binding.local, []).append(binding)
-            elif binding.local == "*":
-                wild.append(binding)
-            else:
-                bound.setdefault(binding.local, []).append(binding)
-        for kind, base in facts.bases:
-            self._bases.setdefault((path, kind), []).append(base)
-            self._bases_named.setdefault((group, kind.rsplit(".", 1)[-1]), []).append((path, base))
-        for kind, name, stated in facts.fields:
-            self._fields.setdefault((path, kind), {}).setdefault(name, stated)
-            self._fields_named.setdefault((group, kind.rsplit(".", 1)[-1]), []).append((path, name, stated))
-        self._dirs.setdefault(_parent(path), []).append(path)
-        if facts.family == "python":
-            parts = path.split("/")
-            for cut in range(len(parts)):
-                self._python.setdefault("/".join(parts[cut:]), []).append((path, "/".join(parts[:cut])))
+    def facts(self, path: str) -> _File | None:
+        """What the graph knows of one file: its family, definitions and bindings."""
+        return self._of(path)
+
+    def _of(self, path: str) -> _File | None:
+        """A file's record, loaded when first asked for and kept while recently used."""
+        loaded = self._loaded
+        if path in loaded:
+            loaded.move_to_end(path)
+            return loaded[path]
+        facts = self.source.facts(path) if path in self.files else None
+        loaded[path] = _File(path, facts) if facts is not None else None
+        if len(loaded) > FILES_KEPT:
+            loaded.popitem(last=False)
+        return loaded[path]
+
+    def _by_basename(self, name: str) -> list[str]:
+        if self._basenames is None:
+            self._basenames = {}
+            for path in self.files:
+                self._basenames.setdefault(path.rsplit("/", 1)[-1], []).append(path)
+        return self._basenames.get(name, [])
+
+    def _methods_named(self, key: tuple[str, str]) -> list[Target]:
+        group, dotted = key
+        return [target for target in self.source.named(group, dotted.rsplit(".", 1)[-1])
+                if target.qualified == dotted or target.qualified.endswith("." + dotted)]
+
+    def _package_files(self, key: tuple[str, str]) -> list[str]:
+        """The files of a Java package: those in a directory spelled like it that declare it."""
+        family, package = key
+        if family != "java":
+            return []
+        if package not in self._java_packages:
+            tail = package.replace(".", "/")
+            self._java_packages[package] = [
+                path for directory, held in self._dirs.items() if directory == tail or directory.endswith("/" + tail)
+                for path in held if path.endswith(".java") and self._package.get(path, "") == package]
+        return self._java_packages[package]
+
+    def _bases_of_name(self, key: tuple[str, str]) -> list[tuple[str, str]]:
+        group, simple = key
+        return [(path, base) for path in self.source.type_files(group, simple)
+                for owner, built_on in (self._of(path) or _NO_FILE).bases.items() if owner.rsplit(".", 1)[-1] == simple
+                for base in built_on]
+
+    def _fields_of_name(self, key: tuple[str, str]) -> list[tuple[str, str, str]]:
+        group, simple = key
+        return [(path, name, stated) for path in self.source.type_files(group, simple)
+                for owner, held in (self._of(path) or _NO_FILE).fields.items() if owner.rsplit(".", 1)[-1] == simple
+                for name, stated in held.items()]
+
+    def _python_rooted(self, suffix: str) -> list[tuple[str, str]]:
+        """The Python files whose path ends in `suffix` (`a/b.py`), each with the directory that leaves."""
+        if suffix not in self._rooted:
+            if len(self._rooted) > 4000:
+                self._rooted.clear()
+            found = []
+            for path in self._by_basename(suffix.rsplit("/", 1)[-1]):   # hundreds of files are called __init__.py
+                if path == suffix:
+                    found.append((path, ""))
+                elif path.endswith("/" + suffix):
+                    found.append((path, path[:-len(suffix) - 1]))
+            self._rooted[suffix] = found
+        return self._rooted[suffix]
+
+    def _go_bound(self, path: str, name: str) -> list[Binding]:
+        """A Go import binds the package's own name, which is the last segment of its path only by convention:
+        the unaliased imports of `path` whose package calls itself `name`."""
+        file = self._of(path)
+        if file is None or file.family != "go":
+            return []
+        found = []
+        for local, bindings in file.bound.items():
+            for binding in bindings:
+                if binding.name or local != _conventional(binding.source):
+                    continue    # not a package import, or one the file named itself
+                if binding.source not in self._go_names:
+                    placed = self._place_go(binding.source)
+                    self._go_names[binding.source] = self._package.get(placed[0], "") if placed else ""
+                if self._go_names[binding.source] == name:
+                    found.append(binding)
+        return found
 
     def _read_layout(self, manifests: dict[str, bytes]) -> None:
         """What the repository's manifests say about where packages live."""
@@ -213,19 +417,6 @@ class Graph:
         if "packages" not in self.features:     # one package at the root, as if nothing else were declared
             self._go_modules = [item for item in self._go_modules if item[1] == ""]
             self._crates, self._node_packages, self._aliases = {}, {}, []
-
-    def _name_go_packages(self) -> None:
-        """A Go import binds the package's own name, which is the last segment of its path only by convention."""
-        for path, facts in self.files.items():
-            if facts.family != "go":
-                continue
-            for local, found in list(self._bound[path].items()):
-                for binding in found:
-                    if binding.name or local != binding.source.rsplit("/", 1)[-1] and not binding.source.endswith(local):
-                        continue
-                    declared = {self._package.get(file, "") for file in self._place(path, binding)} - {"", local}
-                    for name in declared:
-                        self._bound[path].setdefault(name, []).append(binding)
 
     # ---- the answer ---------------------------------------------------------------------------
 
@@ -302,7 +493,7 @@ class Graph:
                 return self._edge(path, found, "type in file")
         if facts.family == "rust" and call.via == "path" and (head in ("crate", "self", "super") or head not in self._bound[path]):
             return self._rust_path(path, facts, call, list(segments))
-        bound = self._bound[path].get(head)
+        bound = self._bound[path].get(head) or self._go_bound(path, head)
         if bound:
             reached, found = False, []
             for binding in bound:
@@ -438,7 +629,7 @@ class Graph:
         if here:
             return [(path, qualified) for qualified in here]
         facts = self.files[path]
-        bound = self._bound[path].get(head)
+        bound = self._bound[path].get(head) or self._go_bound(path, head)
         if bound:
             found: list[tuple[str, str]] = []
             for binding in bound:
@@ -523,8 +714,7 @@ class Graph:
     def _returned(self, target: Target) -> str:
         """The type a function's own signature says it returns, as a name; '' when it does not say."""
         facts = self.files[target.path]
-        signature = next((definition.signature for definition in facts.definitions
-                          if definition.qualified == target.qualified and definition.start_line == target.start_line), "")
+        signature = self.source.signature(target)
         signature = signature.rstrip(" {:")
         if facts.family in ("python", "rust"):
             _, arrow, stated = signature.rpartition("->")
@@ -638,9 +828,11 @@ class Graph:
     def _nearby(self, path: str, facts: FileFacts, name: str) -> list[Target]:
         """A name that needs no import: the same package, or a module imported whole."""
         found: list[Target] = []
-        if facts.family in ("go", "java") and path in self._package:
-            for other in self._packages.get((facts.family, self._package[path]), []):
-                if other != path and (facts.family == "java" or _parent(other) == _parent(path)):
+        package = self._package.get(path, "")
+        if facts.family in ("go", "java") and package:
+            beside = self._dirs.get(_parent(path), []) if facts.family == "go" else self._packages.get(("java", package), [])
+            for other in beside:
+                if other != path and other.endswith((".go", ".java")) and self._package.get(other, "") == package:
                     found += self._top[other].get(name, [])
         if found:
             return found
@@ -673,7 +865,8 @@ class Graph:
             beside = _join(_parent(path), binding.source)
             if beside in self.files:
                 return [beside]
-            matching = [file for file in self.files if file.endswith("/" + binding.source) or file == binding.source]
+            matching = [file for file in self._by_basename(binding.source.rsplit("/", 1)[-1])
+                        if file.endswith("/" + binding.source) or file == binding.source]
             return matching if len(matching) == 1 else []
         return []
 
@@ -872,7 +1065,8 @@ class Graph:
     def _by_name(self, path: str, facts: FileFacts, call: Call, members: bool, rule: str) -> Edge | None:
         """Every definition of the name: the last resort, and marked as such."""
         pool = [target for target in self._named.get((_group(facts.family), call.name), ())
-                if (target.kind in _MEMBERS or "." in target.qualified) == members and self._visible(target, path, facts.family)]
+                if (target.kind in _MEMBERS or "." in target.qualified) == members and self._visible(target, path, facts.family)
+                and not (target.kind in _VALUES and target.name in (self._of(target.path) or _NO_FILE).imported)]
         if not pool or len(pool) > CANDIDATE_LIMIT:
             return None
         here = _parent(path)
@@ -896,6 +1090,16 @@ class Graph:
             return None
         same_file = all(target.path == path for target in unique)
         return Edge(tuple(unique), "L0" if same_file else "L1", "syntactic" if same_file else "import-resolved", rule)
+
+
+def _conventional(source: str) -> str:
+    """The name an unaliased Go import binds by convention: as `lang.bindings` worked it out."""
+    segments = [segment for segment in source.split("/") if segment]
+    if len(segments) > 1 and re.match(r"^v[0-9]+$", segments[-1]):
+        segments.pop()
+    tail = segments[-1] if segments else ""
+    dotted = re.match(r"^(?P<name>.+)\.v[0-9]+$", tail)
+    return dotted.group("name") if dotted else tail
 
 
 def _group(family: str) -> str:
@@ -970,3 +1174,6 @@ def _without_comments(text: str) -> str:
             out.append(char)
         index += 1
     return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+_NO_FILE = _File("", FileFacts("", []))

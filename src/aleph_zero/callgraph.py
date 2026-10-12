@@ -24,8 +24,8 @@ from dataclasses import dataclass
 import apsw
 
 from . import filters, gitio, lang, symbols
-from .graph import MANIFESTS, Defined, Edge, FileFacts, Graph, Target
-from .indexer import Index
+from .graph import MANIFESTS, Defined, Edge, FileFacts, Graph, Source, Target, _group
+from .indexer import Index, symbol_key
 from .lang import parse
 from .lang.bindings import Binding, facts
 from .lang.calls import FAMILIES, Call, calls
@@ -164,28 +164,84 @@ def _unpack(blob: bytes):
     return json.loads(zlib.decompress(blob).decode("utf-8", "surrogateescape"))
 
 
+class _CodePaths:
+    """The code files of a view, as a collection that is not a copy of them."""
+
+    def __init__(self, view: View) -> None:
+        self._files = view.files
+
+    def __contains__(self, path: object) -> bool:
+        return isinstance(path, str) and path in self._files and filters.family(path) in FAMILIES
+
+    def __iter__(self):
+        return (path for path in self._files if filters.family(path) in FAMILIES)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+class Indexed(Source):
+    """A view's facts, read from its index one file at a time as a question reaches them. A file whose
+    graph facts are not read yet takes part with its definitions alone."""
+    NAMES_KEPT = 1000
+
+    def __init__(self, index: Index, view: View) -> None:
+        self._index, self._view = index, view
+        self._paths = _CodePaths(view)
+        self._names: dict[tuple[str, str], list[Target]] = {}
+        self._types: dict[tuple[str, str], list[str]] = {}
+
+    def paths(self) -> _CodePaths:
+        return self._paths
+
+    def facts(self, path: str) -> FileFacts | None:
+        oid, family = self._view.files.get(path), filters.family(path)
+        if oid is None or family not in FAMILIES:
+            return None
+        conn = self._index.conn
+        defined = [Defined(kind, name, qualified, "", line, line) for name, qualified, kind, line in conn.execute(
+            "SELECT name, qualified, kind, line FROM symbols WHERE blob_oid = ? AND family = ? ORDER BY ord", (oid, family))]
+        shape = conn.execute("SELECT shape FROM graph_facts WHERE blob_oid = ? AND family = ? AND version = ?",
+                             (oid, family, GRAPH_VERSION)).fetchall()
+        bound, built_on, typed = _unpack(shape[0][0]) if shape else ([], [], [])
+        return FileFacts(family, defined, [Binding(*row) for row in bound], [tuple(row) for row in built_on],
+                         [tuple(row) for row in typed])
+
+    def named(self, group: str, name: str) -> list[Target]:
+        key = (group, name)
+        if key not in self._names:
+            if len(self._names) >= self.NAMES_KEPT:
+                self._names.clear()
+            found: list[Target] = []
+            for oid, family, qualified, kind, line in self._index.conn.execute(
+                    "SELECT s.blob_oid, s.family, s.qualified, s.kind, s.line FROM symbols s "
+                    "JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
+                    "WHERE s.name_key = ? AND s.name = ? AND s.kind != 'namespace' ORDER BY s.blob_oid, s.family, s.ord",
+                    (symbol_key(name), name)):
+                if family in FAMILIES and _group(family) == group:
+                    found += [Target(path, name, qualified, kind, line, line) for path in self._index.paths_for(oid, family)]
+            self._names[key] = found
+        return self._names[key]
+
+    def type_files(self, group: str, simple: str) -> list[str]:
+        key = (group, simple)
+        if key not in self._types:
+            if len(self._types) >= self.NAMES_KEPT:
+                self._types.clear()
+            self._types[key] = [path for oid, family in mentions(self._index, simple)[0]
+                                if family in FAMILIES and _group(family) == group for path in self._index.paths_for(oid, family)]
+        return self._types[key]
+
+    def signature(self, target: Target) -> str:
+        oid = self._view.files.get(target.path)
+        rows = self._index.conn.execute(
+            "SELECT signature FROM symbols WHERE blob_oid = ? AND family = ? AND qualified = ? AND line = ? LIMIT 1",
+            (oid, filters.family(target.path), target.qualified, target.start_line)).fetchall()
+        return rows[0][0] if rows else ""
+
+
 def load(index: Index, view: View) -> Graph:
-    """The graph of the synced view, from the symbols and graph facts the index holds for it.
-    A file whose facts are not read yet takes part with its definitions alone."""
-    conn = index.conn
-    defined: dict[tuple[str, str], list[Defined]] = {}
-    for oid, family, name, qualified, kind, signature, line in conn.execute(
-            "SELECT s.blob_oid, s.family, s.name, s.qualified, s.kind, s.signature, s.line FROM symbols s "
-            "JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
-            f"WHERE s.family IN {_IN_CODE} ORDER BY s.blob_oid, s.family, s.ord", _CODE):
-        defined.setdefault((oid, family), []).append(Defined(kind, name, qualified, signature, line, line))
-    shapes: dict[tuple[str, str], tuple[list, list, list]] = {}
-    for oid, family, shape in conn.execute(
-            "SELECT g.blob_oid, g.family, g.shape FROM graph_facts g "
-            "JOIN temp.view_blobs v ON v.blob_oid = g.blob_oid AND v.family = g.family WHERE g.version = ?", (GRAPH_VERSION,)):
-        bound, built_on, typed = _unpack(shape)
-        shapes[(oid, family)] = ([Binding(*row) for row in bound], [tuple(row) for row in built_on], [tuple(row) for row in typed])
-    files: dict[str, FileFacts] = {}
-    for oid, family in conn.execute(f"SELECT blob_oid, family FROM temp.view_blobs WHERE family IN {_IN_CODE}", _CODE).fetchall():
-        key = (oid, family)
-        of_file = FileFacts(family, defined.get(key, []), *shapes.get(key, ([], [], [])))
-        for path in index.paths_for(oid, family):
-            files[path] = of_file
+    """The graph of the synced view. It reads a file from the index when a question first reaches it."""
     manifests: dict[str, bytes] = {}
     named = [path for path in view.files if path.rsplit("/", 1)[-1] in MANIFESTS][:MANIFEST_LIMIT]
     if named:
@@ -194,7 +250,7 @@ def load(index: Index, view: View) -> Graph:
                 data = view.read(path, reader, MANIFEST_BYTES)
                 if isinstance(data, bytes):
                     manifests[path] = data
-    return Graph(files, manifests)
+    return Graph(Indexed(index, view), manifests)
 
 
 def mentions(index: Index, name: str) -> tuple[list[tuple[str, str]], bool]:

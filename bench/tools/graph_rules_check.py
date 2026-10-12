@@ -23,7 +23,7 @@ mutations = {
     "go private visible": ("            return target.name[:1].isupper() or _parent(target.path) == _parent(path)", "            return True"),
     "no candidate limit": ("        if not pool or len(pool) > CANDIDATE_LIMIT:", "        if not pool:"),
     "no inline scope": ('            if kind == "namespace":\n                found = self._members[path].get(f"{qualified}.{call.name}")', '            if kind == "namespace":\n                found = None'),
-    "required const kept": ('            if definition.kind in _VALUES and definition.name in imported and "." not in definition.qualified:', '            if False:'),
+    "required const kept": ('            if target.kind in _VALUES and target.name in self.imported and "." not in target.qualified:', '            if False:'),
     "rust Vec::new guessed": ("        if module is None:\n            return None     # `Vec::new()`", "        if module is None:\n            return self._by_name(path, facts, call, members=True, rule='x')     # `Vec::new()`"),
     "typed outside guessed": ("            typed = _UNSTATED if kinds is None else self._through(path, kinds, list(segments[1:]), call.name) if kinds else None", "            typed = _UNSTATED if not kinds else self._through(path, kinds, list(segments[1:]), call.name)"),
     "field types ignored": ('            if segments is not None and "receivers" in self.features:\n                typed = self._through(path, [(path, owner)]', '            if False:\n                typed = self._through(path, [(path, owner)]'),
