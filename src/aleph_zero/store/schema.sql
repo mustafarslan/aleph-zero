@@ -115,3 +115,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     -- identifiers still match themselves.
     tokenize="porter unicode61 tokenchars '_'"
 );
+
+-- What was said and concluded about this repository in earlier sessions (memory.py).
+-- This table is the authority: a memory it marks deleted is never recalled, whatever the
+-- vector store beside it still holds.
+CREATE TABLE IF NOT EXISTS memories (
+    memory_id  TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,          -- 'chat' (a side-chat question and answer), 'note' (inserted into the conversation)
+    session    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,       -- unix seconds
+    text       TEXT NOT NULL,          -- emptied when the memory is forgotten
+    deleted    INTEGER NOT NULL DEFAULT 0,
+    embedded   INTEGER NOT NULL DEFAULT 0   -- whether the vector store holds a vector for it
+) WITHOUT ROWID;
+
+-- The code a memory speaks of: path and content at the time. When that content is no longer
+-- at that path in a session's view, the memory is stale.
+CREATE TABLE IF NOT EXISTS memory_cites (
+    memory_id  TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    blob_oid   TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line   INTEGER NOT NULL,
+    PRIMARY KEY (memory_id, path, start_line)
+) WITHOUT ROWID;
