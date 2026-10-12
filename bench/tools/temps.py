@@ -159,17 +159,31 @@ def line(found: dict) -> str:
     return "  ".join(parts)
 
 
+class TooHot(RuntimeError):
+    """The guard gives the job up: the chip is at a temperature nothing should be run at, or it keeps
+    coming back to its limit. Nobody may be there to notice, so the job ends and says why."""
+
+
 class Guard:
     """Keeps a long job from cooking the machine. Call it often (it reads the sensors at
     most every `every` seconds): when the chip reaches `limit` or macOS reports thermal
     pressure, it waits until the chip is back under `resume`, then lets the job go on.
-    It remembers the highest reading it saw."""
+    It remembers the highest reading it saw.
 
-    def __init__(self, limit: float = 95.0, resume: float = 80.0, every: float = 15.0, say=print) -> None:
+    With nobody at the machine, waiting is not always enough. At `stop_at` degrees it does not
+    wait: it raises TooHot. And a job that has had to wait more than `max_pauses` times within
+    `within` seconds is on a machine that is not shedding its heat (a closed lid, a hot room):
+    TooHot again. `while_waiting(degrees)` is called at every look while it waits; True ends the wait."""
+
+    def __init__(self, limit: float = 95.0, resume: float = 80.0, every: float = 15.0, say=print,
+                 stop_at: float | None = None, max_pauses: int | None = None, within: float = 1800.0,
+                 while_waiting=None) -> None:
         self.limit, self.resume, self.every, self.say = limit, resume, every, say
+        self.stop_at, self.max_pauses, self.within, self.while_waiting = stop_at, max_pauses, within, while_waiting
         self.highest = 0.0
         self.pauses = 0
         self._next = 0.0
+        self._paused_at: list[float] = []
 
     def __call__(self, *_ignored) -> None:
         if time.monotonic() < self._next:
@@ -181,18 +195,30 @@ class Guard:
             return
         hot = hottest_chip(found)
         self.highest = max(self.highest, hot)
+        if self.stop_at is not None and hot >= self.stop_at:
+            raise TooHot(f"the chip is at {hot:.0f} C, at or over the {self.stop_at:.0f} C at which the job is given up")
         if hot < self.limit and found["pressure"] in ("nominal", "unknown"):
             return
         self.pauses += 1
+        now = time.monotonic()
+        self._paused_at = [at for at in self._paused_at if now - at < self.within] + [now]
+        if self.max_pauses is not None and len(self._paused_at) > self.max_pauses:
+            raise TooHot(f"the chip reached {self.limit:.0f} C {len(self._paused_at)} times within {self.within / 60:.0f} minutes "
+                         f"({hot:.0f} C now): the machine is not shedding its heat, and the job is given up")
         self.say(f"chip at {hot:.0f} C (limit {self.limit:.0f} C; thermal pressure: {found['pressure']}): "
                  f"pausing until it is under {self.resume:.0f} C")
         while True:
+            if self.while_waiting is not None and self.while_waiting(hot):
+                return
             time.sleep(self.every)
             try:
                 found = reading()
             except Exception:  # noqa: BLE001
                 return
             hot = hottest_chip(found)
+            self.highest = max(self.highest, hot)
+            if self.stop_at is not None and hot >= self.stop_at:
+                raise TooHot(f"the chip is at {hot:.0f} C while waiting to cool, at or over the {self.stop_at:.0f} C at which the job is given up")
             if hot < self.resume and found["pressure"] in ("nominal", "unknown"):
                 self.say(f"chip at {hot:.0f} C: going on")
                 self._next = time.monotonic() + self.every

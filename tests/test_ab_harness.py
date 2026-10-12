@@ -129,3 +129,14 @@ def test_an_arm_can_leave_the_grep_pointer_out():
     assert plain == {"pluginConfigs": {"aleph-zero@inline": {"options": {"rung": "1"}}}}
     assert json.loads(bare[bare.index("--settings") + 1]) == {
         "pluginConfigs": {"aleph-zero@inline": {"options": {"rung": "1", "grep_pointer": "off"}}}}
+
+
+def test_a_run_taken_up_again_does_only_the_sessions_that_are_missing():
+    chosen = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    arms = ["none", "L1"]
+    done = [{"task": "a", "arm": "none", "ok": True}, {"task": "a", "arm": "L1", "ok": True}, {"task": "b", "arm": "none", "ok": True},
+            {"task": "b", "arm": "L1", "ok": False}]                 # a failed session is asked again
+    assert ab.sessions_left(chosen, arms, done) == [("b", "L1"), ("c", "none"), ("c", "L1")]
+    assert ab.sessions_left(chosen, arms, []) == [(task["id"], arm) for task in chosen for arm in arms]
+    assert ab.sessions_left(chosen, arms, done + [{"task": "b", "arm": "L1", "ok": True}, {"task": "c", "arm": "none", "ok": True},
+                                                  {"task": "c", "arm": "L1", "ok": True}]) == []

@@ -9,8 +9,24 @@ git's object store (no checkout), so `prepare` can index and embed every commit 
 and `run` can then compare configurations without touching a working tree.
 
 `prepare` uses the network (it fetches each base commit by id from GitHub) and the
-embedding worker (GPU, about a hundred chunks a second). It can be interrupted and
-resumed. `run` uses neither.
+embedding worker (GPU, about a hundred chunks a second). `run` uses neither.
+
+Both run for a long time and are made to be left alone and looked after from another shell:
+
+    benchmark_c.py status WORKDIR      where it is, how warm the chip got, whether it still runs
+    benchmark_c.py pause  WORKDIR      it waits after the batch it is on; `resume` lets it go on
+    benchmark_c.py stop   WORKDIR      it ends after the batch it is on
+
+Whatever ends a run (stop, a closed connection, a restart), the same command takes it up
+where it was: what is indexed and embedded stays so, and `run` keeps each question's result
+(`WORKDIR/run-cache`, per setting and per version of the engine's code), so a second run
+with another repository added, or after an interruption, works out only what is new.
+`prepare` watches the chip's temperature by itself: it waits when it is at `--temp-limit`,
+and gives the job up at `--temp-stop` or when it has had to wait `--max-pauses` times within
+half an hour. `--away` sets these for a machine nobody is sitting at (85, 97, 6), and
+`--hours 19-7` keeps the work to those hours. To start it so that it outlives the connection:
+
+    caffeinate -i nohup uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR --away ... > WORKDIR/prepare.log 2>&1 &
 
 Configurations compared on the same questions:
   bm25     one FTS5 row per file, default tokenizer, every word OR-ed (fixed in advance)
@@ -30,7 +46,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import os
 import random
 import re
 import statistics
@@ -40,8 +58,6 @@ import time
 from pathlib import Path
 
 import apsw
-import pyarrow.parquet as pq
-from huggingface_hub import hf_hub_download
 
 from aleph_zero import embedder, filters, gitio, lexical
 from aleph_zero.embed import worker
@@ -53,7 +69,8 @@ from aleph_zero.vectors import VectorStore
 from aleph_zero.view import View
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from temps import Guard  # noqa: E402  the temperature guard lives beside the other bench tools
+import longrun  # noqa: E402  pause, resume, stop and status of a long job
+from temps import Guard, TooHot  # noqa: E402  the temperature guard lives beside the other bench tools
 
 DATASET = ("czlll/Loc-Bench_V1", "data/test-00000-of-00001.parquet")
 CACHE = Path(__file__).resolve().parents[1] / "data" / "locbench"
@@ -64,6 +81,9 @@ MODES = ("lexical", "dense", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
 
 
 def instances(repos: set[str] | None) -> list[dict]:
+    import pyarrow.parquet as pq                    # only the commands that read the questions need these
+    from huggingface_hub import hf_hub_download
+
     path = hf_hub_download(DATASET[0], DATASET[1], repo_type="dataset", local_dir=CACHE)
     rows = []
     for row in pq.read_table(path).to_pylist():
@@ -102,12 +122,72 @@ def view_at(clone: Path, commit: str) -> View:
     return View(info.root, info.common_dir, info.object_format, tree, gitio.ls_tree(clone, tree), frozenset())
 
 
-def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float = 95.0) -> None:
+def code_fingerprint() -> str:
+    """A name for the engine's code as it is now: a result worked out by other code is not this code's result."""
+    digest = hashlib.sha256()
+    source = Path(__file__).resolve().parents[2] / "src" / "aleph_zero"
+    for path in [*sorted(source.rglob("*.py")), Path(__file__).resolve()]:
+        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()[:16]
+
+
+class ResultCache:
+    """What `run` worked out for one question, kept per setting and per version of the code. A run that was
+    interrupted, or is repeated with a repository added, reads these and works out only what is missing."""
+
+    def __init__(self, directory: Path, settings: dict, fingerprint: str) -> None:
+        self.directory = directory
+        self._salt = json.dumps(settings, sort_keys=True) + "\0" + fingerprint
+
+    def _file(self, instance: str, commit: str) -> Path:
+        key = hashlib.sha256(f"{self._salt}\0{instance}\0{commit}".encode()).hexdigest()[:24]
+        return self.directory / f"{key}.json"
+
+    def get(self, instance: str, commit: str) -> dict | None:
+        try:
+            return json.loads(self._file(instance, commit).read_text())
+        except (OSError, ValueError):
+            return None         # not worked out yet, or cut short: worked out again
+
+    def put(self, instance: str, commit: str, entry: dict) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        file = self._file(instance, commit)
+        aside = file.with_suffix(f".{os.getpid()}.part")
+        aside.write_text(json.dumps(entry))
+        os.replace(aside, file)
+
+
+def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float = 95.0, guard=None,
+            temp_stop: float | None = None, max_pauses: int | None = None, hours: tuple[int, int] | None = None) -> str:
+    """Index and embed every instance's commit. Returns how it ended: 'done', 'stopped', 'stopped for heat'."""
     done = partial = 0
+    say = lambda text: print(text, flush=True)  # noqa: E731
     # Hours of GPU work: after every batch the chip's temperature is looked at (at most every
     # 15 s), and embedding waits while it is at the limit or macOS reports thermal pressure.
-    cool = Guard(limit=temp_limit, resume=temp_limit - 15, say=lambda text: print(text, flush=True))
+    cool = guard or Guard(limit=temp_limit, resume=temp_limit - 15, say=say, stop_at=temp_stop, max_pauses=max_pauses)
+    job = longrun.Control(workdir, "prepare", total=len(rows), guard=cool, say=say, hours=hours)
+    if isinstance(cool, Guard):
+        cool.while_waiting = job.cooling
+    try:
+        finished = _prepare(workdir, rows, max_chunks, job, counts := {"done": 0, "partial": 0})
+    except TooHot as hot:
+        say(f"given up for heat: {hot}. Nothing is lost: the same command takes it up where it was")
+        return job.finish(why=str(hot))
+    done, partial = counts["done"], counts["partial"]
+    print(f"prepared {done} of {len(rows)} instances; {partial} left partly embedded (run prepare again); "
+          f"{len(rows) - done - partial} skipped, not fetched or not reached", flush=True)
+    if hasattr(cool, "highest"):
+        print(f"chip temperature: highest {cool.highest:.0f} C, paused {cool.pauses} times to cool", flush=True)
+    return job.finish(done=finished)
+
+
+def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Control, counts: dict) -> bool:
     for number, row in enumerate(rows, 1):
+        job()                       # between two repositories too: heat, a pause, the hours, a stop
+        if job.stop_wanted():
+            print("stopped on request; the same command takes it up here", flush=True)
+            return False
+        job.unit(number, row["instance_id"])
         started = time.monotonic()
         try:
             clone = fetch(workdir, row)
@@ -126,16 +206,18 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float 
             continue
         sock = worker.ensure()  # a long fetch may have outlasted the worker's idle limit
         pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
-        report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=cool)
-        pool.close()
-        index.conn.close()
-        done += report.remaining == 0
-        partial += report.remaining > 0
+        try:
+            report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=job,
+                                            stop=job.stop_wanted)
+        finally:
+            pool.close()
+            index.conn.close()
+        counts["done"] += report.remaining == 0
+        counts["partial"] += report.remaining > 0
+        job.note(prepared=counts["done"], partly=counts["partial"])
         print(f"{number:4}/{len(rows)} {row['instance_id']:40} files {len(view.files):6} chunks {total:7} "
               f"embedded {report.embedded:6} left {report.remaining} {time.monotonic() - started:6.1f} s {report.reason}", flush=True)
-    print(f"prepared {done} of {len(rows)} instances; {partial} left partly embedded (run prepare again); "
-          f"{len(rows) - done - partial} skipped or not fetched", flush=True)
-    print(f"chip temperature: highest {cool.highest:.0f} C, paused {cool.pauses} times to cool", flush=True)
+    return True
 
 
 def first_files(paths: list[str], count: int = 10) -> list[str]:
@@ -218,11 +300,22 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
 
 
 def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False,
-        k: int = 10) -> dict:
+        k: int = 10, cache: ResultCache | None = None) -> dict:
     sock = worker.ensure()
     client = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=60)
     results = []
+    job = longrun.Control(workdir, "run", total=len(rows), say=lambda text: print(text, file=sys.stderr, flush=True))
+    stopped = False
     for number, row in enumerate(rows, 1):
+        job()
+        if job.stop_wanted():
+            stopped = True
+            break
+        job.unit(number, row["instance_id"])
+        kept = cache.get(row["instance_id"], row["base_commit"]) if cache is not None else None
+        if kept is not None:
+            results.append(kept)    # worked out by this code with these settings before: not again
+            continue
         clone = clone_of(workdir, row["repo"])
         try:
             view = view_at(clone, row["base_commit"])
@@ -272,9 +365,15 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
                  "bm25": score(row["gold"], bm25),
                  "scores": {form: {mode: score(row["gold"], found[form][mode]) for mode in MODES} for form in FORMS}}
         results.append(entry)
+        if cache is not None:
+            cache.put(row["instance_id"], row["base_commit"], entry)
         print(f"{number:4}/{len(rows)} {row['instance_id']:36} " + "  ".join(
             f"{form}: lex {entry['scores'][form]['lexical']['recall@10']:.2f} dense {entry['scores'][form]['dense']['recall@10']:.2f} "
             f"hyb {entry['scores'][form]['hybrid']['recall@10']:.2f}" for form in FORMS), file=sys.stderr, flush=True)
+    job.finish(done=not stopped)
+    if stopped:
+        raise SystemExit(f"stopped on request after {len(results)} questions; what was worked out is kept: "
+                         f"the same command takes it up there")
     if not results:
         raise SystemExit("no prepared instances found; run `prepare` first")
     summary: dict = {"instances": len(results), "repos": sorted({entry["repo"] for entry in results}),
@@ -300,13 +399,19 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=("prepare", "run", "list"))
+    parser.add_argument("action", choices=("prepare", "run", "list", "status", "pause", "resume", "stop"))
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--repos", help="comma-separated owner/name; default: every repository of Loc-Bench")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--temp-limit", type=float, default=95.0,
                         help="prepare: pause embedding while the chip is at or above this many degrees Celsius")
+    parser.add_argument("--temp-stop", type=float, help="prepare: give the job up when the chip is at or above this")
+    parser.add_argument("--max-pauses", type=int, help="prepare: give the job up after waiting to cool this often within half an hour")
+    parser.add_argument("--away", action="store_true",
+                        help="prepare: nobody is at the machine: wait at 85 C, give up at 97 C or after 6 waits in half an hour")
+    parser.add_argument("--hours", help="prepare: only work in these hours of the day, as FIRST-LAST (19-7: from 19:00 to 7:00)")
+    parser.add_argument("--no-cache", action="store_true", help="run: work every question out again")
     parser.add_argument("--no-bm25", action="store_true")
     parser.add_argument("--k", type=int, default=10,
                         help="run: results asked of Aleph per question. The product's default is 8; 10 is the "
@@ -317,8 +422,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="run: as if files without a language profile had no vectors")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    rows = instances(set(args.repos.split(",")) if args.repos else None)[: args.limit]
     workdir = args.workdir.resolve()
+    if args.action in ("status", "pause", "resume", "stop"):
+        return longrun.main([args.action, str(workdir)])
+    rows = instances(set(args.repos.split(",")) if args.repos else None)[: args.limit]
     if args.action == "list":
         counts: dict[str, int] = {}
         for row in rows:
@@ -327,13 +434,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{count:4}  {repo}")
         print(f"{len(rows)} instances in {len(counts)} repositories")
     elif args.action == "prepare":
-        prepare(workdir, rows, args.max_chunks, args.temp_limit)
+        hours = tuple(int(part) for part in args.hours.split("-")) if args.hours else None
+        limit, stop_at, pauses = (85.0, 97.0, 6) if args.away else (args.temp_limit, None, None)
+        ended = prepare(workdir, rows, args.max_chunks, limit, temp_stop=args.temp_stop or stop_at,
+                        max_pauses=args.max_pauses or pauses, hours=hours)
+        return 0 if ended == "done" else 3
     else:
         if args.min_pool:
             from aleph_zero import search as search_module
 
             search_module.MIN_POOL = args.min_pool
-        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k)
+        settings = {"k": args.k, "min_pool": args.min_pool, "bm25": not args.no_bm25, "code_and_docs_only": args.code_and_docs_only,
+                    "alphas": ALPHAS, "forms": FORMS}
+        cache = None if args.no_cache else ResultCache(workdir / "run-cache", settings, code_fingerprint())
+        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k, cache)
     return 0
 
 

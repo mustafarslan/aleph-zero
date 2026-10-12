@@ -41,6 +41,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "bench" / "tools"))
+import longrun  # noqa: E402  pause, resume, stop and status of a long job
 PLUGIN = ROOT / "plugin"
 ENGINE_TOOLS = "mcp__plugin_aleph-zero_aleph__*"
 # What a session may do without being asked: read and search, nothing that changes anything.
@@ -285,9 +287,15 @@ def report(records: list[dict], baseline: str) -> dict:
     return out
 
 
+def sessions_left(chosen: list[dict], arms: list[str], done: list[dict]) -> list[tuple[str, str]]:
+    """(task, arm) for every session of the plan that has no successful record yet, in the plan's order."""
+    have = {(record.get("task"), record.get("arm")) for record in done if record.get("ok")}
+    return [(task["id"], arm) for task in chosen for arm in arms if (task["id"], arm) not in have]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=("tasks", "run", "report"))
+    parser.add_argument("action", choices=("tasks", "run", "report", "status", "pause", "resume", "stop"))
     parser.add_argument("target", type=Path, help="tasks/run: the Benchmark C work directory; report: a results file")
     parser.add_argument("--count", type=int, default=2, help="how many tasks")
     parser.add_argument("--seed", type=int, default=11)
@@ -298,7 +306,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-sessions", type=int, default=8, help="refuse to start more sessions than this")
     parser.add_argument("--baseline", default="none")
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--take-up", type=Path, metavar="FILE",
+                        help="run: a results file of an interrupted run of the same command: only its missing sessions are run "
+                             "(without this, running a command again adds a second run of every task)")
     args = parser.parse_args(argv)
+    if args.action in ("status", "pause", "resume", "stop"):
+        return longrun.main([args.action, str(args.target)])    # the directory of the results file
     if args.action == "report":
         records = [json.loads(line) for line in args.target.read_text().splitlines() if line.strip()]
         print(json.dumps(report(records, args.baseline), indent=2))
@@ -315,19 +328,33 @@ def main(argv: list[str] | None = None) -> int:
     if sessions > args.max_sessions:
         parser.error(f"{sessions} sessions asked for, over --max-sessions {args.max_sessions}: this spends plan usage; "
                      f"raise the limit on purpose")
-    out = args.out or ROOT / "bench" / "data" / "results" / "ab" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.model}.jsonl"
+    out = args.take_up or args.out or ROOT / "bench" / "data" / "results" / "ab" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.model}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
+    before = [json.loads(line) for line in out.read_text().splitlines() if line.strip()] if args.take_up and out.exists() else []
+    wanted = set(sessions_left(chosen, arms, before)) if args.take_up else None
+    # Steered from another shell through files beside the results (`run.py pause|resume|stop|status DIRECTORY`):
+    # a session that has started is finished; the next one waits, or is not started.
+    job = longrun.Control(out.parent, f"A/B run into {out.name}", total=len(chosen))
     chooser = random.Random(args.seed)
     for number, task in enumerate(chosen, 1):
         order = list(arms)
         chooser.shuffle(order)  # neither arm always goes first
         for arm in order:
+            if wanted is not None and (task["id"], arm) not in wanted:
+                continue        # this session is in the file already
+            job()
+            if job.stop_wanted():
+                job.finish()
+                print(f"stopped on request. To go on: the same command with --take-up {out}", flush=True)
+                return 3
+            job.unit(number, f"{task['id']} {arm}")
             record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds)
             with out.open("a") as handle:
                 handle.write(json.dumps(record) + "\n")
             print(f"{number:3}/{len(chosen)} {task['id']:40} {arm:5} ok={record.get('ok')} tokens={record.get('tokens')} "
                   f"calls={record.get('tool_calls')} hit={record.get('file_hit')} cost={record.get('cost_usd')} "
                   f"first={record.get('first_search')} {record.get('ended')}", flush=True)
+    job.finish(done=True)
     records = [json.loads(line) for line in out.read_text().splitlines()]
     print(json.dumps(report(records, args.baseline), indent=2))
     print(f"results: {out}")
