@@ -77,15 +77,34 @@ def tokenize(text: str) -> list[str]:
     return [match.group(0).lower() for match in _TOKEN.finditer(text)]
 
 
+def reference_document(text: str) -> str | None:
+    """What oxn ranks for one decision file (`rules/adr.py` and `context/decisions.py`, v0.1.2): with a YAML
+    header, its title, its tags and the prose after it; without one, the first heading and the whole file.
+    None where oxn's parser takes no decision: a header it cannot read, or neither header nor heading."""
+    if text.startswith("---"):
+        front, marker, body = text.partition("---")[2].partition("\n---")
+        if marker:
+            try:
+                import yaml
+
+                data = yaml.safe_load(front)
+            except Exception:  # noqa: BLE001 - as oxn: a broken header is no header
+                data = None
+            if isinstance(data, dict):
+                tags = data.get("tags")
+                listed = " ".join(str(tag) for tag in tags) if isinstance(tags, (list, tuple)) else str(tags) if isinstance(tags, str) else ""
+                return f"{data.get('title') if isinstance(data.get('title'), str) else ''}\n{listed}\n{body.lstrip('-' + chr(10))}"
+    title = _TITLE.search(text)
+    return None if title is None else f"{title.group(1)}\n\n{text}"
+
+
 def reference_order(texts: dict[str, str], numbers: dict[str, int], query: str, k1: float = 1.5, b: float = 0.75) -> list[int]:
-    """oxn's BM25 (`context/bm25.py`, v0.1.2) over `title\n\nbody` of each decision (these corpora have no
-    tags), ties broken by the decision's identifier."""
+    """oxn's BM25 (`context/bm25.py`, v0.1.2) over each decision as oxn reads it, ties broken by the decision's identifier."""
     documents = {}
     for path, body in texts.items():
-        title = _TITLE.search(body)
-        if title is None:
-            continue        # oxn's parser takes no decision from a file with no heading
-        documents[path] = Counter(tokenize(f"{title.group(1)}\n\n{body}"))
+        document = reference_document(body)
+        if document is not None:
+            documents[path] = Counter(tokenize(document))
     lengths = {path: sum(terms.values()) for path, terms in documents.items()}
     average = sum(lengths.values()) / len(lengths) if lengths else 0.0
     postings: dict[str, dict[str, int]] = {}

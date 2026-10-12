@@ -64,3 +64,16 @@ def test_a_record_written_where_the_records_used_to_be_is_not_work_it_governs(hi
     head = subprocess.run(["git", "-C", str(history), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     left = {}
     assert labels.pairs_in(history, head, "docs/adr", left)[0] == [] and left == {"only the records changed": 1}
+
+
+def test_the_reference_ranker_reads_a_record_with_a_header_as_oxn_does():
+    import decisions as harness
+
+    texts = {"adr/adr006-avoid-fc.md": "---\nid: adrs-adr006\ntitle: 'ADR006: Avoid the FC helper'\ntags: [react, typing]\n---\n\n## Context\n\nComponents.\n",
+             "adr/0007-use-queues.md": "# 7. Use queues\n\nBackground work goes through the queue.\n",
+             "adr/0008-broken.md": "---\ntitle: [unclosed\n---\n\nNothing oxn can read: no header it understands and no heading.\n"}
+    numbers = {"adr/adr006-avoid-fc.md": 6, "adr/0007-use-queues.md": 7, "adr/0008-broken.md": 8}
+    assert harness.reference_order(texts, numbers, "avoid FC helper components") == [6]       # the title is in the header only
+    assert harness.reference_order(texts, numbers, "typing react") == [6]                        # and so are the tags
+    assert harness.reference_order(texts, numbers, "background queue") == [7]
+    assert harness.reference_order(texts, numbers, "nothing understands heading") == []                     # as oxn: skipped, not fatal
