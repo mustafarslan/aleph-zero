@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -19,6 +20,12 @@ from .view import View
 
 BATCH = 50
 SEEN_REFRESH_SECONDS = 3600
+
+
+def seen_refresh_seconds() -> int:
+    """How stale `last_seen_at` may get for content in use. Garbage collection must use an
+    age well above this. The setting exists for the stress run, which shortens both."""
+    return int(float(os.environ.get("ALEPH_SEEN_REFRESH_SECONDS", SEEN_REFRESH_SECONDS)))
 RETRY_SECONDS = 60  # before a blob git could not supply is asked for again under the same view
 
 Key = tuple[str, str]  # (blob id, family): the same bytes are chunked once per treatment
@@ -31,15 +38,33 @@ def symbol_key(name: str) -> str:
 
 @contextmanager
 def _temp_tables(conn: apsw.Connection):
-    """A transaction over the connection's own temporary tables. It takes no lock on the
-    index; it only makes the rewrite all-or-nothing and leaves no transaction open on error."""
-    conn.execute("BEGIN")
+    """A rewrite of the connection's own temporary tables, all or nothing. It takes no lock
+    on the index. A savepoint, so it also works inside `Index.reading()`."""
+    conn.execute("SAVEPOINT temp_tables")
     try:
         yield
     except BaseException:
-        conn.execute("ROLLBACK")
+        conn.execute("ROLLBACK TO temp_tables")
+        conn.execute("RELEASE temp_tables")
         raise
-    conn.execute("COMMIT")
+    conn.execute("RELEASE temp_tables")
+
+
+_MISSING = ("SELECT v.blob_oid, v.family FROM temp.view_blobs v LEFT JOIN blobs b "
+            "ON b.blob_oid = v.blob_oid AND b.family = v.family AND b.chunker_version = ? "
+            "WHERE b.blob_oid IS NULL ORDER BY v.blob_oid, v.family")
+
+
+def collections(conn: apsw.Connection) -> int:
+    """How many times content has been removed from this index."""
+    found = conn.execute("SELECT value FROM meta WHERE key = 'collections'").fetchall()
+    return found[0][0] if found else 0
+
+
+def _removed_content(conn: apsw.Connection) -> None:
+    """Inside a write transaction that deleted blobs or chunks: let every session know."""
+    conn.execute("INSERT INTO meta(key, value) VALUES ('collections', 1) "
+                 "ON CONFLICT(key) DO UPDATE SET value = value + 1")
 
 
 @dataclass(frozen=True)
@@ -77,6 +102,13 @@ class Index:
         self._store_seconds = 0.002  # what storing one blob has cost lately; sizes the last batch before a deadline
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
         self._scope: tuple | None = None
+        self._keys: frozenset[Key] = frozenset()     # every blob of the view
+        self._indexed: frozenset[Key] = frozenset()  # those that were in the index at the last sync
+        self.lost_to_collection = 0  # blobs of a live view that another session's collection removed
+        self.full_checks = 0         # syncs that had to look at the whole view
+        self._version: int | None = None   # SQLite's data_version when the last sync looked: other sessions' commits change it
+        self._collections = -1       # the index's count of removals when the list of chunks was built
+        self._touched_at = 0.0
 
     def sync(self, view: View, budget_seconds: float = 5.0,
              stop: Callable[[], bool] | None = None) -> SyncReport:
@@ -87,15 +119,19 @@ class Index:
         collected this view's content, or indexed what was pending here."""
         started = time.monotonic()
         changed = view.fingerprint != self._fingerprint
+        # Read before looking: a commit by another session after this point is seen as a change next time.
+        version = self.conn.pragma("data_version")
+        if not changed and version == self._version and not self._missing:
+            # The same view, nothing pending, and no other session has written: the index is as it was.
+            self._touch()
+            return SyncReport(0, 0, 0, time.monotonic() - started)
+        self.full_checks += 1
         if changed:
             self._fingerprint = None  # until the tables below match the view again
             self._load_view_blobs(view)
-        missing: list[Key] = [(row[0], row[1]) for row in self.conn.execute(
-            "SELECT v.blob_oid, v.family FROM temp.view_blobs v LEFT JOIN blobs b "
-            "ON b.blob_oid = v.blob_oid AND b.family = v.family AND b.chunker_version = ? "
-            "WHERE b.blob_oid IS NULL ORDER BY v.blob_oid, v.family",
-            (CHUNKER_VERSION,),
-        )]
+        removals = collections(self.conn)
+        missing: list[Key] = [(row[0], row[1]) for row in self.conn.execute(_MISSING, (CHUNKER_VERSION,))]
+        self.lost_to_collection += len(self._indexed.intersection(missing))
         retry_before = started - RETRY_SECONDS
         todo = [key for key in missing if self._deferred.get(key, retry_before) <= retry_before]
         indexed = skipped = 0
@@ -139,13 +175,44 @@ class Index:
                 self._store_seconds = max(per_blob, 0.5 * self._store_seconds)  # remembers large files for a while
                 left -= len(prepared)
                 stored.update(item.key for item in prepared)
-        if changed or indexed or skipped or frozenset(missing) != self._missing:
-            self._refresh_view_chunks()  # also when another session indexed or collected something
+        if changed or indexed or skipped or frozenset(missing) != self._missing or removals != self._collections:
+            # Also when another session indexed something of this view, or content was removed:
+            # the same blobs may be back under new chunk ids.
+            self._refresh_view_chunks()
+            self._collections = removals
         self._missing = frozenset(missing) - stored
+        self._indexed = self._keys - self._missing if self._missing else self._keys  # no copy on the usual path
         self._pending = left
-        self._touch()
+        self._touch(now=True)
         self._fingerprint = view.fingerprint
+        self._version = version
         return SyncReport(indexed, skipped, left, time.monotonic() - started)
+
+    @contextmanager
+    def reading(self):
+        """Everything read inside sees one state of the index, whatever other sessions commit meanwhile."""
+        conn = self.conn
+        conn.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            self._scope = None  # the filter tables may have been half rewritten
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
+
+    def undisturbed(self) -> bool:
+        """No other session has committed since the last sync looked at the index. Not to be
+        asked inside `reading()`: SQLite reports the version from before the transaction."""
+        return self._version is not None and self.conn.pragma("data_version") == self._version
+
+    def still_serves(self) -> bool:
+        """Inside `reading()`: whether the state being read holds everything the last sync
+        found for this view, under the chunk ids it listed. Looks at the whole view."""
+        if collections(self.conn) != self._collections:
+            return False
+        return frozenset((row[0], row[1]) for row in self.conn.execute(_MISSING, (CHUNKER_VERSION,))) == self._missing
 
     def serves(self, view: View) -> bool:
         """True if the last sync was for this view, so queries answer for it."""
@@ -242,6 +309,7 @@ class Index:
         for path in sorted(view.files):
             paths.setdefault((view.files[path], filters.family(path)), []).append(path)
         self._paths = paths
+        self._keys = frozenset(paths)
         with _temp_tables(self.conn):
             self.conn.execute("DELETE FROM temp.view_blobs")
             self.conn.executemany("INSERT INTO temp.view_blobs(blob_oid, family) VALUES (?, ?)", paths)
@@ -255,20 +323,25 @@ class Index:
                 "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family"
             )
 
-    def _touch(self) -> None:
-        """Mark the view's blobs as recently seen, at most once an hour each, so a
-        query does not take the write lock every time. The check itself is one index probe."""
-        now = int(time.time())
+    def _touch(self, now: bool = False) -> None:
+        """Mark the view's blobs as recently seen, at most once an hour each, so a query does
+        not take the write lock every time. Looking for stale ones reads the whole view, so
+        that too is done only now and then, unless the sync has just looked anyway."""
+        moment = time.time()
+        refresh = seen_refresh_seconds()
+        if not now and moment - self._touched_at < min(refresh / 4, 300):
+            return
+        self._touched_at = moment
         stale = self.conn.execute(
             "SELECT 1 FROM blobs b JOIN temp.view_blobs v ON v.blob_oid = b.blob_oid AND v.family = b.family "
-            "WHERE b.last_seen_at < ? LIMIT 1", (now - SEEN_REFRESH_SECONDS,),
+            "WHERE b.last_seen_at < ? LIMIT 1", (int(moment) - refresh,),
         ).fetchall()
         if stale:
             with transaction(self.conn):
                 self.conn.execute(
                     "UPDATE blobs SET last_seen_at = ? WHERE last_seen_at < ? "
                     "AND (blob_oid, family) IN (SELECT blob_oid, family FROM temp.view_blobs)",
-                    (now, now - SEEN_REFRESH_SECONDS),
+                    (int(moment), int(moment) - refresh),
                 )
 
     def _prepare(self, view: View, reader: gitio.Readers, key: Key) -> _Prepared | None:
@@ -300,6 +373,8 @@ class Index:
         oid, family = item.key
         conn.execute("DELETE FROM blobs WHERE blob_oid = ? AND family = ? AND chunker_version != ?",
                      (oid, family, CHUNKER_VERSION))
+        if conn.changes():
+            _removed_content(conn)  # another session may be listing this blob's chunks
         conn.execute(
             "INSERT OR IGNORE INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -356,4 +431,6 @@ def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | Non
             "SELECT chunk_id FROM chunks WHERE chunk_id NOT IN (SELECT chunk_id FROM blob_chunks)")]
         conn.executemany("DELETE FROM chunk_fts WHERE rowid = ?", ((cid,) for cid in orphans))
         conn.executemany("DELETE FROM chunks WHERE chunk_id = ?", ((cid,) for cid in orphans))
+        if blobs or orphans:
+            _removed_content(conn)
     return {"blobs_removed": blobs, "chunks_removed": len(orphans)}

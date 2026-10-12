@@ -79,7 +79,15 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
 
 CREATE TABLE IF NOT EXISTS vector_files (
     kind     TEXT PRIMARY KEY,
-    next_row INTEGER NOT NULL      -- only ever grows
+    next_row INTEGER NOT NULL,     -- only ever grows
+    writes   INTEGER NOT NULL DEFAULT 0   -- goes up with every change to the rows of this kind
+) WITHOUT ROWID;
+
+-- Counters every session can see. 'collections' goes up whenever content is removed from
+-- the index, so a session knows its list of chunks may name rows that are gone.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
 ) WITHOUT ROWID;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(

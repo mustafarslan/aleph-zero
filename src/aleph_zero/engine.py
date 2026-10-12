@@ -136,22 +136,16 @@ class Engine:
                timeout_ms: int | None = None) -> render.Answer:
         families = _families(lang)
         started, until = _limits(timeout_ms)
+
+        def read(index: Index, view: View):
+            note, covered, chunks, nearest = self._dense(index, view, query)
+            return note, covered, chunks, lambda: run_search(
+                index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest) or []
+
         try:
-            index, view, pending, late = self._ready(cwd, started, until)
+            (note, covered, chunks, hits), pending, late = self._consistent(cwd, started, until, read, ("", 0, 0))
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
-        hits = []
-        note, covered, chunks, nearest = self._dense(index, view, query)
-        if not late or time.monotonic() < until:
-            try:
-                with deadline(index.conn, until, self._stop):
-                    hits = run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families,
-                                      dense=nearest) or []
-            except apsw.InterruptError:
-                late = True
-                _reset(index.conn)
-        if self._stop.is_set():
-            raise Cancelled
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
 
     @_rebuilding
@@ -182,18 +176,10 @@ class Engine:
                timeout_ms: int | None = None) -> SymbolAnswer:
         started, until = _limits(timeout_ms)
         try:
-            index, view, pending, late = self._ready(cwd, started, until)
+            (found,), pending, late = self._consistent(
+                cwd, started, until, lambda index, view: (lambda: symbols.lookup(index, view, name, limit=k),), ())
         except gitio.GitTimeout:
             return SymbolAnswer(name, [], 0, True, _elapsed(started))
-        found = []
-        try:
-            with deadline(index.conn, until, self._stop):
-                found = symbols.lookup(index, view, name, limit=k)
-        except apsw.InterruptError:
-            late = True
-            _reset(index.conn)
-        if self._stop.is_set():
-            raise Cancelled
         return SymbolAnswer(name, found, pending, late, _elapsed(started))
 
     def outline(self, path: str, cwd: Path | str | None = None,
@@ -220,6 +206,7 @@ class Engine:
             "chunks_in_view": counts["chunks_in_view"], "symbols_in_view": counts["symbols_in_view"],
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "index_note": index_note(view.common_dir),
+            "lost_to_collection": index.lost_to_collection,
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
             "sources": linked, **({"sources_error": problem} if problem else {}),
@@ -331,6 +318,50 @@ class Engine:
             raise Cancelled
         return index, view, report.pending, until is not None and report.pending > 0
 
+
+    def _consistent(self, cwd: Path | str | None, started: float, until: float | None, prepare, empty: tuple):
+        """Answer from one state of the index that holds the worktree's view.
+
+        `prepare(index, view)` returns a tuple whose last item is the function that reads
+        the index; the answer is that tuple with the function's result in its place.
+        Returns (answer, files still pending, out of time).
+
+        Other sessions index and collect while this one answers. Between finding the index
+        complete and reading it, a collection can remove what was found. So the read runs
+        in one transaction, and counts only if nothing was committed around it or, looking
+        again inside that transaction, the view is still all there. Otherwise the index is
+        synced again. On the last attempt an incomplete state is answered from and said so."""
+        attempts = 3
+        for attempt in range(attempts):
+            index, view, pending, late = self._ready(cwd, started, until)
+            *before, read = prepare(index, view)
+            result = empty[len(before):] if empty else ()
+            if late and time.monotonic() >= until:
+                return (*before, []), pending, late
+            quiet = attempt == 0 and index.undisturbed()  # nothing committed since the sync looked
+            sound = True
+            try:
+                with index.reading():
+                    if not quiet:
+                        sound = index.still_serves()
+                    if sound or attempt + 1 == attempts:
+                        with deadline(index.conn, until, self._stop):
+                            found = read()
+                    else:
+                        continue
+            except apsw.InterruptError:
+                _reset(index.conn)
+                if self._stop.is_set():
+                    raise Cancelled
+                return (*before, []), pending, True
+            if self._stop.is_set():
+                raise Cancelled
+            if quiet and not index.undisturbed() and attempt + 1 < attempts:
+                continue  # a commit landed while reading: the transaction may have begun after it
+            if not sound:
+                pending = max(pending, 1)  # answered from a state that lacks part of the view
+            return (*before, found), pending, late
+        raise AssertionError("unreachable")
 
 def _limits(timeout_ms: int | None) -> tuple[float, float | None]:
     started = time.monotonic()

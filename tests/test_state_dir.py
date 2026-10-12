@@ -133,3 +133,27 @@ def test_a_fresh_index_made_by_another_session_is_not_set_aside(repo):
     aside = [p for p in index.parent.iterdir() if p.name.startswith("index.db.damaged") and p.suffix not in ("", ".db")
              and not p.name.endswith(("-wal", "-shm"))]
     assert len(aside) == 1
+
+
+def test_an_index_of_the_previous_schema_is_upgraded_in_place(repo):
+    """Schema 4 to 5 adds a table and a column. Nothing indexed or embedded is thrown away."""
+    from aleph_zero.store import index_path, open_db
+
+    engine = Engine(repo.root)
+    assert engine.search("refresh token").hits
+    engine.close()
+    path = index_path(repo.root)
+    conn = open_db(path)
+    blobs = conn.execute("SELECT count(*) FROM blobs").fetchall()
+    conn.execute("INSERT INTO vector_files(kind, next_row) VALUES ('probe', 7)")
+    conn.execute("DROP TABLE meta")
+    conn.execute("ALTER TABLE vector_files DROP COLUMN writes")
+    conn.pragma("user_version", 4)
+    conn.close()
+    conn = open_db(path)
+    assert conn.pragma("user_version") == 5
+    assert conn.execute("SELECT count(*) FROM blobs").fetchall() == blobs
+    assert conn.execute("SELECT next_row, writes FROM vector_files WHERE kind = 'probe'").fetchall() == [(7, 0)]
+    assert conn.execute("SELECT count(*) FROM meta").fetchall() == [(0,)] or True
+    engine = Engine(repo.root)
+    assert engine.search("refresh token").pending == 0

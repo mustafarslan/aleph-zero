@@ -191,6 +191,9 @@ def test_an_unchanged_view_still_marks_its_content_as_in_use(repo):
     index.sync(view)
     index.conn.execute("UPDATE blobs SET last_seen_at = 0")
     index.sync(view)
+    assert index.conn.execute("SELECT max(last_seen_at) FROM blobs").fetchall()[0][0] == 0  # not on every query
+    index._touched_at -= 600   # some minutes later
+    index.sync(view)
     assert index.conn.execute("SELECT min(last_seen_at) FROM blobs").fetchall()[0][0] > 0
 
 
@@ -227,8 +230,8 @@ def test_content_indexed_by_an_older_version_is_indexed_again(repo, monkeypatch)
     index = _index(repo)
     view = build_view(repo.root)
     index.sync(view)
-    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
-    monkeypatch.setattr(model, "CHUNKER_VERSION", model.CHUNKER_VERSION + 1)
+    # A build with an older chunker wrote these: seen from here as a change by another session.
+    open_db(index_path(repo.root)).execute("UPDATE blobs SET chunker_version = chunker_version - 1")
     assert index.sync(view).indexed == 3
     assert search(index, view, "render_invoice")[0].path == "src/billing/invoice.py"
     collect_garbage(index.conn, max_age_days=30)
@@ -328,3 +331,78 @@ def test_a_huge_committed_file_is_skipped_without_being_read_into_memory(repo):
     assert index.conn.execute("SELECT kind, size FROM blobs WHERE kind LIKE 'skip:%'").fetchall() == [
         ("skip:too-large", 20_000_016)]
     assert peak < 8_000_000
+
+
+def test_content_collected_under_a_live_view_is_counted(repo):
+    """A session can tell that another session's collection took content it was using:
+    it should never happen with the default ages, and the stress run checks that it does not."""
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    assert index.lost_to_collection == 0
+    repo.write("src/new_module.py", "def brand_new():\n    return 1\n")
+    index.sync(build_view(repo.root))
+    assert index.lost_to_collection == 0  # new content is not lost content
+    collect_garbage(open_db(index_path(repo.root)), max_age_days=0, now=time.time() + 10)
+    index.sync(build_view(repo.root))
+    assert index.lost_to_collection == 4
+
+
+def test_how_often_content_is_marked_as_in_use_can_be_set(repo, monkeypatch):
+    from aleph_zero import indexer
+
+    monkeypatch.setenv("ALEPH_SEEN_REFRESH_SECONDS", "0")
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    index.conn.execute("UPDATE blobs SET last_seen_at = last_seen_at - 5")
+    before = index.conn.execute("SELECT max(last_seen_at) FROM blobs").fetchall()[0][0]
+    index.sync(view)
+    assert index.conn.execute("SELECT min(last_seen_at) FROM blobs").fetchall()[0][0] > before
+    assert indexer.seen_refresh_seconds() == 0
+
+
+def test_content_collected_and_indexed_again_by_another_session_is_still_found(repo):
+    """Session A has synced. A collection takes its content; session B, on the same files,
+    indexes them again under new chunk ids. A's list of chunks must not go on pointing at
+    the ids that were deleted."""
+    first = _index(repo)
+    view = build_view(repo.root)
+    first.sync(view)
+    assert search(first, view, "expire silently")[0].path == "docs/guide.md"
+    collect_garbage(open_db(index_path(repo.root)), max_age_days=0, now=time.time() + 10)
+    second = _index(repo)
+    # Something else was indexed in between, so the new chunks do not get the old ids back.
+    second.conn.executemany("INSERT INTO chunks(chunk_hash, kind, symbol, signature, breadcrumb, text) "
+                            "VALUES (?, 'block', '', '', '', 'filler')", ((f"filler{n}",) for n in range(50)))
+    assert second.sync(view).indexed == 3
+    first.sync(view)
+    assert search(first, view, "expire silently")[0].path == "docs/guide.md"
+
+
+def test_an_unchanged_index_is_not_checked_again_on_every_sync(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    checks = index.full_checks
+    index.sync(view)
+    index.sync(view)
+    assert index.full_checks == checks                      # nobody wrote: nothing to look at
+    other = open_db(index_path(repo.root))
+    other.execute("UPDATE blobs SET last_seen_at = last_seen_at + 1")   # any commit by another connection
+    index.sync(view)
+    assert index.full_checks == checks + 1
+
+
+def test_reading_gives_one_state_for_several_statements(repo):
+    index = _index(repo)
+    view = build_view(repo.root)
+    index.sync(view)
+    other = open_db(index_path(repo.root))
+    with index.reading():
+        before = _total(index, "blobs")
+        collect_garbage(other, max_age_days=0, now=time.time() + 10)
+        assert _total(index, "blobs") == before         # the collection is not seen half-way through
+        index.narrow(view, "code", lambda path: path.startswith("src/"), key="src")  # temp tables still work
+    assert _total(index, "blobs") == 0
+    assert not index.undisturbed()

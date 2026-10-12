@@ -13,7 +13,13 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+# Versions that are brought up to date where they are. Anything older is a cache of a
+# different shape and is rebuilt; these hold vectors that took GPU time to make.
+_UPGRADES = {
+    4: ("ALTER TABLE vector_files ADD COLUMN writes INTEGER NOT NULL DEFAULT 0;"
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;"),
+}
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -233,6 +239,10 @@ def _open(path: Path) -> apsw.Connection:
     def create_schema() -> int:
         with transaction(conn):
             found = conn.pragma("user_version")  # checked under the write lock
+            while found in _UPGRADES:
+                conn.execute(_UPGRADES[found])
+                found += 1
+                conn.pragma("user_version", found)
             if 0 < found < SCHEMA_VERSION:
                 _drop_everything(conn)  # the index is a cache: an older one is rebuilt
                 found = 0

@@ -154,3 +154,28 @@ def test_building_the_view_of_a_very_dirty_tree_respects_the_time_limit(repo):
     started = time.monotonic()
     answer = engine.search("untracked", timeout_ms=60)
     assert time.monotonic() - started < 0.25 and answer.timed_out
+
+
+def test_a_collection_that_lands_between_the_check_and_the_search_does_not_cost_the_answer(repo, monkeypatch):
+    """Another session collects this session's content after the index was found complete
+    and before the search reads it. The answer must still be right."""
+    import time
+
+    from aleph_zero import engine as engine_module
+    from aleph_zero.indexer import collect_garbage
+    from aleph_zero.store import index_path, open_db
+
+    engine = Engine(repo.root)
+    assert engine.search("render invoice").hits
+    real, fired = engine_module.run_search, []
+
+    def racing(*args, **kwargs):
+        if not fired:
+            fired.append(collect_garbage(open_db(index_path(repo.root)), max_age_days=0, now=time.time() + 10))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module, "run_search", racing)
+    answer = engine.search("render invoice")
+    assert fired and fired[0]["blobs_removed"] == 3
+    assert [hit.path for hit in answer.hits][:1] == ["src/billing/invoice.py"]
+    assert engine.symbol("refresh_token").symbols[0].path == "src/auth/token_store.py"

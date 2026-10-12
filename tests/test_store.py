@@ -55,7 +55,7 @@ def test_an_index_from_an_older_version_is_rebuilt_because_it_is_a_cache(tmp_pat
     conn.execute("INSERT INTO chunk_fts(rowid, symbol, signature, doc, body) VALUES (1, 'a', 'b', 'c', 'd')")
     conn.close()
     raw = apsw.Connection(str(path))
-    raw.pragma("user_version", SCHEMA_VERSION - 1)
+    raw.pragma("user_version", 3)  # older than anything that is upgraded in place (4 onwards is: test_state_dir)
     raw.close()
     conn = open_db(path)
     assert conn.pragma("user_version") == SCHEMA_VERSION
