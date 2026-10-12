@@ -352,7 +352,12 @@ def test_the_scan_gives_the_same_scores_however_the_rows_lie_and_however_many_th
     random = np.random.default_rng(7)
     stored = random.standard_normal((5000, vectors.WIDTH), dtype=np.float32).astype(np.float16)
     query = stored[11].astype(np.float32)
-    plain = lambda rows: stored[rows].astype(np.float32) @ query      # noqa: E731 - what a scan is
+    def plain(rows):        # the scan as it was before: rows gathered a block at a time
+        out = np.empty(len(rows), dtype=np.float32)
+        for start in range(0, len(rows), 512):
+            out[start:start + 512] = stored[rows[start:start + 512]].astype(np.float32) @ query
+        return out
+
     together = np.arange(5000, dtype=np.int64)                         # a fresh index: the view's rows lie side by side
     apart = np.delete(together, np.arange(0, 5000, 7))                 # rows of other branches in between
     few = np.array([3, 4, 5, 4000], dtype=np.int64)
@@ -361,5 +366,9 @@ def test_the_scan_gives_the_same_scores_however_the_rows_lie_and_however_many_th
         for threaded_from in (10**9, 1):                               # on one thread, then on several
             monkeypatch.setattr(vectors, "_THREADED_FROM", threaded_from)
             found = vectors.scores_of(stored, rows, query)
-            assert found.dtype == np.float32 and np.allclose(found, plain(rows), rtol=0, atol=1e-5)
-            assert list(np.argsort(-found, kind="stable")[:20]) == list(np.argsort(-plain(rows), kind="stable")[:20])
+            assert found.dtype == np.float32
+            if threaded_from > 1:
+                assert np.array_equal(found, plain(rows))                 # a slice or a gather: the same to the last bit
+            else:       # split otherwise among threads, a few products round their last bit the other way
+                assert np.allclose(found, plain(rows), rtol=1e-5, atol=0)
+                assert list(np.argsort(-found, kind="stable")[:20]) == list(np.argsort(-plain(rows), kind="stable")[:20])

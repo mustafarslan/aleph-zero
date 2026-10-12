@@ -15,10 +15,13 @@ What it fetches, and when:
 
 - **Grammars** for the languages it parses are downloaded the first time a file of that
   language is read, into your cache directory. `aleph doctor --fetch-grammars` gets them
-  all at once; `aleph doctor` says which are missing.
+  all at once; `aleph doctor` says which are missing. Without a language's grammar its
+  files are still searched as text, but `symbol` and `outline` find nothing in them.
 - **Search by meaning is optional** and off until you run `aleph embed setup`, which builds
   a small local server and downloads a 310 MB model. Without it, search is by words and names.
-- Nothing else uses the network, and nothing about your code ever leaves the machine.
+- Installing fetches Aleph's dependencies, as for any package (and a Python 3.13 if uv has none). After that, Aleph
+  uses the network only for the two things above and for a repository you ask it to fetch
+  (`aleph source add <URL>`). Nothing about your code ever leaves the machine.
 
 The Claude Code plugin (`plugin/`) is part of the repository, not of the installed package:
 point Claude Code at a checkout (see below).

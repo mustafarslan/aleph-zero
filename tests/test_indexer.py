@@ -499,17 +499,22 @@ def test_an_older_build_does_not_redo_what_a_newer_build_indexed(repo, monkeypat
     from aleph_zero import indexer
     from aleph_zero.store import StoreError
 
+    ours, theirs = indexer.CHUNKER_VERSION, indexer.CHUNKER_VERSION + 1
     older, view = _index(repo), build_view(repo.root)
     assert older.sync(view).indexed == 3
-    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", theirs)
     newer = _index(repo)
     assert newer.sync(view).indexed == 3                     # an upgrade reads everything again, once
-    monkeypatch.undo()
-    with pytest.raises(StoreError, match="newer version of Aleph"):
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", ours)    # (not `undo`, which would also undo the fixtures' settings)
+    with pytest.raises(StoreError, match="newer version of Aleph") as refused:
         older.sync(view)                                     # ... and the older build leaves that alone, and says why
-    from aleph_zero import cli
+    assert "it is a cache" in str(refused.value) and str(index_path(repo.root).parent) in str(refused.value)   # and the way out
+    from aleph_zero import cli, doctor
     assert cli.main(["--cwd", str(repo.root), "search", "refresh token"]) == 2
     assert "newer version of Aleph" in capsys.readouterr().err   # one sentence, not a traceback
-    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
-    assert newer.sync(view).indexed == 0                     # nothing of the newer build's was touched
+    row = next(row for row in doctor.check(repo.root) if row.name == "index")
+    assert row.level == "FAIL" and "newer version of Aleph" in row.detail      # the place one looks when search fails
+    versions = {version for (version,) in older.conn.execute("SELECT chunker_version FROM blobs")}
+    assert versions == {theirs}                              # nothing of the newer build's was touched
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", theirs)
     assert [hit.path for hit in search(newer, view, "refresh token")][:1] == ["src/auth/token_store.py"]

@@ -16,8 +16,9 @@ def test_everything_tracked_in_the_package_is_in_the_wheel(tmp_path):
     # The tests run with a cache directory of their own; the build backend is in the real one.
     outside = {name: value for name, value in os.environ.items() if name != "XDG_CACHE_HOME"}
     built = subprocess.run(["uv", "build", "--wheel", "--offline", "--out-dir", str(tmp_path)], cwd=ROOT, capture_output=True, text=True, env=outside)
-    if built.returncode != 0:
-        pytest.skip(f"the wheel could not be built here (the build backend is not in the local cache): {built.stderr.strip()[-200:]}")
+    if built.returncode != 0 and "network was disabled" in built.stderr:
+        pytest.skip("the build backend is not in the local cache, and the tests do not use the network")
+    assert built.returncode == 0, built.stderr[-600:]         # any other failure is the package's
     (wheel,) = tmp_path.glob("*.whl")
     inside = set(zipfile.ZipFile(wheel).namelist())
     tracked = subprocess.run(["git", "ls-files", "src/aleph_zero"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()

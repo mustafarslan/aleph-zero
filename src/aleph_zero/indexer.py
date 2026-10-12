@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import apsw
 
@@ -142,9 +143,7 @@ class Index:
                 "SELECT max(b.chunker_version) FROM temp.view_blobs v JOIN blobs b ON b.blob_oid = v.blob_oid AND b.family = v.family "
                 "WHERE b.chunker_version > ?", (CHUNKER_VERSION,)).fetchall()[0][0]
             if newer is not None:
-                raise StoreError(f"this index holds content read by a newer version of Aleph (its chunker is {newer}, this "
-                                 f"one's is {CHUNKER_VERSION}). Two versions sharing an index would each redo the other's work "
-                                 f"on every query: upgrade this installation, or run the newer one")
+                raise StoreError(newer_build(self.conn.filename, newer))
         self.lost_to_collection += len(self._indexed.intersection(missing))
         retry_before = started - RETRY_SECONDS
         todo = [key for key in missing if self._deferred.get(key, retry_before) <= retry_before]
@@ -453,6 +452,14 @@ COLLECT_SECONDS = 0.5           # what one round may take; it runs after a query
 COLLECT_RETRY_SECONDS = 60      # before the next round when one did not finish
 _BLOB_BATCH = 500
 _CHUNK_BATCH = 2000
+
+
+def newer_build(index_file: str, theirs: int) -> str:
+    """What an older build says of an index a newer one has written to, and the ways out."""
+    return (f"this index holds content read by a newer version of Aleph (its chunker is {theirs}, this one's is "
+            f"{CHUNKER_VERSION}). Two versions sharing an index would each redo the other's work on every query: "
+            f"upgrade this installation, or use the newer one. To start over with this version instead, delete "
+            f"{Path(index_file).parent} (it is a cache: nothing but time is lost)")
 
 
 def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:

@@ -9,7 +9,8 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, indexers, lang
+from . import gitio, indexer, indexers, lang
+from .chunking import CHUNKER_VERSION
 from .lang import parse
 from .store import SCHEMA_VERSION, index_file, state_reason
 from .store import db as store_db
@@ -133,12 +134,15 @@ def _index(path: Path) -> Row:
         try:
             verdict = conn.execute("PRAGMA quick_check").fetchall()[0][0]
             version = conn.pragma("user_version")
+            chunker = conn.execute("SELECT max(chunker_version) FROM blobs").fetchall()[0][0] if version == SCHEMA_VERSION else None
         finally:
             conn.close()
     except apsw.Error as exc:
         return Row("FAIL", "index", f"index: {path} cannot be read ({type(exc).__name__}); it is a cache: the next search sets it aside and builds a new one")
     if verdict != "ok":
         return Row("FAIL", "index", f"index: {path} is damaged ({verdict}); it is a cache: the next search sets it aside and builds a new one")
+    if chunker is not None and chunker > CHUNKER_VERSION:      # searches are refused: say so where one looks for why
+        return Row("FAIL", "index", f"index: {indexer.newer_build(str(path), chunker)}")
     if version == SCHEMA_VERSION:
         age = ""
     elif version in store_db.upgradable():

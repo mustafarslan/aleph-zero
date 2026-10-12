@@ -7,8 +7,9 @@ The protocol is fixed in the M10 plan before any figure: synthetic unit vectors 
 width in a float16 file, scanned as `vectors.VectorStore.search` scans them (rows taken from a
 memory map in blocks, converted to float32, one matrix product, the best 300 kept), warm, the
 median of 15, at 100,000, 300,000, 1,000,000 and 3,000,000 rows. The limit is where the scan
-alone passes 50 ms, or the memory the scan holds privately (scores, the view's row and chunk
-numbers, one block of scratch) passes 64 MB. Two layouts of the view's rows are timed: side by
+alone passes 50 ms, or the memory a query holds privately passes 64 MB. That memory is measured,
+not worked out: the peak of what Python and numpy allocate during one scan with its choice of the
+best (tracemalloc), plus the view's row and chunk numbers, which the engine keeps between queries. Two layouts of the view's rows are timed: side by
 side (a fresh index), and with every seventh row another view's (the vectors of several branches
 in one file); the limit is read from the slower. The mapped file itself is shared by the system
 across sessions and is not private memory (ADR-005).
@@ -20,6 +21,7 @@ import json
 import statistics
 import sys
 import time
+import tracemalloc
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +37,14 @@ def scan(mapped: np.memmap, rows: np.ndarray, query: np.ndarray) -> np.ndarray:
     scores = vectors.scores_of(mapped, rows, query)      # the engine's own scan
     best = np.argpartition(-scores, KEPT - 1)[:KEPT]
     return best[np.argsort(-scores[best], kind="stable")]
+
+
+def crossing(points: list[tuple[int, float]], line: float) -> int | None:
+    """The row count at which a measure crosses its line, between the two sizes around it; None if it never does."""
+    for (below, low), (above, high) in zip(points, points[1:]):
+        if low <= line < high:
+            return round(below + (line - low) / (high - low) * (above - below))
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,11 +76,17 @@ def main(argv: list[str] | None = None) -> int:
                     best = scan(mapped, rows, query)
                     took.append((time.perf_counter() - started) * 1000)
                 assert int(chunk_ids[best[0]]) == 7
-                private = (size * 4 + rows.nbytes + chunk_ids.nbytes + vectors._BLOCK * vectors.WIDTH * 4) / 1e6
-                entry[layout] = {"median_ms": round(statistics.median(took), 1), "worst_ms": round(max(took), 1)}
-                entry["private_mb"] = round(private, 1)
+                tracemalloc.start()
+                scan(mapped, rows, query)
+                peak = tracemalloc.get_traced_memory()[1]
+                tracemalloc.stop()
+                entry[layout] = {"median_ms": round(statistics.median(took), 1), "worst_ms": round(max(took), 1),
+                                 "private_mb": round((peak + rows.nbytes + chunk_ids.nbytes) / 1e6, 1)}
     finally:
         path.unlink(missing_ok=True)
+    report["limit_rows"] = {measure: {layout: crossing([(size, report["sizes"][str(size)][layout][key]) for size in SIZES], line)
+                                      for layout in ("side_by_side", "with_gaps")}
+                            for measure, key, line in (("time", "median_ms", TIME_LIMIT_MS), ("memory", "private_mb", MEMORY_LIMIT_MB))}
     print(json.dumps(report, indent=1))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
