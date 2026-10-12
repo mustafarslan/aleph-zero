@@ -182,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
 
         decision_records.FUSION = "convex"
         engine_module.QUERY_EMBED_SECONDS = 30.0    # a busy worker must not turn a run of the fusion into a run of words
+        engine_module.RECORD_EMBED_SECONDS, engine_module.RECORD_RETRY_SECONDS = 300.0, 0.0     # nor the limit on a first question
     labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []
     notes: dict[str, str] = {}

@@ -224,6 +224,7 @@ def check_engine(workdir: Path, labels: dict, corpora: dict, near: dict) -> dict
     from aleph_zero.engine import Engine
 
     engine_module.QUERY_EMBED_SECONDS = 30.0        # a busy worker must not turn a check of the fusion into a check of words
+    engine_module.RECORD_EMBED_SECONDS, engine_module.RECORD_RETRY_SECONDS = 300.0, 0.0     # nor the limit on a first question
     records_of.FUSION = "convex"
     same = ties = different = unused = first_three = 0
     examples = []
