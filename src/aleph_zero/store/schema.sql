@@ -83,6 +83,18 @@ CREATE TABLE IF NOT EXISTS graph_facts (
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
+-- What a blob states about the architecture (M8): the routes it serves, its models and tables, the
+-- environment names it reads, its tasks and services. One row per blob that was read for them,
+-- empty for the many that state nothing. Filled when facts are first asked of a view, like graph_facts.
+CREATE TABLE IF NOT EXISTS arch_facts (
+    blob_oid TEXT NOT NULL,
+    family   TEXT NOT NULL,
+    version  INTEGER NOT NULL,    -- of the readers that wrote the row; another version is read again
+    facts    BLOB NOT NULL,       -- zlib(JSON): [kind, name, line, detail] each; empty when there is none
+    PRIMARY KEY (blob_oid, family),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
+
 -- Compiler-grade indexes (SCIP) made elsewhere and imported (M9). One row per document: the blob
 -- it is taken to have been made from, the documents it depends on, and its references to
 -- definitions inside the tree. Believed in a view only while those blobs are the view's

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
+from . import archfacts, callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -317,6 +317,39 @@ class Engine:
         by_vectors, note = ([], "") if rrf_k == 0 or not task.strip() or not records.decisions else self._nearest_records(view, task, records)
         hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k)
         return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
+
+    @_rebuilding
+    def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
+              timeout_ms: int | None = None, prepare_seconds: float | None = None) -> archfacts.Answer:
+        """What the worktree states about its architecture: with no argument, how many routes, models,
+        tables, environment names, tasks and services it has; with a kind or a part of a name, those
+        facts with where each is stated. The first question about a view reads its files for them,
+        for at most `prepare_seconds` (or a share of the time limit); `unread` says how many are left."""
+        kind, like = kind or "", like or ""
+        if kind and kind not in archfacts.KINDS:
+            raise ValueError("kind is one of: " + ", ".join(archfacts.KINDS))
+        started, until = _limits(timeout_ms)
+        left = [0]
+
+        def prepare(index: Index, view: View):
+            if prepare_seconds is not None:
+                budget = prepare_seconds
+            else:
+                budget = GRAPH_SECONDS if until is None else max(0.0, (until - time.monotonic()) * GRAPH_SHARE)
+            left[0] = archfacts.prepare(index, view, budget, self._stop.is_set)
+            if self._stop.is_set():
+                raise Cancelled
+            return (lambda: archfacts.select(archfacts.load(index), kind, like, k),)
+
+        try:
+            (found,), pending, late = self._consistent(cwd, started, until, prepare, ())
+        except gitio.GitTimeout:
+            return archfacts.Answer(kind, like, [], late=True, elapsed_ms=_elapsed(started))
+        if not found:       # out of time before the index could be read
+            return archfacts.Answer(kind, like, [], pending=pending, unread=left[0], late=True, elapsed_ms=_elapsed(started))
+        listed, counts, truncated = found
+        return archfacts.Answer(kind, like, listed, counts, pending, left[0], late or left[0] > 0 and until is not None,
+                                _elapsed(started), truncated)
 
     def _nearest_records(self, view: View, task: str, records: decisions.Records) -> tuple[list[str], str]:
         """The records' paths in the order of their nearest chunk to the task, and how vectors took part."""

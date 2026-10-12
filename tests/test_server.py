@@ -341,5 +341,9 @@ def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
         assert tools["decisions"]["inputSchema"]["required"] == ["task"]
         assert on.text("decisions", task="render the invoice in the browser instead").startswith(
             "docs/adr/0003-invoices-are-rendered-server-side.md  ADR 3  Invoices are rendered on the server  [Accepted]")
+        repo.write("src/api.py", "@app.get(\"/invoices/{invoice_id}\")\ndef show(invoice_id): ...\n")
+        assert "kind" in tools["facts"]["inputSchema"]["properties"] and "facts" not in {tool["name"] for tool in server.TOOLS}
+        assert on.text("facts").startswith("route  1")
+        assert on.text("facts", kind="route") == "GET /invoices/{invoice_id}  src/api.py:1  fastapi"
     finally:
         on.close()

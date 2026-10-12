@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict
 from typing import IO
 
-from . import callgraph, decisions, gitio, outline, render
+from . import archfacts, callgraph, decisions, gitio, outline, render
 from .engine import Cancelled, Engine
 from .store import StoreError
 
@@ -140,6 +140,17 @@ DECISIONS_TOOL = {
         "k": {"type": "integer", "minimum": 1, "maximum": 30, "default": 7},
         **_COMMON}},
 }
+FACTS_TOOL = {
+    "name": "facts",
+    "description": "What this repository states about its architecture: HTTP routes, data models and tables, environment "
+                   "names read or declared, background tasks, gRPC services. With no kind: how many of each. With a kind, "
+                   "or part of a name (a path, a variable): each with its file and line.",
+    "inputSchema": {"type": "object", "properties": {
+        "kind": {"type": "string", "enum": list(archfacts.KINDS)},
+        "like": {"type": "string"},
+        "k": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
+        **_COMMON, **_TIMEOUT}},
+}
 GRAPH_SECONDS = 20.0     # how long a first graph question may spend reading files when the caller sets no limit
 
 
@@ -149,10 +160,10 @@ def graph_enabled() -> bool:
 
 def tools() -> list[dict]:
     """The tools offered to this session."""
-    return TOOLS + [GRAPH_TOOL, DECISIONS_TOOL] if graph_enabled() else TOOLS
+    return TOOLS + [GRAPH_TOOL, DECISIONS_TOOL, FACTS_TOOL] if graph_enabled() else TOOLS
 
 
-_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL, DECISIONS_TOOL]}
+_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL, DECISIONS_TOOL, FACTS_TOOL]}
 _JSON_TYPES = {"string": str, "integer": int}
 
 
@@ -423,6 +434,11 @@ def _run(engine: Engine, name: str, args: dict) -> str:
     if name == "decisions":
         found = engine.decisions(args["task"], k=args.get("k", 7), cwd=cwd)
         return json.dumps(asdict(found)) if as_json else decisions.text(found)
+    if name == "facts":
+        found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,
+                             timeout_ms=args.get("timeout_ms"),
+                             prepare_seconds=None if args.get("timeout_ms") else GRAPH_SECONDS)
+        return json.dumps(asdict(found)) if as_json else archfacts.text(found)
     if name == "references":
         found = engine.references(args["name"], direction=args.get("direction", "both"), k=args.get("k", 50), cwd=cwd,
                                   timeout_ms=args.get("timeout_ms"),

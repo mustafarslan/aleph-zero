@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import callgraph, decisions, doctor, gitio, indexers, outline, render, scipstore, sources
+from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, render, scipstore, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -69,6 +69,12 @@ def _references(args) -> int:
         print(json.dumps(asdict(found), indent=2))
         return 0
     print(callgraph.text(found))
+    return 0
+
+
+def _facts(args) -> int:
+    found = Engine(args.cwd).facts(args.kind, like=args.like, k=args.k, timeout_ms=args.timeout_ms)
+    print(json.dumps(asdict(found), indent=2) if args.json else archfacts.text(found))
     return 0
 
 
@@ -283,6 +289,14 @@ def main(argv: list[str] | None = None) -> int:
     governing.add_argument("-k", type=int, default=7)
     governing.add_argument("--json", action="store_true")
     governing.set_defaults(run=_decisions)
+
+    stated = commands.add_parser("facts", help="routes, models, tables, environment names, tasks and services the code states; with no kind, how many of each")
+    stated.add_argument("kind", nargs="?", choices=archfacts.KINDS)
+    stated.add_argument("--like", help="only names containing this")
+    stated.add_argument("-k", type=int, default=200)
+    stated.add_argument("--timeout-ms", type=int)
+    stated.add_argument("--json", action="store_true")
+    stated.set_defaults(run=_facts)
 
     compiled = commands.add_parser("scip", help="compiler-grade indexes (SCIP) made elsewhere: exact answers while their files are unchanged")
     scip_actions = compiled.add_subparsers(dest="action", required=True)

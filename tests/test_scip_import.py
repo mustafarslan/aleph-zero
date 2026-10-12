@@ -188,7 +188,7 @@ def test_an_index_of_schema_7_gets_the_import_tables_in_place(project):
     conn.pragma("user_version", 7)
     conn.close()
     conn = open_db(index_path(repo.root))
-    assert conn.pragma("user_version") == SCHEMA_VERSION == 8
+    assert conn.pragma("user_version") == SCHEMA_VERSION
     assert conn.execute("SELECT count(*) FROM graph_facts").fetchall() == facts
     assert Engine(repo.root).scip_import(made)["documents"] == 4
 
