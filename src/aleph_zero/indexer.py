@@ -15,7 +15,7 @@ from .chunking import CHUNKER_VERSION, Chunk, chunk_file, chunk_hash, code_chunk
 from .lang.definitions import Definition
 from .lang.languages import stem_of
 from .lang.imports import RawImport
-from .store import transaction
+from .store import StoreError, transaction
 from .view import View
 
 BATCH = 50
@@ -135,6 +135,16 @@ class Index:
             self._load_view_blobs(view)
         removals = collections(self.conn)
         missing: list[Key] = [(row[0], row[1]) for row in self.conn.execute(_MISSING, (CHUNKER_VERSION,))]
+        if missing:
+            # Content of the view that a build with a later chunker has read is not this build's to read again:
+            # the two would take turns re-indexing the repository, one whole pass for every switch between them.
+            newer = self.conn.execute(
+                "SELECT max(b.chunker_version) FROM temp.view_blobs v JOIN blobs b ON b.blob_oid = v.blob_oid AND b.family = v.family "
+                "WHERE b.chunker_version > ?", (CHUNKER_VERSION,)).fetchall()[0][0]
+            if newer is not None:
+                raise StoreError(f"this index holds content read by a newer version of Aleph (its chunker is {newer}, this "
+                                 f"one's is {CHUNKER_VERSION}). Two versions sharing an index would each redo the other's work "
+                                 f"on every query: upgrade this installation, or run the newer one")
         self.lost_to_collection += len(self._indexed.intersection(missing))
         retry_before = started - RETRY_SECONDS
         todo = [key for key in missing if self._deferred.get(key, retry_before) <= retry_before]

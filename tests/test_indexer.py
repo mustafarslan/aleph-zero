@@ -490,3 +490,26 @@ def test_the_first_question_of_a_process_reads_only_the_paths_that_can_match(rep
         assert first == path_ranking(fresh, fresh_view, terms)  # the second builds the maps and agrees
         assert fresh._path_words is not None
         assert first == path_ranking(index, view, terms)
+
+
+def test_an_older_build_does_not_redo_what_a_newer_build_indexed(repo, monkeypatch, capsys):
+    """Two installed versions with different chunkers on one index took turns re-indexing everything."""
+    import pytest
+
+    from aleph_zero import indexer
+    from aleph_zero.store import StoreError
+
+    older, view = _index(repo), build_view(repo.root)
+    assert older.sync(view).indexed == 3
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
+    newer = _index(repo)
+    assert newer.sync(view).indexed == 3                     # an upgrade reads everything again, once
+    monkeypatch.undo()
+    with pytest.raises(StoreError, match="newer version of Aleph"):
+        older.sync(view)                                     # ... and the older build leaves that alone, and says why
+    from aleph_zero import cli
+    assert cli.main(["--cwd", str(repo.root), "search", "refresh token"]) == 2
+    assert "newer version of Aleph" in capsys.readouterr().err   # one sentence, not a traceback
+    monkeypatch.setattr(indexer, "CHUNKER_VERSION", indexer.CHUNKER_VERSION + 1)
+    assert newer.sync(view).indexed == 0                     # nothing of the newer build's was touched
+    assert [hit.path for hit in search(newer, view, "refresh token")][:1] == ["src/auth/token_store.py"]

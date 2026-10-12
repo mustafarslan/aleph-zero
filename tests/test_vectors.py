@@ -342,3 +342,24 @@ def test_nothing_is_written_through_a_connection_to_an_index_that_was_set_aside(
 
     report = embedder.embed_pending(index, store, Client(), budget_seconds=30)   # must come back, not spin
     assert report.embedded == 0 and report.seconds < 5
+
+
+def test_the_scan_gives_the_same_scores_however_the_rows_lie_and_however_many_threads_take_part(monkeypatch):
+    import numpy as np
+
+    from aleph_zero import vectors
+
+    random = np.random.default_rng(7)
+    stored = random.standard_normal((5000, vectors.WIDTH), dtype=np.float32).astype(np.float16)
+    query = stored[11].astype(np.float32)
+    plain = lambda rows: stored[rows].astype(np.float32) @ query      # noqa: E731 - what a scan is
+    together = np.arange(5000, dtype=np.int64)                         # a fresh index: the view's rows lie side by side
+    apart = np.delete(together, np.arange(0, 5000, 7))                 # rows of other branches in between
+    few = np.array([3, 4, 5, 4000], dtype=np.int64)
+    monkeypatch.setattr(vectors, "_BLOCK", 512)
+    for rows in (together, apart, few, together[:1]):
+        for threaded_from in (10**9, 1):                               # on one thread, then on several
+            monkeypatch.setattr(vectors, "_THREADED_FROM", threaded_from)
+            found = vectors.scores_of(stored, rows, query)
+            assert found.dtype == np.float32 and np.allclose(found, plain(rows), rtol=0, atol=1e-5)
+            assert list(np.argsort(-found, kind="stable")[:20]) == list(np.argsort(-plain(rows), kind="stable")[:20])

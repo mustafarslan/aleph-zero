@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import apsw
@@ -28,12 +29,39 @@ from .store import transaction
 WIDTH = 256
 ROW_BYTES = WIDTH * 2       # float16
 _BLOCK = 16_384             # rows converted to float32 at a time: 16 MB of scratch, whatever the view's size
+_THREADS = 4                # that share the scan of a large view
+_THREADED_FROM = 200_000    # rows from which they do: below, starting them costs more than they save
 # Which chunks get a vector: code and documentation. A 'block' is a window of a file with
 # no language profile (JSON, YAML, SQL fixtures, templates); such files are searched by
 # their words only. In two repositories measured they were 58% and 72% of all text to
 # embed, and on the Loc-Bench pilot leaving them out found more of the right files, not
 # fewer (ADR-001).
 EMBEDDED = "c.kind != 'block'"
+
+
+def scores_of(stored, rows: np.ndarray, query: np.ndarray) -> np.ndarray:
+    """The product of each of `rows` (ascending) of the stored vectors with the query: every vector is looked at,
+    nothing is approximated. Rows that lie side by side are read as one slice, with no copy to gather them
+    (a view's rows mostly do: a third of the time at a million). A large view is split among a few threads,
+    each on a share of a block, so that the scratch memory is one block whatever the size or the threads."""
+    scores = np.empty(len(rows), dtype=np.float32)
+    threads = _THREADS if len(rows) >= _THREADED_FROM else 1
+    step = max(1, _BLOCK // threads)
+
+    def score(start: int) -> None:
+        part = rows[start:start + step]
+        first, last = int(part[0]), int(part[-1])
+        taken = stored[first:last + 1] if last - first == len(part) - 1 else stored[part]
+        scores[start:start + len(part)] = taken.astype(np.float32) @ query
+
+    starts = range(0, len(rows), step)
+    if threads == 1:
+        for start in starts:
+            score(start)
+    else:
+        with ThreadPoolExecutor(threads) as pool:      # numpy leaves the interpreter lock for the conversion and the product
+            list(pool.map(score, starts))
+    return scores
 
 
 def _inode(path: Path | None) -> int:
@@ -171,11 +199,7 @@ class VectorStore:
         mapped = self._mapped(int(rows.max()) + 1)
         if mapped is None:
             return []
-        query = np.asarray(query, dtype=np.float32)
-        scores = np.empty(len(rows), dtype=np.float32)
-        for start in range(0, len(rows), _BLOCK):
-            part = rows[start:start + _BLOCK]
-            scores[start:start + len(part)] = mapped[part].astype(np.float32) @ query
+        scores = scores_of(mapped, rows, np.asarray(query, dtype=np.float32))
         top = min(limit, len(scores))
         best = np.argpartition(-scores, top - 1)[:top]
         best = best[np.argsort(-scores[best], kind="stable")]
