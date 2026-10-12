@@ -52,6 +52,7 @@ class Candidate:
     name: str
     start_line: int   # 1-based, of the definition's whole range
     end_line: int
+    how: str = ""     # how the answer was found (level and provenance); grouped in the report, decides nothing
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,9 @@ class Grade:
     confident_answered: int = 0
     confident_correct: int = 0
     disagreements: list[str] = field(default_factory=list)
+    by_how: dict[str, list[int]] = field(default_factory=dict)  # 'how, confident|several' -> [answered, correct]
+    keep: int = 40                # how many wrong answers to keep
+    confident_only: bool = False  # keep only wrong answers that had one candidate
 
     def as_dict(self) -> dict:
         ratio = lambda part, whole: round(part / whole, 4) if whole else 0.0  # noqa: E731
@@ -87,6 +91,8 @@ class Grade:
             "confident_answered": self.confident_answered,
             "confident_precision": ratio(self.confident_correct, self.confident_answered),
             "confident_recall": ratio(self.confident_answered, self.graded),
+            "by_how": {how: {"answered": answered, "correct": correct, "precision": ratio(correct, answered)}
+                       for how, (answered, correct) in sorted(self.by_how.items())},
         }
 
 
@@ -157,17 +163,23 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
         grade.answered += 1
         right = is_correct(candidates[0], truth)
         grade.correct += right
-        if len(candidates) == 1:
+        confident = len(candidates) == 1
+        if confident:
             grade.confident_answered += 1
             grade.confident_correct += right
-        if not right and len(grade.disagreements) < 40:
+        counts = grade.by_how.setdefault(f"{candidates[0].how or 'unsaid'}, {'confident' if confident else 'several'}", [0, 0])
+        counts[0] += 1
+        counts[1] += right
+        if not right and len(grade.disagreements) < grade.keep and (confident or not grade.confident_only):
             grade.disagreements.append(f"{path}:{call.line} {call.receiver + '.' if call.receiver else ''}{call.name} -> "
-                                       f"{candidates[0].path}:{candidates[0].start_line} but SCIP says {truth.path}:{truth.line + 1}")
+                                       f"{candidates[0].path}:{candidates[0].start_line} [{candidates[0].how}, {len(candidates)}] "
+                                       f"but SCIP says {truth.path}:{truth.line + 1}")
 
 
 def grade_corpus(root: Path, index: scip.ScipIndex, language: str,
-                 answer: Callable[[str, Call], list[Candidate]] | None = None) -> Grade:
-    grade = Grade(language)
+                 answer: Callable[[str, Call], list[Candidate]] | None = None, keep: int = 40,
+                 confident_only: bool = False) -> Grade:
+    grade = Grade(language, keep=keep, confident_only=confident_only)
     sites = definition_sites(index)
     families = {language, "tsx"} if language == "typescript" else {language}
     for document in index.documents:
@@ -202,7 +214,10 @@ def aleph_graph(root: Path) -> Graph:
 def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
     def answer(path: str, call: Call) -> list[Candidate]:
         edge = graph.resolve(path, call)
-        return [] if edge is None else [Candidate(t.path, t.name, t.start_line, t.end_line) for t in edge.targets]
+        if edge is None:
+            return []
+        how = f"{edge.level} {edge.provenance}"
+        return [Candidate(t.path, t.name, t.start_line, t.end_line, how) for t in edge.targets]
     return answer
 
 
@@ -213,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--population", action="store_true", help="report the population alone, with no answers")
     parser.add_argument("--disagreements", type=int, default=0, help="print this many wrong answers per corpus")
+    parser.add_argument("--confident-only", action="store_true", help="of the wrong answers, print those with one candidate")
+    parser.add_argument("--by-how", action="store_true", help="print answers and precision by how they were found")
     args = parser.parse_args(argv)
     report = {}
     for name in args.corpus or sorted(CORPORA):
@@ -222,12 +239,16 @@ def main(argv: list[str] | None = None) -> int:
             continue
         index = scip.load_index(index_file)
         answer = None if args.population else aleph_answer(aleph_graph(root))
-        grade = grade_corpus(root, index, CORPORA[name], answer)
+        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, 40),
+                             confident_only=args.confident_only)
         report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(CORPORA[name])}
         row = report[name]
         print(f"{name:24} graded {row['graded_call_sites']:6}  excluded {row['excluded_untrustworthy']:5} "
               f"({row['excluded_share']:.1%})  recall {row['recall']:.1%}  precision {row['precision']:.1%}  "
               f"confident precision {row['confident_precision']:.1%}  confident recall {row['confident_recall']:.1%}", flush=True)
+        if args.by_how:
+            for how, counts in row["by_how"].items():
+                print(f"    {how:36} answered {counts['answered']:6}  correct {counts['correct']:6}  {counts['precision']:.1%}")
         for line in grade.disagreements[:args.disagreements]:
             print("   ", line)
     if args.out:

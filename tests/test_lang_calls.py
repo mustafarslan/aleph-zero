@@ -75,3 +75,63 @@ def test_a_call_inside_a_nested_function_belongs_to_the_definition_that_encloses
     cannot be called from elsewhere), so what they call is their enclosing function's doing."""
     assert found("python", "def outer():\n    def inner():\n        work()\n    inner()\n") == [
         ("work", "", 3, "outer"), ("inner", "", 4, "outer")]
+
+
+def shaped(name: str, source: str):
+    """Each call with how it is qualified and what its first name is bound to in the file."""
+    profile = lang.PROFILES[name]
+    data = source.encode()
+    tree = parse.tree(profile, data)
+    return [(call.receiver + "|" + call.name, call.via, call.head)
+            for call in calls(profile, tree, data, definitions(profile, tree, data))]
+
+
+def test_python_says_what_the_first_name_of_a_call_is_bound_to():
+    assert shaped("python", (
+        "import os\n"
+        "class Box:\n"
+        "    def put(self, item, make):\n"
+        "        self.check(item)\n"              # on the method's own receiver
+        "        item.save()\n"                   # on a parameter
+        "        make()\n"                        # a parameter called
+        "        def inner():\n"
+        "            self.again()\n"              # the receiver, seen from a nested function
+        "        inner()\n"                       # a nested function: local
+        "        handle = open('x')\n"
+        "        handle.close()\n"                # a local variable
+        "        os.getcwd()\n"                   # bound outside any function
+        "        super().put(item, make)\n"
+        "        helper()(1).run()\n"             # called on a value with no name
+        "    @staticmethod\n"
+        "    def build(first):\n"
+        "        first.go()\n"                    # a static method has no receiver
+    )) == [
+        ("self|check", "member", "self"), ("item|save", "member", "local"), ("|make", "", "local"),
+        ("self|again", "member", "self"), ("|inner", "", "local"), ("|open", "", ""), ("handle|close", "member", "local"),
+        ("os|getcwd", "member", ""), ("|super", "", ""), ("super()|put", "member", "super"),
+        ("|helper", "", ""), ("helper()(1)|run", "member", "value"), ("first|go", "member", "local"),
+    ]
+
+
+@pytest.mark.parametrize("name,source,expected", [
+    ("go", "package a\nfunc (g *Gauge) Add(x int) {\n\tg.add(x)\n\tg.inner.Set(x)\n\tv := generic.NewGauge()\n\tv.Set(1)\n\tfor _, item := range g.items {\n\t\titem.Run()\n\t}\n\thelper(x)\n}\n",
+     [("g|add", "member", "self"), ("g.inner|Set", "member", "self"), ("generic|NewGauge", "member", ""), ("v|Set", "member", "local"),
+      ("item|Run", "member", "local"), ("|helper", "", "")]),
+    ("rust", "impl S {\n    fn go(&self, other: &T) {\n        self.step();\n        Self::make();\n        other.run();\n        config::args();\n"
+             "        crate::flags::parse();\n        let filter = |x| x;\n        filter(1);\n        super::check();\n        helper();\n    }\n}\n",
+     [("self|step", "member", "self"), ("Self|make", "path", "self"), ("other|run", "member", "local"), ("config|args", "path", ""),
+      ("crate::flags|parse", "path", ""), ("|filter", "", "local"), ("super|check", "path", ""), ("|helper", "", "")]),
+    ("typescript", "class A extends B {\n  constructor(private readonly svc: Service) { super(); }\n  run(req: Req) {\n    this.svc.handle(req);\n    this.own();\n"
+                   "    super.run(req);\n    req.end();\n    const made = new Thing();\n    made.go();\n    [1].forEach(n => n.toFixed());\n    Util.help();\n  }\n}\n",
+     [("this.svc|handle", "member", "self"), ("this|own", "member", "self"), ("super|run", "member", "super"),
+      ("req|end", "member", "local"), ("|Thing", "", ""), ("made|go", "member", "local"), ("[1]|forEach", "member", "value"),
+      ("n|toFixed", "member", "local"), ("Util|help", "member", "")]),
+    ("javascript", "const utils = require('./utils');\nfunction f(node) {\n  const { a } = require('./a');\n  a();\n  utils.b(node);\n  node.c();\n  try { d(); } catch (err) { err.e(); }\n}\n",
+     [("|require", "", ""), ("|require", "", ""), ("|a", "", ""), ("utils|b", "member", ""), ("node|c", "member", "local"), ("|d", "", ""),
+      ("err|e", "member", "local")]),
+    ("java", "class A extends B {\n  void m(Owner owner) {\n    owner.getName();\n    this.save(owner);\n    helper();\n    super.m(owner);\n    Pet pet = new Pet();\n    pet.setName(\"x\");\n    Util.help();\n    owners.findAll();\n  }\n}\n",
+     [("owner|getName", "member", "local"), ("this|save", "member", "self"), ("|helper", "", ""), ("super|m", "member", "super"), ("|Pet", "", ""),
+      ("pet|setName", "member", "local"), ("Util|help", "member", ""), ("owners|findAll", "member", "")]),
+])
+def test_the_other_languages_say_it_too(name, source, expected):
+    assert shaped(name, source) == expected
