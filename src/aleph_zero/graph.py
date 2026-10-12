@@ -452,8 +452,17 @@ class Graph:
     def _plain(self, path: str, facts: FileFacts, call: Call) -> Edge | None:
         """`helper()`: the file's own scope, then its imports, then its package, then the name alone."""
         name = call.name
+        if call.head in ("inner", "inner-var"):
+            # A function defined in a function around the call: the reader found it where the name is bound.
+            # It is nobody's but that function's, so it is a target here and a definition nowhere else.
+            holder = facts.definitions[call.caller].qualified if call.caller is not None else ""
+            targets = tuple(Target(path, name, f"{holder}.{name}" if holder else name, "function", first, last)
+                            for first, last in call.inner)
+            if call.head == "inner-var":
+                self._doubt = self._doubt or "the name is assigned again somewhere in the file"
+            return Edge(targets, "L0", "syntactic", "inner function") if targets else None
         if call.head == "local":
-            return None     # a parameter, a local variable or a nested function: nothing recorded has that name
+            return None     # a parameter or a local variable: nothing recorded has that name
         here = self._lexical(path, facts, call)
         if here:
             return self._edge(path, here, "scope")

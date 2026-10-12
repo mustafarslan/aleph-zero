@@ -96,7 +96,16 @@ _PATTERNS = frozenset({
     "formal_parameter", "spread_parameter", "variable_declarator", "inferred_parameters",
     "optional_parameter_declaration", "init_declarator", "pointer_declarator", "reference_declarator", "array_declarator",
 })
-_PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4}
+_PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4, "assigns": 5}
+# A function declared inside a function, and what a local name is bound to when it is bound to a function.
+_FUNCTION_DECLARATIONS = frozenset({"function_definition", "function_declaration", "generator_function_declaration", "function_item"})
+_FUNCTION_VALUES = frozenset({"arrow_function", "function_expression", "generator_function", "lambda", "func_literal", "closure_expression"})
+# Per language: what gives an existing name another value without binding it anew. (In Python an assignment binds.)
+_JS_ASSIGNS = frozenset({"assignment_expression", "augmented_assignment_expression"})
+_ASSIGNS: dict[str, frozenset[str]] = {
+    "typescript": _JS_ASSIGNS, "tsx": _JS_ASSIGNS, "javascript": _JS_ASSIGNS,
+    "go": frozenset({"assignment_statement"}), "rust": frozenset({"assignment_expression", "compound_assignment_expr"}),
+}
 _FILE = 0       # the scope that stands for the file itself
 # What binds a name at file level without declaring anything: a loop variable there is not the function it is named like.
 _FILE_LEVEL_BINDERS: dict[str, frozenset[str]] = {
@@ -120,12 +129,16 @@ class Call:
     via: str = ""         # '' a plain call; 'member' called on a value (`a.f()`); 'path' through a path (`a::f()`)
     head: str = ""        # what the first name is bound to where the call stands: 'self' the method's own receiver,
     #                       'super' its base, 'local' a parameter or local name, 'value' no name at all (`f().g()`),
-    #                       '' nothing local: a name of the file, an import, a builtin
+    #                       'inner' a function defined in a function around the call (see `inner`), 'inner-var' the
+    #                       same under a name the file assigns to again, '' nothing local: a name of the file, an
+    #                       import, a builtin
     receiver_type: str = ""  # for a call on a local name: the type its function declares for it (`generic.Gauge`), or
     #                       the call that built it (`Engine()`); '' when the function does not say
     arity: int = -1       # how many arguments are passed; -1 when the call does not show them
     column16: int = -1    # the column in UTF-16 units and in characters, where text before the name on its line
     column32: int = -1    # makes them differ from the byte column (-1: the same). Other tools count that way
+    inner: tuple[tuple[int, int], ...] = ()   # for a call of an inner function: the first and last line of each
+    #                       definition the nearest scope binding the name gives it (two: defined on both sides of an `if`)
 
 
 def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definition]) -> list[Call]:
@@ -141,13 +154,15 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     bound: dict[int, dict[str, set[int]]] = {_FILE: {}}
     stated: dict[int, dict[str, list[str]]] = {_FILE: {}}   # scope -> name -> each type a statement gives it ('' for none)
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
+    functions: dict[int, dict[str, dict[int, tuple[int, int]]]] = {}   # scope -> name -> where bound -> the function's lines
+    assigned: set[str] = set()          # names given another value somewhere in the file
     seen: list[tuple[Node, Node | None, str, int, tuple[int, ...]]] = []
     # Only the nodes that matter are visited, found by the parser's query engine: scopes, what binds or
     # types a local name, and calls. In source order, an outer node first, so a scope is open before what
     # it holds is met; one node can play several parts, taken in the order of _PARTS.
     parts = query.by_role(family, tree, {"named": _NAMED_OUTSIDE, "scope": scopes, "binds": binders,
                                          "typed": _TYPED.get(family, frozenset()), "call": sites,
-                                         "generic": TYPE_PARAMETERS})
+                                         "assigns": _ASSIGNS.get(family, frozenset()), "generic": TYPE_PARAMETERS})
     generic = type_parameter_names(parts.pop("generic", []))
     events = sorted(((node.start_byte, -node.end_byte, _PARTS[part], node) for part, nodes in parts.items() for node in nodes),
                     key=lambda event: event[:3])
@@ -159,9 +174,11 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             name = node.child_by_field_name("name")
             if open_scopes and name is not None:
                 bound[open_scopes[-1][1]].setdefault(_text(name), set()).add(name.start_byte)
+                if node.type in _FUNCTION_DECLARATIONS:
+                    functions[open_scopes[-1][1]].setdefault(_text(name), {})[name.start_byte] = (node.start_point[0] + 1, node.end_point[0] + 1)
         elif part == 1:         # a scope opens
             open_scopes.append((node.end_byte, node.id))
-            bound[node.id], stated[node.id] = {}, {}
+            bound[node.id], stated[node.id], functions[node.id] = {}, {}, {}
             receiver = _receiver_name(family, node)
             if receiver:
                 receivers[node.id] = receiver
@@ -173,11 +190,18 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
                     for holder in ([node] if not field else node.children_by_field_name(field)):
                         for name, where in _bound_names(holder, family):
                             into.setdefault(name, set()).add(where)
+                if open_scopes:
+                    for name, where, lines in _function_bindings(node):
+                        functions[open_scopes[-1][1]].setdefault(name, {})[where] = lines
         elif part == 3:
             if open_scopes:
                 known = stated[open_scopes[-1][1]]
                 for name, kind in _stated(family, node):
                     known.setdefault(name, []).append(kind)
+        elif part == 5:
+            left = node.child_by_field_name("left")
+            assigned.update(_text(each) for each in ([left] if left is not None else []) + (left.named_children if left is not None else [])
+                            if each.type == "identifier")
         else:
             callee = node.child_by_field_name(sites[node.type])
             if callee is None:
@@ -194,12 +218,33 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     for (name, owner, via, arity, chain), caller in zip(seen, inside):
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
         kind = _type_of(first, chain, bound, stated, generic) if head == "local" and owner is not None else ""
+        lines: tuple[tuple[int, int], ...] = ()
+        if head == "local" and owner is None and not via:
+            # The nearest scope that binds the name, when every binding of it there is a function: a name also
+            # bound as a parameter, or to something else as well, is whatever it is at run time.
+            scope = next(scope for scope in reversed(chain) if first in bound[scope])
+            made = functions.get(scope, {}).get(first)
+            if made and bound[scope][first] <= made.keys():
+                head, lines = ("inner-var" if first in assigned else "inner"), tuple(sorted(made.values()))
         before = data[name.start_byte - name.start_point[1]:name.start_byte]
         wide = (-1, -1) if before.isascii() else _columns(before)
         out.append(Call(_text(name), _receiver(owner) if owner is not None else "", name.start_point[0] + 1,
-                        name.start_point[1], caller, via, head, kind, arity, *wide))
+                        name.start_point[1], caller, via, head, kind, arity, *wide, lines))
     out.sort(key=lambda call: (call.line, call.column))
     return out
+
+
+def _function_bindings(node: Node) -> list[tuple[str, int, tuple[int, int]]]:
+    """(name, where the name stands, the lines of the function) for each name this node binds to a function
+    written there: `const f = () => …`, `f = lambda: …`, `f := func() {…}`, `let f = |x| …`."""
+    names = node.child_by_field_name("name") or node.child_by_field_name("left") or node.child_by_field_name("pattern")
+    values = node.child_by_field_name("value") or node.child_by_field_name("right")
+    if names is None or values is None:
+        return []
+    pairs = zip(names.named_children, values.named_children) if names.type == "expression_list" and values.type == "expression_list" \
+        else [(names, values)]
+    return [(_text(name), name.start_byte, (name.start_point[0] + 1, value.end_point[0] + 1))
+            for name, value in pairs if name.type == "identifier" and value.type in _FUNCTION_VALUES]
 
 
 def _columns(before: bytes) -> tuple[int, int]:

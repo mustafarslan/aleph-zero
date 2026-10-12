@@ -96,7 +96,7 @@ def test_python_says_what_the_first_name_of_a_call_is_bound_to():
         "        make()\n"                        # a parameter called
         "        def inner():\n"
         "            self.again()\n"              # the receiver, seen from a nested function
-        "        inner()\n"                       # a nested function: local
+        "        inner()\n"                       # a nested function: said to be one
         "        handle = open('x')\n"
         "        handle.close()\n"                # a local variable
         "        os.getcwd()\n"                   # bound outside any function
@@ -107,7 +107,7 @@ def test_python_says_what_the_first_name_of_a_call_is_bound_to():
         "        first.go()\n"                    # a static method has no receiver
     )) == [
         ("self|check", "member", "self"), ("item|save", "member", "local"), ("|make", "", "local"),
-        ("self|again", "member", "self"), ("|inner", "", "local"), ("|open", "", ""), ("handle|close", "member", "local"),
+        ("self|again", "member", "self"), ("|inner", "", "inner"), ("|open", "", ""), ("handle|close", "member", "local"),
         ("os|getcwd", "member", ""), ("|super", "", ""), ("super()|put", "member", "super"),
         ("|helper", "", ""), ("helper()(1)|run", "member", "value"), ("first|go", "member", "local"),
     ]
@@ -120,7 +120,7 @@ def test_python_says_what_the_first_name_of_a_call_is_bound_to():
     ("rust", "impl S {\n    fn go(&self, other: &T) {\n        self.step();\n        Self::make();\n        other.run();\n        config::args();\n"
              "        crate::flags::parse();\n        let filter = |x| x;\n        filter(1);\n        super::check();\n        helper();\n    }\n}\n",
      [("self|step", "member", "self"), ("Self|make", "path", "self"), ("other|run", "member", "local"), ("config|args", "path", ""),
-      ("crate::flags|parse", "path", ""), ("|filter", "", "local"), ("super|check", "path", ""), ("|helper", "", "")]),
+      ("crate::flags|parse", "path", ""), ("|filter", "", "inner"), ("super|check", "path", ""), ("|helper", "", "")]),
     ("typescript", "class A extends B {\n  constructor(private readonly svc: Service) { super(); }\n  run(req: Req) {\n    this.svc.handle(req);\n    this.own();\n"
                    "    super.run(req);\n    req.end();\n    const made = new Thing();\n    made.go();\n    [1].forEach(n => n.toFixed());\n    Util.help();\n  }\n}\n",
      [("this.svc|handle", "member", "self"), ("this|own", "member", "self"), ("super|run", "member", "super"),
@@ -202,3 +202,68 @@ def test_a_call_records_its_column_in_characters_too_where_that_differs_from_byt
     found = {call.name: (call.column, call.column16, call.column32) for call in calls(profile, tree, data, definitions(profile, tree, data))}
     # Before `b`: two é (two bytes each, one unit) and an emoji (four bytes, two UTF-16 units, one character).
     assert found == {"a": (13, 11, 11), "b": (27, 23, 22), "c": (4, -1, -1)}     # -1: the same as in bytes
+
+
+def inner(name: str, source: str):
+    """(name, line, head, where its inner definitions are) of each call that starts at a local name."""
+    profile = lang.PROFILES[name]
+    data = source.encode()
+    tree = parse.tree(profile, data)
+    return [(call.name, call.line, call.head, call.inner) for call in calls(profile, tree, data, definitions(profile, tree, data))
+            if call.head in ("local", "inner", "inner-var")]
+
+
+def test_a_call_to_a_function_defined_in_the_function_around_it_says_where_that_is():
+    assert inner("python", (
+        "def outer(items, passed):\n"
+        "    def helper(x):\n"
+        "        return x\n"
+        "    double = lambda x: x * 2\n"
+        "    helper(1)\n"
+        "    double(2)\n"
+        "    passed(3)\n"
+        "    def again():\n"
+        "        return helper(4)\n"
+        "    def shadow(helper):\n"
+        "        return helper(5)\n"
+        "    return again\n"
+        "def other():\n"
+        "    helper(6)\n"
+    )) == [("helper", 5, "inner", ((2, 3),)), ("double", 6, "inner", ((4, 4),)), ("passed", 7, "local", ()),
+           ("helper", 9, "inner", ((2, 3),)), ("helper", 11, "local", ())]
+
+
+def test_a_name_bound_to_something_else_as_well_is_not_a_function_and_two_definitions_are_two():
+    assert inner("python", (
+        "def outer(flag):\n"
+        "    def pick():\n"
+        "        return 1\n"
+        "    pick = wrapped(pick)\n"
+        "    pick()\n"
+        "    if flag:\n"
+        "        def step(): return 1\n"
+        "    else:\n"
+        "        def step(): return 2\n"
+        "    step()\n"
+    )) == [("pick", 5, "local", ()), ("step", 10, "inner", ((7, 7), (9, 9)))]
+
+
+def test_inner_functions_in_the_other_languages_and_names_that_may_be_assigned_again():
+    assert inner("javascript", (
+        "function outer(cb) {\n"
+        "  function helper(x) { return x; }\n"
+        "  const twice = (x) => x * 2;\n"
+        "  let later = function () {};\n"
+        "  let fixed = () => 1;\n"
+        "  later = cb;\n"
+        "  helper(1); twice(2); later(); fixed(); cb(3);\n"
+        "  return () => helper(4);\n"
+        "}\n"
+        "function sibling() { function helper() {} helper(); }\n"
+    )) == [("helper", 7, "inner", ((2, 2),)), ("twice", 7, "inner", ((3, 3),)), ("later", 7, "inner-var", ((4, 4),)),
+           ("fixed", 7, "inner", ((5, 5),)), ("cb", 7, "local", ()), ("helper", 8, "inner", ((2, 2),)),
+           ("helper", 10, "inner", ((10, 10),))]
+    assert inner("go", "package a\nfunc outer(f func()) {\n\tstep := func(x int) int { return x }\n\tstep(1)\n\tf()\n}\n") == [
+        ("step", 4, "inner", ((3, 3),)), ("f", 5, "local", ())]
+    assert inner("rust", "fn outer(f: fn()) {\n    fn helper(x: u32) -> u32 { x }\n    let twice = |x: u32| x * 2;\n    helper(1); twice(2); f();\n}\n") == [
+        ("helper", 4, "inner", ((2, 2),)), ("twice", 4, "inner", ((3, 3),)), ("f", 4, "local", ())]

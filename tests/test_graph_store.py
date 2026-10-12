@@ -215,3 +215,21 @@ def test_an_empty_file_takes_part_with_nothing_and_breaks_nothing(repo):
     repo.write("user.py", "from pkg import mod\n\ndef user():\n    return mod.f()\n")
     answer = Engine(repo.root).references("user", direction="callees")
     assert [(r.written, r.target, r.certain) for r in answer.callees] == [("mod.f", "f", True)]
+
+
+def test_callees_list_a_function_defined_inside_and_rows_of_the_version_before_are_read_again(repo):
+    from aleph_zero import callgraph
+
+    repo.write("src/app/nested.py", "def outer(items):\n    def keep(item):\n        return item\n    return [keep(item) for item in items]\n")
+    engine = app(repo)
+    found = engine.references("outer", direction="callees").callees
+    assert [(r.target, r.target_line, r.level, r.certain) for r in found] == [("outer.keep", 2, "L0", True)]
+    assert engine.references("keep").definitions == []           # a target, not a definition anyone can ask for
+    conn = open_db(index_path(repo.root))
+    assert conn.execute("SELECT DISTINCT version FROM graph_facts").fetchall() == [(callgraph.GRAPH_VERSION,)]
+    conn.execute("UPDATE graph_facts SET version = ?", (callgraph.GRAPH_VERSION - 1,))      # as an index of the build before
+    conn.close()
+    again = Engine(repo.root).references("outer", direction="callees")
+    assert [r.target for r in again.callees] == ["outer.keep"] and again.graph_pending == 0
+    conn = open_db(index_path(repo.root))
+    assert conn.execute("SELECT DISTINCT version FROM graph_facts").fetchall() == [(callgraph.GRAPH_VERSION,)]

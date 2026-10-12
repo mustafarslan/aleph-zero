@@ -149,7 +149,7 @@ def test_commonjs_requires_are_followed():
     assert answers(JS, "lib/linter.js", "c") == ("L1", "import-resolved", [("lib/ab.js", "b")])
     assert answers(JS, "lib/linter.js", "Tracker") == ("L1", "import-resolved", [("lib/tracker.js", "Tracker")])
     assert answers(JS, "lib/linter.js", "debug") is None        # the package `debug`, not utils.js's function
-    assert answers(JS, "lib/linter.js", "report") is None       # a function declared inside the caller: nothing recorded
+    assert answers(JS, "lib/linter.js", "report") == ("L0", "syntactic", [("lib/linter.js", "lint.report")])   # declared inside the caller
 
 
 GO = {
@@ -532,3 +532,49 @@ def test_a_value_built_by_a_call_that_is_only_guessed_has_no_known_type():
     files["pkg/plugins.py"] = "registry = object()\n"
     # `registry.build()` is answered by name (Factory.build is the only `build`), so what it returns is not known.
     assert answers(files, "pkg/late.py", "save") == ("L1", "name", [("pkg/store.py", "Store.save"), ("pkg/store.py", "Other.save")])
+
+
+INNER = ("def outer(passed):\n"
+         "    def helper(x):\n"
+         "        return x\n"
+         "    def again():\n"
+         "        return helper(2)\n"
+         "    helper(1)\n"
+         "    passed(3)\n"
+         "    return again\n"
+         "def sibling():\n"
+         "    def helper(y):\n"
+         "        return y\n"
+         "    return helper(4)\n"
+         "def stranger():\n"
+         "    return helper(5)\n")
+
+
+def test_a_call_to_an_inner_function_reaches_it_and_only_from_inside_its_function():
+    graph, sites = build({"a.py": INNER})
+    first = edge(graph, sites, "a.py", "helper", 0)                    # from a function inside `outer`
+    assert summary(first) == ("L0", "syntactic", [("a.py", "outer.helper")]) and first.certain
+    assert [(t.start_line, t.end_line, t.kind) for t in first.targets] == [(2, 3, "function")]
+    assert summary(edge(graph, sites, "a.py", "helper", 1)) == ("L0", "syntactic", [("a.py", "outer.helper")])
+    own = edge(graph, sites, "a.py", "helper", 2)                      # `sibling` has its own
+    assert summary(own) == ("L0", "syntactic", [("a.py", "sibling.helper")]) and own.targets[0].start_line == 10
+    assert edge(graph, sites, "a.py", "helper", 3) is None             # `stranger` sees neither
+    assert edge(graph, sites, "a.py", "passed") is None                # a parameter is still nobody's function
+
+
+def test_an_inner_function_under_a_name_assigned_again_or_defined_twice_is_not_certain():
+    script = ("function outer(cb, flag) {\n"
+              "  let later = function () {};\n"
+              "  later = cb;\n"
+              "  later();\n"
+              "  const fixed = () => 1;\n"
+              "  fixed();\n"
+              "}\n")
+    graph, sites = build({"a.js": script})
+    doubtful, sure = edge(graph, sites, "a.js", "later"), edge(graph, sites, "a.js", "fixed")
+    assert summary(doubtful) == ("L0", "syntactic", [("a.js", "outer.later")]) and not doubtful.certain and "assigned again" in doubtful.doubt
+    assert sure.certain
+    twice = ("def outer(flag):\n    if flag:\n        def step(): return 1\n    else:\n        def step(): return 2\n    return step()\n")
+    graph, sites = build({"a.py": twice})
+    both = edge(graph, sites, "a.py", "step")
+    assert [t.start_line for t in both.targets] == [3, 5] and not both.certain

@@ -34,7 +34,7 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 4           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 5           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for
@@ -162,7 +162,8 @@ def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
     shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed,
              [[d.start_line, d.end_line] for d in found]]
     # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
-    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity, c.column16, c.column32]
+    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity, c.column16, c.column32,
+             [list(lines) for lines in c.inner]]
             for c in sites if c.via or c.head != "local"]
     pack = lambda value: zlib.compress(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogateescape"), 1)  # noqa: E731
     return pack(shape), pack(kept)
@@ -285,7 +286,7 @@ def mentions(index: Index, name: str) -> tuple[list[tuple[str, str]], bool]:
 def _calls(index: Index, key: tuple[str, str]) -> list[Call]:
     rows = index.conn.execute("SELECT calls FROM graph_facts WHERE blob_oid = ? AND family = ? AND version = ?",
                               (*key, GRAPH_VERSION)).fetchall()
-    return [Call(*row) for row in _unpack(rows[0][0])] if rows else []
+    return [Call(*row[:11], tuple((first, last) for first, last in row[11])) for row in _unpack(rows[0][0])] if rows else []
 
 
 def resolve(graph: Graph, compiled, path: str, call: Call) -> tuple[Edge | None, str]:
