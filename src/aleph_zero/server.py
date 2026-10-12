@@ -25,7 +25,23 @@ from .store import StoreError
 # in one message, which this server does not read, so they are not offered. The 2026
 # handshake (`server/discover`) is answered with "method not found", on which clients fall
 # back to `initialize`.
-PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18")
+PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18")   # the revisions that open with a handshake (`initialize`)
+# The revision without one (2026-07-28): every request says its protocol version in `_meta`, the server says what
+# it speaks when asked (`server/discover`), and its results say that they are complete and who answered. Both
+# kinds of client are answered: what a request carries decides, request by request.
+STATELESS_VERSIONS = ("2026-07-28",)
+_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+_SERVER_KEY = "io.modelcontextprotocol/serverInfo"
+_UNSUPPORTED_VERSION = -32022
+LIST_TTL_MS = 300_000       # the tools do not change while the server runs; a client may keep the list this long
+
+
+def stateless_enabled() -> bool:
+    """Whether the revision without a handshake is answered. Off unless ALEPH_MCP_STATELESS=1: it is tested against
+    the protocol's own SDK client, but Claude Code's client, which asks for it first and falls back to the handshake
+    when told "method not found", has not been seen to work with it. Until it has, the fallback that is known to
+    work stays what a session gets."""
+    return os.environ.get("ALEPH_MCP_STATELESS", "") == "1"
 SERVER_INFO = {"name": "aleph-zero", "version": "0.1.0"}
 
 INSTRUCTIONS = """\
@@ -239,6 +255,14 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     cancelled: set = set()        # of those, the ones withdrawn before they started
     running: list = [None]
 
+    def answer(ident, result: dict, stateless: bool, listed: bool = False) -> None:
+        """Send a result, with what the revision without a handshake asks of every result (and of a list)."""
+        if stateless:
+            result = {**result, "resultType": "complete", "_meta": {**result.get("_meta", {}), _SERVER_KEY: SERVER_INFO}}
+            if listed:
+                result.update(ttlMs=LIST_TTL_MS, cacheScope="private")
+        send({"jsonrpc": "2.0", "id": ident, "result": result})
+
     def send(message: dict) -> None:
         with write_lock:
             try:
@@ -252,7 +276,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             item = calls.get()
             if item is None:
                 return
-            ident, name, arguments = item
+            ident, name, arguments, stateless = item
             with state:
                 waiting.discard(ident)
                 if ident in cancelled:
@@ -271,12 +295,13 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 running[0] = None
                 engine.resume()
             if result is not None:
-                send({"jsonrpc": "2.0", "id": ident, "result": result})
+                answer(ident, result, stateless)
             try:
                 engine.relieve()  # after the answer has gone out: over its share, the session gives memory back
             except Exception:  # noqa: BLE001 - housekeeping must not end the thread that answers calls
                 pass
 
+    modern = stateless_enabled()
     worker = threading.Thread(target=work, name="aleph-calls", daemon=True)
     worker.start()
     for line in incoming:
@@ -308,7 +333,20 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             continue
         if ident is None:
             continue  # any other notification: nothing to answer
-        if method == "initialize":
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        said = meta.get(_VERSION_KEY) if modern else None
+        stateless = said in STATELESS_VERSIONS
+        if modern and ((said is not None and not stateless) or (method == "server/discover" and not stateless)):
+            # A revision this server does not speak. Told with the ones it does: a client of an older one then opens
+            # with its handshake, a client of a newer one picks a revision both know.
+            send({"jsonrpc": "2.0", "id": ident, "error": {
+                "code": _UNSUPPORTED_VERSION, "message": f"Unsupported protocol version: {said}",
+                "data": {"supported": [*STATELESS_VERSIONS, *PROTOCOL_VERSIONS], "requested": said if isinstance(said, str) else ""}}})
+            continue
+        if method == "server/discover" and modern:
+            answer(ident, {"supportedVersions": [*STATELESS_VERSIONS, *PROTOCOL_VERSIONS],
+                           "capabilities": {"tools": {"listChanged": False}}, "instructions": INSTRUCTIONS}, True, listed=True)
+        elif method == "initialize":
             proposed = params.get("protocolVersion")
             send({"jsonrpc": "2.0", "id": ident, "result": {
                 "protocolVersion": proposed if proposed in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
@@ -317,7 +355,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
         elif method == "ping":
             send({"jsonrpc": "2.0", "id": ident, "result": {}})
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": ident, "result": {"tools": tools()}})
+            answer(ident, {"tools": tools()}, stateless, listed=True)
         elif method == "tools/call":
             name = params.get("name")
             if not isinstance(name, str) or name not in {tool["name"] for tool in tools()}:
@@ -325,7 +363,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 continue
             with state:
                 waiting.add(ident)
-            calls.put((ident, name, params.get("arguments")))
+            calls.put((ident, name, params.get("arguments"), stateless))
         else:
             send(_error(ident, -32601, f"Method not found: {method}"))
     engine.cancel()  # the client is gone: whatever is running has no reader

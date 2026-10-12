@@ -85,12 +85,81 @@ def test_initialize_negotiates_the_protocol_version(client):
     assert newer["result"]["protocolVersion"] == LATEST  # one we do not know: our latest
 
 
-def test_the_modern_handshake_is_declined_so_the_client_falls_back(client):
+MODERN = "2026-07-28"
+VERSION, SERVER = "io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/serverInfo"
+
+
+def test_until_it_is_switched_on_the_newer_revision_is_declined_and_the_client_falls_back(client):
     # Claude Code 2.1.296 first sends server/discover and, on "method not found", sends initialize.
-    client.send({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover", "params": {}})
+    client.send({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover",
+                 "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
     reply = client.read()
     assert reply["id"] == "server-discover-probe-1" and reply["error"]["code"] == -32601
     assert client.start()["protocolVersion"] == LATEST
+    assert set(client.request("tools/list", {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}})["result"]) == {"tools"}
+
+
+@pytest.fixture
+def modern(repo):
+    found = Client(repo.root, env={"ALEPH_MCP_STATELESS": "1"})
+    yield found
+    found.close()
+
+
+def test_the_revision_without_a_handshake_is_spoken_request_by_request(modern):
+    """2026-07-28: no `initialize`. Each request says its protocol version; `server/discover` says what the server speaks."""
+    client = modern
+    meta = {"_meta": {VERSION: MODERN, "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "0"},
+                      "io.modelcontextprotocol/clientCapabilities": {}}}
+    found = client.request("server/discover", meta)["result"]
+    assert found["supportedVersions"][0] == MODERN and LATEST in found["supportedVersions"]      # the older ones too
+    assert "tools" in found["capabilities"] and 200 < len(found["instructions"]) <= 2048
+    assert found["resultType"] == "complete" and found["_meta"][SERVER]["name"] == "aleph-zero"
+    listed = client.request("tools/list", meta)["result"]                                          # with no handshake before it
+    assert {tool["name"] for tool in listed["tools"]} >= {"search", "symbol"}
+    assert listed["resultType"] == "complete" and listed["ttlMs"] > 0 and listed["cacheScope"] in ("public", "private")
+    called = client.request("tools/call", {"name": "status", "arguments": {}, **meta})["result"]
+    assert called["isError"] is False and called["resultType"] == "complete" and called["_meta"][SERVER]["name"] == "aleph-zero"
+
+
+def test_a_version_the_server_does_not_speak_is_refused_with_the_ones_it_does(modern):
+    client = modern
+    unknown = {"_meta": {VERSION: "2099-01-01"}}
+    for method, params in (("server/discover", unknown), ("tools/list", unknown), ("tools/call", {"name": "status", "arguments": {}, **unknown})):
+        error = client.request(method, params)["error"]
+        assert error["code"] == -32022 and error["data"]["requested"] == "2099-01-01"
+        assert MODERN in error["data"]["supported"] and LATEST in error["data"]["supported"]
+
+
+def test_a_client_of_the_handshake_revisions_is_answered_as_before(modern):
+    client = modern
+    started = client.start()
+    assert started["protocolVersion"] == LATEST
+    listed = client.request("tools/list")["result"]
+    assert set(listed) == {"tools"}                                   # nothing of the newer revision is put in its way
+    assert set(client.call("status")["result"]) == {"content", "isError"}
+    client.send({"jsonrpc": "2.0", "id": "p", "method": "ping"})
+    assert client.read() == {"jsonrpc": "2.0", "id": "p", "result": {}}
+
+
+def test_the_sdk_s_client_of_the_new_revision_can_discover_list_and_call(repo):
+    import anyio
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    async def run():
+        params = StdioServerParameters(command=sys.executable, env={**os.environ, "ALEPH_MCP_STATELESS": "1"},
+                                       args=["-m", "aleph_zero.cli", "--cwd", str(repo.root), "serve"])
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                found = await session.discover()
+                tools = await session.list_tools()
+                result = await session.call_tool("search", {"query": "render_invoice"})
+                return found, session.protocol_version, [tool.name for tool in tools.tools], result
+
+    found, version, names, result = anyio.run(run)
+    assert MODERN in found.supported_versions and version == MODERN
+    assert "search" in names and result.is_error is False and "src/billing/invoice.py:1-3" in result.content[0].text
 
 
 def test_six_tools_are_listed_and_search_is_always_loaded(client):
