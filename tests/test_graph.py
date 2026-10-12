@@ -627,3 +627,27 @@ def test_a_rust_call_written_through_a_trait_is_not_certain_of_the_trait_s_own_m
                  "src/lib.rs": ("trait Shape {\n    fn area(&self) -> f64;\n}\nstruct Dot;\nimpl Shape for Dot {\n    fn area(&self) -> f64 { 0.0 }\n}\n"
                                 "fn total(dot: &Dot) -> f64 {\n    Shape::area(dot)\n}\n")}
     assert certainty(same_file, "src/lib.rs", "area")[1] is False
+
+
+def test_a_trait_reached_by_a_path_is_a_trait_all_the_same():
+    rust = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod latch;\nmod scope;\n",
+            "src/latch.rs": ("pub trait Latch {\n    unsafe fn set(this: *const Self);\n}\n\npub struct LockLatch;\n\n"
+                             "impl Latch for LockLatch {\n    unsafe fn set(this: *const Self) {}\n}\n\npub fn make() -> LockLatch {\n    LockLatch\n}\n"),
+            "src/scope/mod.rs": ("use crate::latch::LockLatch;\n\nfn wake(latch: &LockLatch) {\n    unsafe { crate::latch::Latch::set(latch) };\n"
+                                 "    let other = crate::latch::make();\n}\n")}
+    assert certainty(rust, "src/scope/mod.rs", "set") == (["Latch.set"], False)
+    assert certainty(rust, "src/scope/mod.rs", "make") == (["make"], True)             # a function by its path: as before
+
+
+def test_a_rust_function_beside_an_import_of_something_that_is_not_a_function_stays_certain():
+    """Macros, and types, are named apart from functions: `use other::log;` (a macro) beside `fn log()` needs no `#[cfg]`."""
+    macro = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod other;\nmod run;\n",
+             "src/other.rs": "#[macro_export]\nmacro_rules! report {\n    () => {};\n}\npub(crate) use report;\n",
+             "src/run.rs": "use crate::other::report;\n\nfn report() {}\n\nfn go() {\n    report();\n}\n"}
+    assert certainty(macro, "src/run.rs", "report") == (["report"], True)
+    typed = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod run;\n",
+             "src/run.rs": "use std::fmt::Formatter;\n\n#[allow(non_snake_case)]\nfn Formatter() {}\n\nfn go() {\n    Formatter();\n}\n"}
+    assert certainty(typed, "src/run.rs", "Formatter") == (["Formatter"], True)        # an imported name written as a type is a type
+    outside = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod run;\n",
+               "src/run.rs": "#[cfg(unix)]\nuse libc::getpid;\n\n#[cfg(not(unix))]\nfn getpid() -> i32 {\n    0\n}\n\nfn go() {\n    getpid();\n}\n"}
+    assert certainty(outside, "src/run.rs", "getpid") == (["getpid"], False)           # the other one is outside these files: still not certain

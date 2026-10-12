@@ -562,11 +562,14 @@ class Graph:
         others, leaves = [], False
         for binding in bound:
             targets, modules, placed = self._stands_for(path, binding)
-            others += [target for target in targets if target.kind not in _TYPES and target not in found.targets]
+            # Only another function shares a function's name by condition: macros and types are named apart.
+            others += [target for target in targets if target.kind in ("function", "method") and target not in found.targets]
             leaves = leaves or not (targets or modules or placed)
         if others:
             return self._edge(path, [*found.targets, *others], found.rule)
-        return replace(found, doubt=found.doubt or "the name is also imported in this file, under another condition") if leaves else found
+        if leaves and not name[:1].isupper():       # an import from outside written as a type is a type
+            return replace(found, doubt=found.doubt or "the name is also imported in this file, under another condition")
+        return found
 
     @staticmethod
     def _through_a_trait(found: Edge | None) -> Edge | None:
@@ -590,7 +593,10 @@ class Graph:
             if here:
                 return self._edge(path, here, "scope")
         found = self._member_of([], [module], rest, call.name)
-        return self._edge(path, found, "module path") if found else None
+        if not found:
+            return None
+        through_trait = bool(rest) and any(target.kind == "interface" for target in self._walk([], [module], rest)[0])
+        return self._through_a_trait(self._edge(path, found, "module path")) if through_trait else self._edge(path, found, "module path")
 
     # ---- inside the file ------------------------------------------------------------------------
 
