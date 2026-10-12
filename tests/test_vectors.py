@@ -125,7 +125,7 @@ def test_three_hundred_thousand_vectors_are_scanned_quickly(tmp_path):
     count = 300_000
     store = VectorStore(conn, tmp_path / "aleph-zero", KIND)
     conn.execute("BEGIN")
-    conn.executemany("INSERT INTO chunks(chunk_id, chunk_hash, kind, symbol, signature, breadcrumb, text) VALUES (?, ?, 'block', '', '', '', '')",
+    conn.executemany("INSERT INTO chunks(chunk_id, chunk_hash, kind, symbol, signature, breadcrumb, text) VALUES (?, ?, 'function', '', '', '', '')",
                      ((i, f"h{i}") for i in range(1, count + 1)))
     conn.execute("INSERT INTO temp.view_chunks(chunk_id) SELECT chunk_id FROM chunks")
     conn.execute("COMMIT")
