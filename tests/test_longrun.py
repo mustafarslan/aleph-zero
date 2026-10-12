@@ -24,6 +24,16 @@ def control(tmp_path, **settings):
                            poll=0.01, **settings)
 
 
+def until(holds, seconds: float = 5.0) -> bool:
+    """Wait for something another thread brings about, as long as it takes and no longer: not a guess at how long that is."""
+    give_up = time.monotonic() + seconds
+    while not holds():
+        if time.monotonic() > give_up:
+            return False
+        time.sleep(0.005)
+    return True
+
+
 def status(tmp_path) -> dict:
     return json.loads((tmp_path / longrun.STATUS).read_text())
 
@@ -36,8 +46,8 @@ def test_a_pause_file_holds_the_job_until_it_is_removed_and_the_status_says_so(t
     passed = threading.Event()
     waiting = threading.Thread(target=lambda: (job(10, 64), passed.set()))
     waiting.start()
-    time.sleep(0.1)
-    assert not passed.is_set() and status(tmp_path)["state"] == "paused"
+    assert until(lambda: status(tmp_path)["state"] == "paused") and not passed.is_set()
+    time.sleep(0.11)                                 # held for longer than the tenth of a second the status counts in
     longrun.resume(tmp_path)
     waiting.join(timeout=5)
     assert passed.is_set() and status(tmp_path)["state"] == "running" and status(tmp_path)["paused_seconds"] > 0
@@ -84,8 +94,7 @@ def test_outside_its_hours_the_job_waits(tmp_path):
     passed = threading.Event()
     waiting = threading.Thread(target=lambda: (job(1, 1), passed.set()))
     waiting.start()
-    time.sleep(0.1)
-    assert not passed.is_set() and status(tmp_path)["state"] == "waiting for its hours"
+    assert until(lambda: status(tmp_path)["state"] == "waiting for its hours") and not passed.is_set()
     hour[0] = 23                                     # 19 to 7 wraps past midnight
     waiting.join(timeout=5)
     assert passed.is_set()
@@ -152,7 +161,17 @@ def test_results_already_worked_out_are_kept_per_question_and_per_setting(tmp_pa
     assert changed.get("repo__1", "c0ffee") is None                                              # the engine's code changed
     (next((tmp_path / "run-cache").glob("*.json"))).write_text("{ cut short")
     assert cache.get("repo__1", "c0ffee") is None                                                # a damaged entry is worked out again
-    assert benchmark_c.code_fingerprint() == benchmark_c.code_fingerprint() and len(benchmark_c.code_fingerprint()) == 16
+    source = tmp_path / "source"
+    (source / "inner").mkdir(parents=True)
+    (source / "a.py").write_text("x = 1\n")
+    (source / "inner" / "b.py").write_text("y = 1\n")
+    first = benchmark_c.code_fingerprint(source)
+    assert first == benchmark_c.code_fingerprint(source) and len(first) == 16
+    (source / "inner" / "b.py").write_text("y = 2\n")
+    assert benchmark_c.code_fingerprint(source) != first                 # other code: a result kept for the old code is not its result
+    (source / "inner" / "b.py").write_text("y = 1\n")
+    (source / "notes.txt").write_text("not code\n")
+    assert benchmark_c.code_fingerprint(source) == first
 
 
 def test_prepare_can_be_stopped_and_taken_up_again_without_embedding_anything_twice(tmp_path, fake_worker, monkeypatch):
@@ -202,13 +221,28 @@ def test_a_job_checks_power_and_disk_before_it_starts_and_waits_while_on_battery
     passed = threading.Event()
     waiting = threading.Thread(target=lambda: (job(1, 1), passed.set()))
     waiting.start()
-    time.sleep(0.1)
-    assert not passed.is_set() and status(tmp_path)["state"] == "waiting for mains power"
+    assert until(lambda: status(tmp_path)["state"] == "waiting for mains power") and not passed.is_set()
     plugged[0] = True
     waiting.join(timeout=5)
     assert passed.is_set() and status(tmp_path)["state"] == "running"
-    if sys.platform == "darwin":
-        assert longrun.on_mains() in (True, False, None)
+
+
+def test_whether_the_machine_is_on_mains_is_read_from_what_the_system_says(monkeypatch):
+    said = {"text": " -InternalBattery-0 (id=1)\t79%; AC attached; not charging\nNow drawing from 'AC Power'\n"}
+
+    def pmset(command, **_):
+        if isinstance(said["text"], Exception):
+            raise said["text"]
+        return subprocess.CompletedProcess(command, 0, stdout=said["text"], stderr="")
+
+    monkeypatch.setattr(longrun.subprocess, "run", pmset)
+    assert longrun.on_mains() is True
+    said["text"] = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t54%; discharging\n"
+    assert longrun.on_mains() is False
+    said["text"] = "something this code has never seen\n"
+    assert longrun.on_mains() is None                # cannot be told: not taken for either
+    said["text"] = OSError("no such program")        # not a Mac
+    assert longrun.on_mains() is None
 
 
 def test_a_chip_that_cannot_be_read_is_not_taken_for_a_cool_one(tmp_path, monkeypatch):

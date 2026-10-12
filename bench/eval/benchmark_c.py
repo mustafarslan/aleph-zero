@@ -172,10 +172,10 @@ def view_at(clone: Path, commit: str) -> View:
     return View(info.root, info.common_dir, info.object_format, tree, gitio.ls_tree(clone, tree), frozenset())
 
 
-def code_fingerprint() -> str:
+def code_fingerprint(source: Path | None = None) -> str:
     """A name for the engine's code as it is now: a result worked out by other code is not this code's result."""
     digest = hashlib.sha256()
-    source = Path(__file__).resolve().parents[2] / "src" / "aleph_zero"
+    source = source or Path(__file__).resolve().parents[2] / "src" / "aleph_zero"
     for path in [*sorted(source.rglob("*.py")), Path(__file__).resolve()]:
         digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
     return digest.hexdigest()[:16]

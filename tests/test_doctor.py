@@ -126,3 +126,19 @@ def test_doctor_says_how_much_of_the_vector_file_is_on_disk(tmp_path):
     assert "vectors 8.4 MB long, 0.0 MB on disk" in said
     file.write_bytes(b"x" * 1024 * 1024)             # all of it on disk: said once, as before
     assert "vectors 1.0 MB" in doctor._vector_file(index) and "on disk" not in doctor._vector_file(index)
+
+
+def test_an_extension_of_a_git_index_is_found_where_extensions_are_and_not_by_its_letters_alone():
+    from aleph_zero import gitio
+
+    def extension(name: bytes, body: bytes) -> bytes:
+        return name + len(body).to_bytes(4, "big") + body
+
+    entries = b"DIRC" + (2).to_bytes(4, "big") + (1).to_bytes(4, "big") + b"\x00" * 70
+    assert gitio._has_extension(entries + extension(b"UNTR", b"cache") + b"\x11" * 20, b"UNTR") is True
+    assert gitio._has_extension(entries + extension(b"TREE", b"t" * 9) + extension(b"UNTR", b"") + b"\x11" * 20, b"UNTR") is True
+    assert gitio._has_extension(entries + extension(b"UNTR", b"x") + extension(b"REUC", b"yy") + b"\x22" * 32, b"UNTR") is True   # a sha256 index
+    assert gitio._has_extension(entries + extension(b"TREE", b"t" * 9) + b"\x11" * 20, b"UNTR") is False
+    by_chance = b"DIRC" + b"\x00" * 30 + b"UNTR" + b"\x00\x00\x00\x03" + b"abc" + b"\x00" * 40      # in a path of an entry: leads nowhere
+    assert gitio._has_extension(by_chance + extension(b"TREE", b"t") + b"\x11" * 20, b"UNTR") is False
+    assert gitio._has_extension(b"", b"UNTR") is False and gitio._has_extension(b"UNTR", b"UNTR") is False
