@@ -25,7 +25,6 @@ from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
-from .. import architecture
 from . import query
 from .profile import LanguageProfile
 
@@ -52,7 +51,6 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A Redis list, channel or stream named where work is handed over. `xreadgroup` names its stream late: not read.
 _QUEUE_CALLS = frozenset({"lpush", "rpush", "blpop", "brpop", "publish", "subscribe", "psubscribe", "xadd"})
 _QUEUE_NAME = re.compile(r"^[\w.:/*-]+$")
-_DETAIL_LIMIT = 400
 _GO_MOUNTS = frozenset({"Mount", "Route", "Group", "PathPrefix"})
 _ENVIRONMENT = ("process.env", "import.meta.env")
 _WRITTEN_LIMIT = 80
@@ -93,13 +91,7 @@ def text_facts(path: str, text: str) -> list[Fact]:
     environment file, a protocol-buffers service definition."""
     name = path.rsplit("/", 1)[-1].lower()
     out: list[Fact] = []
-    if path == architecture.FILE:
-        layers, contracts = architecture.read(text)
-        out += [Fact("layer", layer.name, layer.line, ", ".join(layer.patterns)[:_DETAIL_LIMIT]) for layer in layers]
-        out += [Fact("contract", contract.name, contract.line,
-                     (contract.kind + (": " + " > ".join(contract.order) if contract.order else ""))[:_DETAIL_LIMIT])
-                for contract in contracts]
-    elif name.endswith(".prisma"):
+    if name.endswith(".prisma"):
         out += [Fact("model", match.group(1), text.count("\n", 0, match.start()) + 1, "prisma")
                 for match in re.finditer(r"^model\s+(\w+)\s*\{", text, re.MULTILINE)]
     elif is_environment_example(name):
@@ -127,7 +119,7 @@ def is_environment_example(name: str) -> bool:
 def states_facts(path: str) -> bool:
     """Whether a file that is not source code is one `text_facts` reads."""
     name = path.rsplit("/", 1)[-1].lower()
-    return path == architecture.FILE or name.endswith((".prisma", ".proto")) or is_environment_example(name)
+    return name.endswith((".prisma", ".proto")) or is_environment_example(name)
 
 
 # ---- helpers ---------------------------------------------------------------------------------------

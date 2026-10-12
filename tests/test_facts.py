@@ -4,9 +4,10 @@ import json
 import pytest
 
 from aleph_zero import cli, lang
+from aleph_zero.archfacts import text_facts
 from aleph_zero.engine import Engine
 from aleph_zero.lang import parse
-from aleph_zero.lang.facts import facts, text_facts
+from aleph_zero.lang.facts import facts
 
 
 def found(path: str, source: str):

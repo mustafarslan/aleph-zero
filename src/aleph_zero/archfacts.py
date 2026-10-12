@@ -14,10 +14,11 @@ from dataclasses import dataclass, field
 
 import apsw
 
-from . import filters, gitio, lang
+from . import architecture, filters, gitio, lang
 from .indexer import Index
 from .lang import parse
-from .lang.facts import Fact, facts, states_facts, text_facts
+from .lang.facts import Fact, facts, states_facts
+from .lang.facts import text_facts as _named_text_facts
 from .store.db import transaction
 from .view import View
 
@@ -33,6 +34,7 @@ _PENDING = (
     "LEFT JOIN arch_facts a ON a.blob_oid = v.blob_oid AND a.family = v.family AND a.version = ? "
     f"WHERE a.blob_oid IS NULL AND v.family IN {_READ}"
 )
+_DETAIL_LIMIT = 400
 _NONE = b""                 # a file that states nothing: most of them
 _now = time.monotonic       # looked at through this name so that a test can move the clock
 
@@ -67,7 +69,19 @@ def pending(index: Index) -> list[tuple[str, str]]:
 
 
 def _stating(index: Index, oid: str) -> list[str]:
-    return [path for path in index.paths_for(oid, _TEXT) if states_facts(path)]
+    return [path for path in index.paths_for(oid, _TEXT) if path == architecture.FILE or states_facts(path)]
+
+
+def text_facts(path: str, text: str) -> list[Fact]:
+    """The facts of a file that is not source code: the layers and contracts of an `oxn.yaml` at the
+    root, or what the language package reads by a file's name (a schema, an example environment file)."""
+    if path != architecture.FILE:
+        return _named_text_facts(path, text)
+    layers, contracts = architecture.read(text)
+    return ([Fact("layer", layer.name, layer.line, ", ".join(layer.patterns)[:_DETAIL_LIMIT]) for layer in layers]
+            + [Fact("contract", contract.name, contract.line,
+                    (contract.kind + (": " + " > ".join(contract.order) if contract.order else ""))[:_DETAIL_LIMIT])
+               for contract in contracts])
 
 
 def prepare(index: Index, view: View, budget_seconds: float, stop=None) -> int:
