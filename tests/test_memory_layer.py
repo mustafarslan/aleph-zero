@@ -203,3 +203,74 @@ def test_without_the_extension_there_is_no_store_and_nothing_fails(repo, monkeyp
     mem = Memory(open_db(index_path(repo.root)), store)
     kept = mem.remember("note", "remembered without any vector store", session="s1", vector=unit(12))
     assert [item.memory_id for item in mem.recall("remembered vector store", vector=unit(12), k=2)] == [kept]
+
+
+# ---- through the engine, the server and the command line ---------------------------------------------------
+
+def test_the_engine_remembers_with_citations_from_the_view_and_recalls(repo):
+    from aleph_zero.engine import Engine
+
+    engine = Engine(repo.root, dense=False)
+    kept = engine.remember("chat", "Q: where are tokens refreshed?\nA: refresh_token posts to /oauth/refresh.",
+                           cites=["src/auth/token_store.py:4-6", "no/such/file.py:1-2", "not a location"], session="s1")
+    found = engine.recall("tokens refreshed")
+    assert [item.memory_id for item in found] == [kept["memory_id"]]
+    assert [(cite.path, cite.start_line, cite.end_line) for cite in found[0].cites] == [("src/auth/token_store.py", 4, 6)]
+    assert not found[0].stale
+    repo.write("src/auth/token_store.py", "def refresh_token(session):\n    return None\n")
+    assert engine.recall("tokens refreshed")[0].stale
+    status = engine.status()
+    assert status["memory"]["memories"] == 1 and status["memory"]["store"] in ("aeon", "none")
+
+
+def test_recall_and_remember_are_tools_of_the_server(repo):
+    import json
+
+    from test_server import Client
+
+    client = Client(repo.root)
+    try:
+        client.start()
+        tools = {tool["name"]: tool for tool in client.request("tools/list")["result"]["tools"]}
+        assert {"recall", "remember"} <= set(tools)
+        assert "anthropic/alwaysLoad" not in json.dumps(tools["recall"])        # on demand, not in every prompt
+        kept = json.loads(client.text("remember", kind="note", text="The zeppelin gateway retries three times.",
+                                      cites="src/billing/invoice.py:1-3", format="json"))
+        assert kept["cites"] == 1 and len(kept["memory_id"]) == 24
+        text = client.text("recall", query="zeppelin gateway")
+        assert "zeppelin gateway retries" in text and "src/billing/invoice.py:1-3" in text and "note" in text
+        assert "no memory" in client.text("recall", query="something never mentioned at all")
+        bad = client.call("remember", kind="diary", text="x")["result"]
+        assert bad["isError"] is True
+    finally:
+        client.close()
+
+
+def test_memories_can_be_listed_recalled_and_forgotten_from_the_command_line(repo, capsys):
+    import json
+
+    from aleph_zero import cli
+    from aleph_zero.engine import Engine
+
+    kept = Engine(repo.root, dense=False).remember("note", "The zeppelin gateway retries three times.", session="s1")
+    assert cli.main(["--cwd", str(repo.root), "memory", "list"]) == 0
+    listed = capsys.readouterr().out
+    assert kept["memory_id"] in listed and "zeppelin gateway" in listed
+    assert cli.main(["--cwd", str(repo.root), "memory", "recall", "zeppelin", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["memory_id"] == kept["memory_id"]
+    assert cli.main(["--cwd", str(repo.root), "memory", "forget", kept["memory_id"]]) == 0
+    capsys.readouterr()
+    cli.main(["--cwd", str(repo.root), "memory", "list"])
+    assert "zeppelin" not in capsys.readouterr().out
+    assert cli.main(["--cwd", str(repo.root), "memory", "forget", "no-such-id"]) == 1
+
+
+def test_forget_with_neither_an_id_nor_all_forgets_nothing(repo, capsys):
+    from aleph_zero import cli
+    from aleph_zero.engine import Engine
+
+    Engine(repo.root, dense=False).remember("note", "must survive a careless command", session="s1")
+    assert cli.main(["--cwd", str(repo.root), "memory", "forget"]) == 2
+    capsys.readouterr()
+    cli.main(["--cwd", str(repo.root), "memory", "list"])
+    assert "must survive" in capsys.readouterr().out

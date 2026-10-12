@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import os
 import sys
 from dataclasses import asdict
@@ -146,6 +147,32 @@ def _embed(args) -> int:
     return 0
 
 
+def _memory(args) -> int:
+    engine = Engine(args.cwd, dense=False)
+    if args.action == "list":
+        for row in engine.memories(args.limit):
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["created_at"]))
+            print(f"{row['memory_id']}  {when}  {row['kind']:5} {' '.join(row['text'].split())[:100]}")
+        return 0
+    if args.action == "recall":
+        found = engine.recall(" ".join(args.query), k=args.k)
+        if args.json:
+            from dataclasses import asdict
+
+            print(json.dumps([asdict(item) for item in found]))
+        else:
+            from .server import recalled_text
+
+            print(recalled_text(found, " ".join(args.query)))
+        return 0
+    if not args.all and not args.memory_id:
+        print("aleph: name the memory to forget (its id is in `aleph memory list`), or pass --all", file=sys.stderr)
+        return 2
+    forgotten = engine.forget(None if args.all else args.memory_id)
+    print(f"forgot {forgotten}")
+    return 0 if forgotten or args.all else 1
+
+
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
@@ -222,6 +249,19 @@ def main(argv: list[str] | None = None) -> int:
     embedding.add_parser("status")
     embedding.add_parser("stop")
     embed.set_defaults(run=_embed)
+
+    remembered = commands.add_parser("memory", help="what earlier sessions left about this repository: list, recall, forget")
+    memories = remembered.add_subparsers(dest="action", required=True)
+    listing = memories.add_parser("list")
+    listing.add_argument("--limit", type=int, default=50)
+    recalling = memories.add_parser("recall")
+    recalling.add_argument("query", nargs="+")
+    recalling.add_argument("-k", type=int, default=5)
+    recalling.add_argument("--json", action="store_true")
+    forgetting = memories.add_parser("forget", help="remove a memory's text for good; --all for every one")
+    forgetting.add_argument("memory_id", nargs="?")
+    forgetting.add_argument("--all", action="store_true")
+    remembered.set_defaults(run=_memory)
 
     gc = commands.add_parser("gc", help="drop content no view has used recently")
     gc.add_argument("--days", type=float, default=30.0)

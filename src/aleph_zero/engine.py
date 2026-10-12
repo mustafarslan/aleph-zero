@@ -11,6 +11,7 @@ import functools
 import gc
 import hashlib
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -19,14 +20,14 @@ from pathlib import Path
 
 import apsw
 
-from . import dense_policy, gitio, lang, memstat, render, sources, symbols
+from . import dense_policy, gitio, lang, memory, memstat, render, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
 from .indexer import Index, collect_if_due
 from .lang.parse import forget_parsers
 from .search import search as run_search
-from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db
+from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db, state_dir
 from .store import db as store_db
 from .view import View, build_view
 
@@ -262,7 +263,65 @@ class Engine:
             "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
             "memory": self._memory(),
-        }
+        } | {"memory": {**self._memory(), **self._memories(index, view).counts(),
+                         "store": "aeon" if memory.open_store(state_dir(view.common_dir)) is not None else "none"}}
+
+    # ---- long-term memory -----------------------------------------------------------------------
+
+    def _memories(self, index: Index, view: View) -> memory.Memory:
+        return memory.Memory(index.conn, memory.open_store(state_dir(view.common_dir)))
+
+    def _vector(self, text: str, kind: str, seconds: float):
+        """The vector of a text from the embedding worker, or None when the worker is not
+        installed, not running or not answering in time. Never starts it and never raises."""
+        try:
+            from .embed import setup, worker
+            from .embed.client import EmbedClient, Unavailable
+
+            sock = worker.socket_path()
+            if not setup.installed() or not sock.exists():
+                return None
+            client = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=seconds)
+            try:
+                return client.embed([text], kind=kind)[0]
+            except Unavailable:
+                return None
+        except Exception:  # noqa: BLE001 - memory works without vectors
+            return None
+
+    @_rebuilding
+    def remember(self, kind: str, text: str, cites: list[str] | None = None, session: str = "",
+                 cwd: Path | str | None = None) -> dict:
+        """Keep a memory of this repository. `cites` are `path:start-end` locations; those
+        that are files of the worktree now are stored with the content they point at."""
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        found = []
+        for written in cites or ():
+            match = _LOCATION.match(written.strip())
+            if match and match.group(1) in view.files:
+                start = int(match.group(2))
+                found.append(memory.Cite(match.group(1), view.files[match.group(1)], start, int(match.group(3) or start)))
+        kept = self._memories(index, view).remember(kind, text, session=session or "unnamed",
+                                                    vector=self._vector(text[:4000], "document", 2.0), cites=found)
+        return {"memory_id": kept, "cites": len(found)}
+
+    @_rebuilding
+    def recall(self, query: str, k: int = 5, cwd: Path | str | None = None) -> list[memory.Recalled]:
+        """Memories of this repository that fit the query, each with whether what it cites has changed."""
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        return self._memories(index, view).recall(query, vector=self._vector(query, "query", QUERY_EMBED_SECONDS), k=k, view=view)
+
+    @_rebuilding
+    def forget(self, memory_id: str | None = None, cwd: Path | str | None = None) -> int:
+        """Forget one memory, or all of them with None. Returns how many were forgotten."""
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        memories = self._memories(index, view)
+        return memories.forget_all() if memory_id is None else int(memories.forget(memory_id))
+
+    @_rebuilding
+    def memories(self, limit: int = 50, cwd: Path | str | None = None) -> list[dict]:
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        return self._memories(index, view).list(limit)
 
     # ---- text for an agent, with the session's memory ----------------------------------------
 
@@ -429,6 +488,9 @@ class Engine:
                 pending = max(pending, 1)  # answered from a state that lacks part of the view
             return (*before, found), pending, late
         raise AssertionError("unreachable")
+
+_LOCATION = re.compile(r"(.+?):(\d+)(?:-(\d+))?\Z")
+
 
 def _limits(timeout_ms: int | None) -> tuple[float, float | None]:
     started = time.monotonic()

@@ -95,3 +95,17 @@ Not planned: a lock inside the kernel. The `flock` in Aleph covers it.
 - A second persistent store sits beside SQLite and must be reconciled with it.
 - Aleph gains a dependency that today needs a source build.
 - Aleph's benchmark harness can give Aeon the recall-on-real-data numbers its paper lacks.
+
+## Aleph's side as built (M6a, 2026-10-12)
+
+Built and tested before any change in Aeon, on the owner's standing instruction to keep working; the design draft (`docs/superpowers/specs/2026-10-12-m6-memory-layer-design.md`) is not yet approved, and its open decisions were taken with their proposed answers.
+
+- **The catalogue** is a `memories` table in the index (schema 7, reached in place) with a `memory_cites` table beside it. It is the authority: a memory it marks deleted is never recalled, whatever the vector store still holds. It keeps the text too (the proposal above had the text in Aeon only): recall then works by words and recency without Aeon, forgetting removes the text from the place Aleph reads, and there is nothing to reconcile on open.
+- **Recall** fuses candidates by meaning from the store (asked for twenty times what is wanted) with matches by words among the newest 2,000 memories, newest first among equals. Ids the catalogue does not know are ignored. With a view, each memory says whether the content it cites is still at that path.
+- **`AeonStore`** implements the store on `TraceManager` exactly as the probe did: exclusive lock, open, one operation, drop, unlock; Aleph's memory id is the first line of each event; session ids are cut to 32 characters; the event time is always passed. Aeon is found through `ALEPH_AEON_LIB` (a directory holding a build of its core extension) or as an installed package; Aleph never builds it. Tested against the extension the M0 probe built out of tree: a round trip across two sessions, two processes writing 60 memories each with nothing lost, a small group not crowded out, a store file removed (recall goes on by words). **Nothing was written or built in the Aeon checkout.**
+- **Without Aeon** nothing fails: memories are kept and recalled by words and recency.
+- **Vectors** come from the embedding worker when it is installed and running (never started for this); otherwise the memory is kept without one.
+- **Surface:** engine tools `recall` and `remember` (both on demand; steering rung 1 leaves them deferred), `aleph memory list | recall | forget [--all]`, counts and the store in `status`. The side chat remembers each answered question with its citations, and each inserted note; a failure to remember never costs the answer or the insert.
+- **Not built:** recording the agent's own searches; recall inside the side chat's retrieval; memories that got no vector being embedded later; erasure inside Aeon's file (`forget` empties the catalogue's text; the event stays in Aeon's file until tombstones are bound).
+
+**What still waits for the owner:** the three changes in Aeon listed above (they affect crash recovery and installation, not what was tested here), and the design's five decisions.

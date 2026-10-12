@@ -144,3 +144,42 @@ test('the engine is asked about the directory the session was started in', async
   expect(JSON.stringify(seen.engine[0])).toContain('"cwd":"/work/repo/services/api"')
   expect(JSON.stringify(seen.engine[0])).not.toContain('"detail"')
 })
+
+// ---- the memory layer (M6a) ------------------------------------------------------------------------------
+
+test('an answered question is remembered through the engine, with what it cited', async ($, on) => {
+  const { seen } = world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount(PANE)
+  await ui.input({ key: 'question', text: QUESTION })
+  const kept = seen.engine.filter((call: any) => JSON.stringify(call).includes('"remember"'))
+  expect(kept.length).toBe(1)
+  const sent = JSON.stringify(kept[0])
+  expect(sent).toContain('"kind":"chat"')
+  expect(sent).toContain('Q: ' + QUESTION)
+  expect(sent).toContain('It rotates in src/auth/store.py:4-20.')
+  expect(sent).toContain('"cites":"src/auth/store.py:4-20"')
+  await ui.press({ key: 'insert' })
+  const notes = seen.engine.filter((call: any) => JSON.stringify(call).includes('"kind":"note"'))
+  expect(notes.length).toBe(1)
+})
+
+test('an engine that cannot remember costs neither the answer nor the insert', async ($, on) => {
+  const { seen } = world(on, { engine: (e: any) => (JSON.stringify(e).includes('"remember"')
+    ? { deny: 'the index is read-only' }
+    : { value: { content: [{ type: 'text', text: JSON.stringify({ hits: [hit], symbols: [], pending: 0 }) }] } }) })
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount(PANE)
+  await ui.input({ key: 'question', text: QUESTION })
+  expect(await ui.find({ key: 'insert' })).toBeDefined()
+  await ui.press({ key: 'insert' })
+  expect(seen.fills.length).toBe(1)
+})
+
+test('a question that got no answer is not remembered', async ($, on) => {
+  const { seen } = world(on, { model: () => ({ value: { isAnswered: false, reason: 'rate limited' } }) })
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount(PANE)
+  await ui.input({ key: 'question', text: QUESTION })
+  expect(seen.engine.filter((call: any) => JSON.stringify(call).includes('"remember"')).length).toBe(0)
+})

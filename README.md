@@ -21,8 +21,9 @@ Useful options for `search`: `--kind code|docs`, `--glob "src/api/*"`, `--lang p
 
     claude mcp add aleph-zero -- /absolute/path/to/aleph-zero/.venv/bin/aleph serve
 
-The server offers four tools. `search` is always loaded; `symbol`, `outline` and
-`status` load on demand. Each takes `cwd`, so one server answers for any worktree.
+The server offers four tools for finding code. `search` is always loaded; `symbol`, `outline`
+and `status` load on demand. Each takes `cwd`, so one server answers for any worktree. Two
+more, `recall` and `remember`, belong to the memory layer below.
 
 ### As a plugin, with steering
 
@@ -70,6 +71,20 @@ has a benchmark verdict in their favour: today that is Python (ADR-002). `aleph 
 shows a project's main language and whether vectors are on, and why. `--dense`,
 `--no-dense` and `ALEPH_DENSE=1|0` decide by hand. One worker serves every session and
 repository; it unloads its model after ten idle minutes and exits after thirty.
+
+## Memory across sessions
+
+What the side chat answered, and the notes you inserted from it, are kept per repository
+and can be recalled later (the `recall` tool, or the command line):
+
+    uv run aleph memory list
+    uv run aleph memory recall "why did we change token rotation"
+    uv run aleph memory forget <id>        # or --all
+
+A recalled memory says when it was made, what code it cites, and whether that code has
+changed since. Without anything else installed, recall is by words and recency. With
+Aeon's core extension available (`ALEPH_AEON_LIB=/path/to/its/build`), recall is also by
+meaning (ADR-006). The text stays on this machine, in the repository's state directory.
 
 ## Faster queries
 

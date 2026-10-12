@@ -91,10 +91,10 @@ def test_the_modern_handshake_is_declined_so_the_client_falls_back(client):
     assert client.start()["protocolVersion"] == LATEST
 
 
-def test_four_tools_are_listed_and_search_is_always_loaded(client):
+def test_six_tools_are_listed_and_search_is_always_loaded(client):
     client.start()
     tools = {tool["name"]: tool for tool in client.request("tools/list")["result"]["tools"]}
-    assert set(tools) == {"search", "outline", "symbol", "status"}
+    assert set(tools) == {"search", "outline", "symbol", "status", "recall", "remember"}
     assert tools["search"]["_meta"] == {"anthropic/alwaysLoad": True}
     assert all("_meta" not in tool for name, tool in tools.items() if name != "search")
     assert sum(len(tool["description"]) for tool in tools.values()) <= 1200
@@ -207,7 +207,7 @@ def test_the_sdk_client_can_list_and_call_our_tools(repo):
                 return [tool.name for tool in tools.tools], result
 
     names, result = anyio.run(run)
-    assert sorted(names) == ["outline", "search", "status", "symbol"]
+    assert sorted(names) == ["outline", "recall", "remember", "search", "status", "symbol"]
     assert result.is_error is False and "src/billing/invoice.py:1-3" in result.content[0].text
 
 

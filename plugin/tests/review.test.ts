@@ -98,3 +98,12 @@ test('the pointer on Glob does not give grep advice', rung('1'), async ($, on) =
   expect(glob).toContain('Aleph Zero')
   expect(glob).not.toContain('exact string')
 })
+
+test('rung 1 loads the four search tools up front and leaves the memory tools on demand', rung('1'), async ($, on) => {
+  on('tool.describe', ($, e) => ({ description: e.description, isDeferred: e.isDeferred }))
+  for (const name of ['recall', 'remember']) {
+    expect(await $.tool.describe({ tool: 'mcp__plugin_aleph-zero_aleph__' + name, description: 'theirs', isDeferred: true }))
+      .toEqual({ description: 'theirs', isDeferred: true })
+  }
+  expect((await $.tool.describe({ tool: 'mcp__plugin_aleph-zero_aleph__symbol', description: 'old', isDeferred: true })).isDeferred).toBe(false)
+})

@@ -69,7 +69,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: '> where is refresh_token exchanged for an access token?' })).toBeDefined()
     expect(await ui.find({ key: 'insert' })).toBeDefined()
     // Retrieval went to the engine (a search and a lookup of the name), by its full name, as JSON.
-    expect(seen.engine.length).toBe(2)
+    expect(seen.engine.filter((call: any) => !JSON.stringify(call).includes('"remember"')).length).toBe(2)
     expect(JSON.stringify(seen.engine[0])).toContain(FULL_NAME)
     // One model call: the fixed rules first and cacheable, the excerpt with its location, no tools.
     expect(seen.models.length).toBe(1)

@@ -60,6 +60,7 @@ async function ask($, tool, args) {
 const CHAT_SETTINGS = 'aleph-zero.chat-settings'   // the pickers, kept between sessions
 const CHAT_USE = 'aleph-zero.chat-use'             // how often answers were cited and inserted
 const CHAT_ENGINE_MS = 2500                        // the chat may wait longer for the engine than a hook may
+const SESSION = 'chat-' + Math.random().toString(16).slice(2, 14)   // names this load of the mod in what it remembers
 const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: DEFAULTS.effort, tokens: 0, loaded: false, note: '', draft: '' }
 
 // One engine call for the chat: as in `ask`, never longer than its limit, and null for any failure.
@@ -87,6 +88,12 @@ async function count($, field) {
   } catch {
     // the usefulness log is best effort
   }
+}
+
+// Remember something about this repository for later sessions, through the engine. Best
+// effort: a memory that cannot be kept never costs the answer or the insert it came from.
+async function keep($, kind, text, cited) {
+  await lookup($, 'remember', { kind, text, cites: cited.join(','), session: SESSION })
 }
 
 function finish(turn, state, answer) {
@@ -145,8 +152,10 @@ async function answerQuestion($, question) {
     if (reply.isAnswered) {
       turn.cited = citations(reply.text, found)
       finish(turn, 'answered', reply.text)
+      $.ui.invalidate('ui.render')  // the answer shows before anything else is done with it
       await count($, 'answers')
       if (turn.cited.length) await count($, 'cited')
+      await keep($, 'chat', 'Q: ' + String(question).slice(0, 2000) + '\nA: ' + reply.text, turn.cited)
     } else {
       finish(turn, 'failed', 'No answer: ' + (reply.reason || 'the model did not answer'))
     }
@@ -322,6 +331,7 @@ export function register(on, options) {
           const filled = await $.prompt.fill({ text: note(last.answer, last.cited), mode: 'insert' })
           chat.note = filled && filled.isFilled === false ? 'The prompt box could not be filled.' : 'Drafted into the prompt box; edit or send it.'
           await count($, 'inserted')
+          await keep($, 'note', last.answer, last.cited)
           $.ui.invalidate('ui.render')
         },
       }))
@@ -394,7 +404,9 @@ export function register(on, options) {
     const described = await next(e)
     if (rung < 1) return described
     const name = e.tool.slice(e.tool.lastIndexOf('__') + 2)
-    return { description: DESCRIPTIONS[name] || described.description, isDeferred: false }
+    // The four tools for finding code. The engine's memory tools stay on demand.
+    if (!DESCRIPTIONS[name]) return described
+    return { description: DESCRIPTIONS[name], isDeferred: false }
   })
 
   on('tool.describe', { tool: ['Grep', 'Glob'] }, async ($, e, next) => {
