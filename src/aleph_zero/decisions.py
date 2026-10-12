@@ -5,11 +5,12 @@ where something is, wrong here. A decision record is one document, and the quest
 task or a commit message: many ordinary words, each a little evidence. So the records of a
 view are ranked whole, by BM25 over title and text with every word of the task, identifiers
 split into their parts (a task says "the ADR loader" where the record says `load_decisions`).
-Where the worktree has vectors, the rank of each record's nearest chunk is fused with that.
+When an embedding worker runs, each record's own vector is added to that (`FUSION`).
 
-A record is a numbered Markdown file in a directory named for decisions (`docs/adr/0012-…`),
-or one that calls itself an ADR wherever it lies (`docs/adr-004-…`), in the form adr-tools
-writes or with front matter. The ranking
+A record is a numbered Markdown or reStructuredText file in a directory named for decisions
+(`docs/adr/0012-…`, `docs/decisions/0011-….rst`), or one that calls itself an ADR wherever it
+lies (`docs/adr-004-…`), in the form adr-tools writes, with front matter, or as RST sections
+(`rstrecord`). The ranking
 follows oxn's (`context/bm25.py`, `rules/adr.py`, v0.1.2, MIT, same author), which is also
 what it is measured against (ADR-007).
 """
@@ -20,7 +21,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from . import architecture
+from . import architecture, rstrecord
 
 DIRECTORIES = frozenset({"adr", "adrs", "decisions", "decision-records", "decision_records", "architecture-decisions"})
 MAX_BYTES = 400_000
@@ -42,6 +43,8 @@ NEAREST = 200           # chunks of the records asked of the vectors
 FUSION = "convex"
 A = 0.5
 CUT = 5000              # characters of a record, and of a task, that are embedded
+SUFFIXES = (".md", ".mdx", ".rst")
+_NOT_RECORDS = frozenset({"template", "adr-template", "adr_template", "index"})
 _NUMBERED = re.compile(r"(?:ADR[-_ ]?)?(\d+)[-_]", re.I)
 _TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 _VOWEL = re.compile(r"[aeiouy]")
@@ -90,14 +93,24 @@ def is_record(path: str) -> int | None:
     """The number of the decision a path holds, or None when it is not a decision record."""
     parts = path.split("/")
     numbered = _NUMBERED.match(parts[-1])
-    if numbered is None or not parts[-1].lower().endswith((".md", ".mdx")):
+    if numbered is None or not parts[-1].lower().endswith(SUFFIXES):
         return None
+    if parts[-1][numbered.end():].lower().rsplit(".", 1)[0] in _NOT_RECORDS:
+        return None     # `0000-template.md`, `00-index.rst`: numbered to sort first, not a decision
     # In a directory of decisions any numbered file is one; elsewhere only a file that calls itself an ADR.
     named = parts[-1].lower().startswith("adr")
     return int(numbered.group(1)) if named or any(part.lower() in DIRECTORIES for part in parts[:-1]) else None
 
 
 def parse(path: str, number: int, content: str) -> Decision:
+    if path.lower().endswith(".rst"):
+        found = rstrecord.read(content)
+        name = path.rsplit("/", 1)[-1]
+        # Without a title of its own it is called what its file is called, in words: that is how it is cited.
+        title = found.title or re.sub(r"[-_]+", " ", _NUMBERED.sub("", name, count=1).rsplit(".", 1)[0]).strip() or name
+        scope = architecture.sequence(f"applies-to: {found.fields['applies-to']}", "applies-to") if found.fields.get("applies-to") else ()
+        tags = found.fields.get("tags", "").strip("[]").replace(",", " ")
+        return Decision(path, number, title, found.status, f"{title}\n{tags}\n{found.body}", scope, found.decision)
     front = _FRONT.match(content)
     fields = {key.lower(): value.strip("\"'") for key, value in _FIELD.findall(front.group(1))} if front else {}
     body = content[front.end():] if front else content
@@ -243,7 +256,7 @@ def text(answer: Answer) -> str:
             return "\n".join(about)
         about.append("")
     if not answer.known:
-        return "\n".join(about + ["no decision records in this worktree (numbered Markdown files in a directory such as docs/adr: "
+        return "\n".join(about + ["no decision records in this worktree (numbered Markdown or reStructuredText files in a directory such as docs/adr: "
                                   "`0012-use-an-event-bus.md`)"])
     if not answer.decisions:
         return "\n".join(about + [f"none of the {answer.known} decision records shares a word with the task"])

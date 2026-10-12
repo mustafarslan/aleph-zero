@@ -182,8 +182,8 @@ reported as an endpoint would be the worse mistake. Express, FastAPI, Prisma, Al
 Go's net/http and gRPC were measured on real repositories; the other readers are covered by
 tests only (ADR-003).
 
-`aleph decisions` ranks decision records (numbered Markdown files in a directory such as
-`docs/adr`) as whole documents for a task, and answers in a few hundred tokens. When the
+`aleph decisions` ranks decision records (numbered Markdown or reStructuredText files in a
+directory such as `docs/adr` or `docs/decisions`) as whole documents for a task, and answers in a few hundred tokens. When the
 embedding worker is running, each record's own vector is added to the words (a record no
 word of the task names can then still be found); without it the ranking is by words. With
 `--for`, it lists the records whose `applies-to` frontmatter covers a file and, when the
