@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from .. import memstat
 from . import worker
 from .client import EmbedClient, Unavailable
 
@@ -31,6 +32,13 @@ def _requests_served(client: EmbedClient) -> int | None:
     return None
 
 
+def _private_megabytes(pid: int) -> float | None:
+    try:
+        return memstat.private_bytes(pid) / 1e6
+    except Exception:  # noqa: BLE001 - the process is gone, or its memory cannot be read: not this check's business
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
@@ -38,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     poll = worker._seconds("ALEPH_WORKER_POLL_SECONDS", 60)
     idle_exit = worker._seconds("ALEPH_WORKER_IDLE_EXIT_SECONDS", 1800)
+    memory_limit = worker._seconds("ALEPH_WORKER_MEMORY_MB", worker.MEMORY_LIMIT_MB)
 
     child = None
     if args.adopt is None:
@@ -52,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             return child.poll() is None
         return worker.is_ours(pid)
 
-    def leave(*_signal) -> None:
+    def leave(*_signal, reason: str = "") -> None:
         if child is not None and child.poll() is None:
             child.terminate()
             try:
@@ -66,7 +75,10 @@ def main(argv: list[str] | None = None) -> int:
                 os.unlink(args.socket)
             except OSError:
                 pass
-            worker.state_file().unlink(missing_ok=True)
+            if reason:  # remembered, so that the next request says why and does not restart at once
+                worker.write_state({"failed_at": time.time(), "reason": reason})
+            else:
+                worker.state_file().unlink(missing_ok=True)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, leave)
@@ -77,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(poll)
         if not alive():
             leave()
+        used = _private_megabytes(pid)
+        if used is not None and used > memory_limit:
+            leave(reason=f"the worker used {used:.0f} MB, over its limit of {memory_limit:.0f} MB, and was stopped")
         count = _requests_served(client)
         if count is not None and count != last_count:
             last_count, last_change = count, time.monotonic()

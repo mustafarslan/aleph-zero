@@ -32,7 +32,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 - **What:** `docs/upstream/llama-cpp-logits-reservation.md` is a drafted issue (an embeddings-only context reserves a logits buffer: about 1 MB per token with this model). Aleph carries the one-line patch.
 - **Why it waits:** posting it is the owner's to do.
-- **To add before filing:** the second finding from M2, if the measurement under way confirms it: with the default prompt cache, an embeddings server slows down and grows with every request (after 4.5 hours: a tenth of the speed and 1,008 MB).
+- **To add before filing:** the second finding from M2, now measured (`bench/spikes/worker_uptime.py`, ADR-005): with the server's default prompt cache an embeddings server grows by about 0.8 KB per request and slows down (after 4.5 hours: a tenth of the speed and 1,008 MB). Aleph switches the cache off; upstream may want embeddings mode to do so by default.
 
 ## 5. Fixes proposed for Aeon v4
 

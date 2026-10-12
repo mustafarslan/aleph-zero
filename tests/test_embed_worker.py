@@ -202,3 +202,24 @@ def test_without_a_binary_or_model_the_worker_is_unavailable_with_a_hint(home):
     (home / "bin" / "llama-server").unlink()
     with pytest.raises(Unavailable, match="aleph embed setup"):
         worker.ensure()
+
+
+def test_a_worker_that_outgrows_its_memory_limit_is_stopped_and_the_reason_is_kept(home, monkeypatch):
+    monkeypatch.setenv("ALEPH_WORKER_MEMORY_MB", "1")   # any real process is over this
+    sock = worker.ensure()
+    state = worker.state()
+    assert _wait(lambda: not _alive(state["worker_pid"]) and not _alive(state["supervisor_pid"]), seconds=6)
+    assert not sock.exists()
+    assert "over its limit of 1 MB" in worker.state().get("reason", "")
+    with pytest.raises(Unavailable, match="over its limit"):   # and it is not restarted in a loop
+        worker.ensure()
+    monkeypatch.setenv("ALEPH_WORKER_MEMORY_MB", "100000")
+    monkeypatch.setenv("ALEPH_WORKER_COOLDOWN_SECONDS", "0")
+    assert EmbedClient(worker.ensure(), capacity=64).healthy()
+
+
+def test_the_worker_keeps_nothing_between_requests(home):
+    joined = " ".join(worker.server_command(gpu=True))
+    # With the server's default prompt cache an embeddings worker slowed to a tenth of its
+    # speed and grew past 1 GB over 4.5 hours of requests.
+    assert "--cache-ram 0" in joined and "--no-cache-prompt" in joined

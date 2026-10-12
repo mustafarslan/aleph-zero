@@ -24,6 +24,7 @@ from .client import EmbedClient, Unavailable
 MODEL_FILE = "embeddinggemma-2-Q8_0.gguf"
 IDLE_SLEEP = 120          # seconds without a request before the worker unloads its model
 SOCKET_LIMIT = 100        # a UNIX socket path may be 104 bytes on macOS, 108 on Linux
+MEMORY_LIMIT_MB = 600     # the worker's share of the machine-wide budget (ADR-005); past it, it is restarted
 
 
 def _seconds(name: str, default: float) -> float:
@@ -90,6 +91,9 @@ def server_command(gpu: bool | None = None) -> list[str]:
         str(binary()), "-m", str(model()), "--embedding", "-ngl", "99" if gpu else "0",
         "--host", str(socket_path()), "-c", str(count * capacity), "-b", batch, "-ub", batch,
         "-t", "1" if gpu else "8", "--parallel", str(count), "--metrics", "--sleep-idle-seconds", str(IDLE_SLEEP),
+        # Nothing is kept between requests. The server's prompt cache (8 GB by default) and
+        # slot matching exist for chat; for embeddings they only accumulate.
+        "--cache-ram", "0", "--no-cache-prompt", "--ctx-checkpoints", "0", "--slot-prompt-similarity", "0",
     ]
 
 
