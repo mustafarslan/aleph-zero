@@ -131,7 +131,14 @@ The six corpora are both what the resolver was developed against and what it is 
 
 - Flask's six were one bug: inside the package `flask.json`, `import json` was resolved to the package itself. Fixed; Flask is no longer unseen for that rule, FastAPI is.
 - On routing-controllers, confident precision under oxn's protocol is 98.2%, below the 99% bar: four name matches on a variable of an inline type. None is stamped certain. Nothing was changed for them: a rule tuned after seeing them would no longer be tested by this corpus.
-- No held-out corpus for Go or Rust is on this machine.
+- **Held-out corpora for Go and Rust (2026-10-12; cloned on the owner's word, chosen before any figure and unlike each language's development corpus).** One run, the resolver unchanged, the grader as it is (`bench/data/results/graph_heldout_go_rust.json`):
+
+  | Corpus | Graded call sites | Confident precision | Confident recall | Certain precision | Certain recall |
+  |---|---|---|---|---|---|
+  | blevesearch/bleve (Go; concrete data structures and method chains, where go-kit is interfaces) | 10,488 | 99.9% | 84.6% | 99.9% | 83.2% |
+  | rayon-rs/rayon (Rust; traits, generics and closures, where ripgrep is a command-line workspace) | 4,558 | 89.4% by the protocol; 99.7% once the index's own ambiguity is set aside | 50.5% | 86.1% by the protocol; 99.6% likewise | 38.5% |
+
+  Go holds its bars on a corpus the resolver never saw. Rust needs reading: of the 244 confident answers the protocol counts wrong, 238 name a place where the index itself defines the very symbol it gives at the call (rust-analyzer gives one symbol to every integration test's `check`, and to a function and the function inside it of the same name; it says so itself, "duplicate symbol"). In each one looked at Aleph named the right function and the index's first definition was another. This is what three Flask sites showed before, at scale. Six are wrong for real, both kinds stamped certain: a function defined under `#[cfg(not(any(unix, windows)))]` beside a `pub use` of the Unix one under `#[cfg(unix)]` (Aleph cannot know the platform and should offer both); and `Latch::set(…)` written through a trait whose method has no body, where the callee is one of the implementations and Aleph named the trait's declaration. Confident recall is above oxn's figure for Rust (42.3%), and lower than on ripgrep, as expected of code built of traits and closures. rayon has now been looked at: a fix for the two kinds is graded on a Rust corpus not yet seen.
 
 ### What is not answered, and what is not known
 
