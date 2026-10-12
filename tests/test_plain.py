@@ -411,3 +411,20 @@ def test_an_open_engine_follows_its_directory_into_and_out_of_git(project):
     shutil.rmtree(project / ".git")
     assert [hit.path for hit in engine.search("refresh token").hits][0] == "src/tokens.py"
     assert engine.status()["repository"] is False and "/.git/" not in engine.status()["index"]
+
+
+def test_a_refused_directory_leaves_nothing_in_the_cache_and_a_damaged_repository_is_called_that(project, tmp_path, monkeypatch, capsys):
+    for number in range(30):
+        (project / f"n{number}.py").write_text("x = 1\n")
+    monkeypatch.setattr(plain, "ENTRY_LIMIT", 10)
+    with pytest.raises(gitio.NotARepository):
+        build_view(project)
+    kept = Path(os.environ["XDG_CACHE_HOME"]) / "aleph-zero" / "index"
+    assert not kept.exists() or list(kept.iterdir()) == []                    # no folder for a directory that was not searched
+    damaged = tmp_path / "work" / "damaged"
+    damaged.mkdir()
+    subprocess.run(["git", "init", "-q", str(damaged)], check=True)
+    (damaged / ".git" / "HEAD").unlink()
+    assert cli.main(["--cwd", str(damaged), "source", "list"]) == 2
+    said = capsys.readouterr().err
+    assert "cannot read the repository" in said and "rev-parse" not in said

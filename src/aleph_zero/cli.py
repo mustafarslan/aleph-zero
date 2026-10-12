@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, render, scipstore, sources
+from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -158,6 +158,7 @@ def _source(args) -> int:
     try:
         gitio.repo_info(args.cwd)
     except gitio.NoRepository:
+        plain.unreadable_repository(args.cwd)       # a damaged `.git` is said to be that, not "no repository"
         raise gitio.NotARepository(f"{args.cwd} is not a git repository: other repositories are linked to a repository, "
                                    f"not to a directory. Run `git init` there") from None
     if args.action == "add":

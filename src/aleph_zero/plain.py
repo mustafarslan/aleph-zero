@@ -101,14 +101,7 @@ def read(directory: Path) -> tuple[Path, Path, dict[str, str], int, int]:
     that were not descended into, files that could not be read). Raises Refused where the rule says so, before
     or while walking."""
     root = _canonical(directory)
-    written = Path(os.path.abspath(directory))      # as it was named: a link inside a repository is inside it
-    for above in dict.fromkeys((root, *root.parents, written, *written.parents)):
-        if os.path.lexists(above / ".git"):
-            # Git said "not a repository" of a directory that has one at or above it: a damaged `.git`, or GIT_DIR
-            # or GIT_CEILING_DIRECTORIES in the environment. Walking it would search what its `.gitignore` keeps out.
-            raise gitio.GitError(f"git cannot read the repository at {above}: it says {root} is in no repository, though "
-                                 f"a `.git` is there. Repair it (or look at GIT_DIR and GIT_CEILING_DIRECTORIES in the "
-                                 f"environment); Aleph does not search a repository as if it were a plain directory")
+    unreadable_repository(directory)
     why = refusal(root)
     if why:
         raise Refused(why)
@@ -125,8 +118,11 @@ def read(directory: Path) -> tuple[Path, Path, dict[str, str], int, int]:
     except (gitio.GitTimeout, Refused):
         if now:     # out of time, or too large: what was hashed is kept, so the next attempt does not start over
             _remember(root, kept / MEMORY, {**remembered, **now})
+        else:
+            _leave_nothing(kept)
         raise
     if not files and inner:
+        _leave_nothing(kept)
         raise Refused(f"{root} is not a git repository: it holds {inner} git repositories and no files of its own. "
                       f"Start Aleph inside one of them")
     if now != remembered:
@@ -136,6 +132,28 @@ def read(directory: Path) -> tuple[Path, Path, dict[str, str], int, int]:
 
 def _device(entry: os.DirEntry) -> int:
     return entry.stat(follow_symlinks=False).st_dev
+
+
+def unreadable_repository(directory: Path) -> None:
+    """Raise GitError when git said "not a repository" of a directory that has a `.git` at or above it: a damaged
+    `.git`, or GIT_DIR or GIT_CEILING_DIRECTORIES in the environment. It is git's to read, not a plain directory:
+    walking it would search what its `.gitignore` keeps out."""
+    root = _canonical(directory)
+    written = Path(os.path.abspath(directory))      # as it was named: a link inside a repository is inside it
+    for above in dict.fromkeys((root, *root.parents, written, *written.parents)):
+        if os.path.lexists(above / ".git"):
+            raise gitio.GitError(f"git cannot read the repository at {above}: it says {root} is in no repository, though "
+                                 f"a `.git` is there. Repair it (or look at GIT_DIR and GIT_CEILING_DIRECTORIES in the "
+                                 f"environment); Aleph does not search a repository as if it were a plain directory")
+
+
+def _leave_nothing(kept: Path) -> None:
+    """A directory that was refused before anything of it was remembered gets no folder in the cache."""
+    try:
+        (kept / "repository").unlink(missing_ok=True)
+        kept.rmdir()
+    except OSError:
+        pass        # something is in it after all (an index from before the directory grew): it stays
 
 
 def _walk(root: Path, remembered: dict[str, list], now: dict[str, list]) -> tuple[dict[str, str], int, int]:

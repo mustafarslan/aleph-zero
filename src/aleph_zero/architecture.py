@@ -161,8 +161,8 @@ def _uncommented(line: str) -> str:
     for at, char in enumerate(line):
         if quote:
             quote = "" if char == quote else quote
-        elif char in "\"'":
-            quote = char
+        elif char in "\"'" and (at == 0 or line[at - 1] in " \t[,:"):
+            quote = char        # a quote opens a value; inside a plain word (`don't`) it is a letter like any other
         elif char == "#" and (at == 0 or line[at - 1] in " \t"):
             return line[:at]
     return line

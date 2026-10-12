@@ -179,3 +179,12 @@ def test_a_path_outside_the_worktree_is_said_to_be_and_a_half_read_oxn_yaml_says
     assert architecture.unread("layers:\n  api: [\"src/api/*\"]\ncontracts:\n  - name: c\n    kind: layered\n    order: [api]\n") == 0
     assert [layer.name for layer in architecture.read("layers:\n  globs: [\"x/{a,b}/*\", 'it''s/*']\n")[0]] == ["globs"]
     assert architecture.read("layers:\n  globs: [\"x/{a,b}/*\", \"y/*\"]\n")[0][0].patterns == ("x/{a,b}/*", "y/*")     # a comma inside quotes
+
+
+def test_an_apostrophe_in_a_name_does_not_swallow_the_comment_after_it():
+    from aleph_zero import architecture
+
+    text = "layers:\n  api: [\"src/*\"]   # the owner's layer\ncontracts:\n  - name: don't-cycle # checked nightly\n    kind: layered\n    order: [api]\n"
+    layers, contracts = architecture.read(text)
+    assert [layer.patterns for layer in layers] == [("src/*",)] and [c.name for c in contracts] == ["don't-cycle"]
+    assert architecture.read("layers:\n  api: ['it''s/*', \"a # b/*\"]  # two\n")[0][0].patterns == ("it''s/*", "a # b/*")   # a quoted # is not a comment
