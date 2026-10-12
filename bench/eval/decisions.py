@@ -200,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
                                  "tokens": 0, "restates_title": pair["restates_title"], "agent_authored": pair["agent_authored"]})
                 continue
             fused = args.ranker in ("fused5", "fused60")
-            engine = Engine(where, dense=args.dense or fused)
+            # False is "switched off by hand", which the fused ranker obeys: it must be left to use the worker.
+            engine = Engine(where, dense=None if args.ranker == "convex" else args.dense or fused)
             if args.dense or fused:
                 report = engine.embed()
                 notes[name] = f"embedded {getattr(report, 'embedded', '?')} chunks"
@@ -217,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
                              "restates_title": pair["restates_title"], "agent_authored": pair["agent_authored"],
                              "query_words": len(query.split())})
             engine.close()
+    if without:
+        # Said before any figure: what follows would be the words-alone ranking under another name.
+        raise SystemExit(f"{without} of {len(rows)} answers took no vectors: this is not a run of the fused ranker (is the embed worker running?)")
     report = {
         "arm": f"Aleph's decision ranker ({args.ranker})" if args.ranker else "oxn's BM25 (reference)" if args.reference else "words, names and vectors" if args.dense else "words and names",
         "all": score(rows), "oxn_bm25": OXN,
