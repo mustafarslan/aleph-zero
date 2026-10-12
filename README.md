@@ -112,6 +112,27 @@ on a large repository); later ones take milliseconds. Searching never pays for t
 The agent is offered the matching `references` tool only when `ALEPH_GRAPH=1` is set
 for the server: whether it helps an agent has not been measured yet.
 
+### Exact answers from a compiler's index
+
+    uv run aleph scip import index.scip             # an index made elsewhere (CI, by hand), made from HEAD
+    uv run aleph scip import index.scip --tree v1.4 # ... or from another revision
+    uv run aleph scip import index.scip --worktree  # ... or from the worktree as it is now
+    uv run aleph scip run --lang python             # or let Aleph run the indexer here
+    uv run aleph scip list
+
+A [SCIP](https://github.com/sourcegraph/scip) index is what a compiler knows about the
+code. Once one is imported, `callers` and `callees` answer from it, marked
+`(compiler index)`: also the calls on values whose type nothing in the source states.
+
+It is believed only for files that are still what it was made from, and whose
+dependencies are too. Edit a file, and that file and everything that depends on it are
+answered by the resolver again until a new index is imported; the answer says so.
+
+`aleph scip run` runs the indexer only for languages where its memory was measured under
+the limit (Python; Java with Maven), watches it, and stops it above 2,048 MB
+(`ALEPH_SCIP_MEMORY_MB`). For Java this runs the project's own build. Aleph never
+installs an indexer; `aleph doctor` says which are present.
+
 ## Where things are
 
 The index lives in `<git-common-dir>/aleph-zero/index.db` and is shared by every

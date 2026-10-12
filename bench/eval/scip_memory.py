@@ -34,11 +34,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import temps  # noqa: E402
 
+from aleph_zero import indexers  # noqa: E402
+
 LIMIT_MB = 2048
-SAMPLE_SECONDS = 0.1
 TIME_LIMIT_SECONDS = 1800      # per corpus, the install of dependencies included
 HEAT_LIMIT = 100.0
-OFFLINE = {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "CARGO_NET_OFFLINE": "true", "npm_config_offline": "true"}
 _NPM = ["--offline", "--ignore-scripts", "--no-audit", "--no-fund"]
 # corpus -> (language, the offline install of its dependencies or None, the indexer's program, its arguments;
 # {out} is where the index goes). In the order they are run: the quick ones first.
@@ -54,37 +54,6 @@ RUNS = {
 }
 
 
-def family(root: int) -> dict[int, int]:
-    """Resident kilobytes of `root`, of everything in its process group and of every descendant by
-    parentage (a child that moved to a group of its own is still the indexer's)."""
-    listed = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,rss="], capture_output=True, text=True).stdout
-    rows = [tuple(int(part) for part in line.split()) for line in listed.splitlines() if len(line.split()) == 4]
-    mine = {pid for pid, _, pgid, _ in rows if pid == root or pgid == root}
-    grew = True
-    while grew:
-        grew = False
-        for pid, parent, _, _ in rows:
-            if parent in mine and pid not in mine:
-                mine.add(pid)
-                grew = True
-    return {pid: rss for pid, _, _, rss in rows if pid in mine}
-
-
-def stop(root: int, members: dict[int, int]) -> None:
-    """Kill the group first (whatever joined it since the last look goes with it), then every descendant
-    that had moved to a group of its own, then look once more for stragglers."""
-    for target in (lambda: os.killpg(root, signal.SIGKILL), *[lambda pid=pid: os.kill(pid, signal.SIGKILL) for pid in members]):
-        try:
-            target()
-        except (ProcessLookupError, PermissionError):
-            pass
-    for pid in family(root):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-
-
 def version(program: str) -> str:
     for flag in ("--version", "-V", "version"):
         try:
@@ -98,34 +67,9 @@ def version(program: str) -> str:
 
 
 def measure(command: list[str], cwd: Path, limit_mb: float | None = None, time_limit: float = TIME_LIMIT_SECONDS) -> dict:
-    """Run `command`, sampling its family's memory. With `limit_mb`, the family is stopped when over it."""
-    started = time.monotonic()
-    with tempfile.TemporaryFile() as output:
-        process = subprocess.Popen(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
-                                   env={**os.environ, **OFFLINE})
-        peak_kb, most, samples, hottest, stopped = 0, 0, 0, 0.0, ""
-        next_heat = 0.0
-        while process.poll() is None:
-            members = family(process.pid)
-            peak_kb, most, samples = max(peak_kb, sum(members.values())), max(most, len(members)), samples + 1
-            now = time.monotonic()
-            if now >= next_heat:
-                hottest, next_heat = max(hottest, temps.hottest_chip(temps.reading())), now + 5.0
-            if limit_mb is not None and peak_kb / 1024 > limit_mb:
-                stopped = f"over {limit_mb:.0f} MB"
-            elif now - started > time_limit:
-                stopped = f"over {time_limit:.0f} s"
-            elif hottest >= HEAT_LIMIT:
-                stopped = f"chip at {hottest:.0f} C"
-            if stopped:
-                stop(process.pid, members)
-                break
-            time.sleep(SAMPLE_SECONDS)
-        status = process.wait()
-        output.seek(0)
-        tail = output.read().decode("utf-8", "replace").strip().splitlines()[-6:]
-    return {"peak_mb": round(peak_kb / 1024, 1), "seconds": round(time.monotonic() - started, 1), "exit": status,
-            "processes": most, "samples": samples, "hottest_c": round(hottest, 1), "stopped": stopped, "last_lines": tail}
+    """Run `command` under the product's own watch (`aleph_zero.indexers.watch`: the code that guards
+    `aleph scip run`), with the chip's temperature read beside it."""
+    return indexers.watch(command, cwd, limit_mb, time_limit, heat=lambda: temps.hottest_chip(temps.reading()), heat_limit=HEAT_LIMIT)
 
 
 def main(argv: list[str] | None = None) -> int:

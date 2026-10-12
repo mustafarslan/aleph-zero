@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import callgraph, doctor, gitio, outline, render, sources
+from . import callgraph, doctor, gitio, indexers, outline, render, scipstore, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -69,6 +69,49 @@ def _references(args) -> int:
         print(json.dumps(asdict(found), indent=2))
         return 0
     print(callgraph.text(found))
+    return 0
+
+
+def _scip(args) -> int:
+    engine = Engine(args.cwd, dense=False)
+    if args.action == "import":
+        try:
+            kept = engine.scip_import(args.file, tree=args.tree, worktree=args.worktree)
+        except scipstore.NotAnIndex as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except gitio.GitError as exc:
+            print(f"cannot read the tree to stamp the index with: {exc}", file=sys.stderr)
+            return 1
+        print(f"kept {kept['documents']} documents ({kept['references']} references) of {kept['tool'] or 'an unnamed indexer'}, "
+              f"stamped with {kept['stamped']}" + (f"; {kept['skipped']} left out (not in that tree)" if kept["skipped"] else ""))
+        return 0
+    if args.action == "run":
+        try:
+            report = engine.scip_run(args.lang)
+        except (indexers.CannotRun, scipstore.NotAnIndex) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(report, indent=2))
+            return 0
+        kept = report["imported"]
+        print(f"{report['indexer']} ran {report['seconds']} s, peak {report['peak_mb']} MB of {report['limit_mb']:.0f} MB allowed; "
+              f"kept {kept['documents']} documents ({kept['references']} references), stamped with the worktree as it is")
+        return 0
+    if args.action == "list":
+        listed = engine.scip_imports()
+        if args.json:
+            print(json.dumps(listed, indent=2))
+            return 0
+        for row in listed:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["imported_at"]))
+            print(f"{row['import_id']}  {when}  {row['tool'] or '?':16} {row['documents']} documents, stamped with {row['stamped']}")
+        return 0
+    if args.import_id is None and not args.all:
+        print("say which import to forget (see `aleph scip list`), or --all", file=sys.stderr)
+        return 2
+    print(f"forgot {engine.scip_forget(None if args.all else args.import_id)} documents")
     return 0
 
 
@@ -228,6 +271,22 @@ def main(argv: list[str] | None = None) -> int:
         graph.add_argument("--timeout-ms", type=int)
         graph.add_argument("--json", action="store_true")
         graph.set_defaults(run=_references)
+
+    compiled = commands.add_parser("scip", help="compiler-grade indexes (SCIP) made elsewhere: exact answers while their files are unchanged")
+    scip_actions = compiled.add_subparsers(dest="action", required=True)
+    importing = scip_actions.add_parser("import", help="keep an index; say what it was made from")
+    importing.add_argument("file", type=Path)
+    made_from = importing.add_mutually_exclusive_group()
+    made_from.add_argument("--tree", help="the revision the index was made from (default: HEAD)")
+    made_from.add_argument("--worktree", action="store_true", help="it was made from the worktree as it is now, uncommitted changes included")
+    running = scip_actions.add_parser("run", help="run this language's indexer here, inside the memory limit, and keep the result")
+    running.add_argument("--lang", help="python or java (the languages measured under the limit); default: the worktree's main language")
+    running.add_argument("--json", action="store_true")
+    scip_actions.add_parser("list").add_argument("--json", action="store_true")
+    forgetting = scip_actions.add_parser("forget")
+    forgetting.add_argument("import_id", nargs="?", type=int)
+    forgetting.add_argument("--all", action="store_true")
+    compiled.set_defaults(run=_scip)
 
     skeleton = commands.add_parser("outline", help="what a file defines, without reading it all")
     skeleton.add_argument("path", help="a path in this worktree, relative to its top")

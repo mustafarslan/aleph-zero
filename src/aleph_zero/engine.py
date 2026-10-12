@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import callgraph, dense_policy, gitio, lang, memory, memstat, render, sources, symbols
+from . import callgraph, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -286,9 +286,65 @@ class Engine:
             cached = (token, callgraph.load(index, view))
             self._graphs[view.root] = cached
         graph = cached[1]
-        callers, truncated = callgraph.callers(index, graph, definitions) if direction != "callees" else ([], False)
-        callees, unanswered = callgraph.callees(index, view, graph, definitions) if direction != "callers" else ([], 0)
+        compiled = scipstore.Compiled(index.conn, view.files)     # what an imported compiler index says, where it may be believed
+        compiled = compiled if compiled.any else None
+        callers, truncated = callgraph.callers(index, graph, definitions, compiled) if direction != "callees" else ([], False)
+        callees, unanswered = callgraph.callees(index, view, graph, definitions, compiled) if direction != "callers" else ([], 0)
         return definitions, callers, callees, unanswered, truncated or more
+
+    @_rebuilding
+    def scip_import(self, file: Path | str, tree: str | None = None, worktree: bool = False,
+                    cwd: Path | str | None = None) -> dict:
+        """Keep a SCIP index made elsewhere. Each document is stamped with the blob of its path in `tree`
+        (default HEAD), or in the worktree as it is now with `worktree`: say what the index was made
+        from, because a document is believed only where the view still holds that blob (ADR-004).
+        Raises scipstore.NotAnIndex for a file that cannot be read as one."""
+        view = self._view(cwd)
+        index = self._index(view)
+        kept, skipped, tool = scipstore.read(Path(file))
+        if worktree:
+            stamps, stamped = view.files, "worktree"
+        else:
+            stamped = tree or "HEAD"
+            stamps = gitio.read_tree(view.root, stamped)[0]
+        return scipstore.store(index.conn, kept, skipped, tool, stamps, stamped)
+
+    @_rebuilding
+    def scip_run(self, language: str | None = None, limit_mb: float | None = None, time_limit: float | None = None,
+                 cwd: Path | str | None = None) -> dict:
+        """Run the SCIP indexer for `language` (default: the worktree's main language) on the worktree,
+        inside the memory limit, and keep what it wrote, stamped with the worktree as it was. Only on
+        request: for a compiled language this runs the project's own build. Raises indexers.CannotRun
+        when the language is import-only, the indexer is absent, it was stopped, or the worktree changed
+        while it ran (an index of files that have moved on is not stamped as if it were of these)."""
+        view = self._view(cwd)
+        index = self._index(view)
+        if language is None:
+            index.sync(view, budget_seconds=0.0)
+            language = next(iter(index.languages()), None)
+            if language is None:
+                raise indexers.CannotRun("no source code is indexed for this worktree yet: say which language with --lang")
+        out = state_dir(view.common_dir) / f"scip-run-{os.getpid()}.scip"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            report = indexers.run(view.root, language, out, limit_mb, time_limit)
+            now = self._view(cwd)
+            moved = [path for path, oid in view.files.items() if now.files.get(path) != oid]
+            if moved:
+                raise indexers.CannotRun(f"{len(moved)} files changed while the indexer ran (first: {moved[0]}): "
+                                         "nothing was kept. Run it again")
+            kept, skipped, tool = scipstore.read(out)
+            return {**report, "imported": scipstore.store(index.conn, kept, skipped, tool, view.files, "worktree")}
+        finally:
+            out.unlink(missing_ok=True)
+
+    @_rebuilding
+    def scip_imports(self, cwd: Path | str | None = None) -> list[dict]:
+        return scipstore.imports(self._index(self._view(cwd)).conn)
+
+    @_rebuilding
+    def scip_forget(self, import_id: int | None = None, cwd: Path | str | None = None) -> int:
+        return scipstore.forget(self._index(self._view(cwd)).conn, import_id)
 
     def outline(self, path: str, cwd: Path | str | None = None,
                 timeout_ms: int | None = None) -> outlines.Outline:
@@ -326,7 +382,8 @@ class Engine:
             "main_language": next(iter(shares), None),
             "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
-            "graph": dict(zip(("files_read", "files_unread"), callgraph.coverage(index))),
+            "graph": {**dict(zip(("files_read", "files_unread"), callgraph.coverage(index))),
+                      "compiler_index_documents": index.conn.execute("SELECT count(*) FROM scip_documents").fetchall()[0][0]},
             "memory": {**self._memory(), **self._memory_counts(view)},
         }
 

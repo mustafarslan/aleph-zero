@@ -16,6 +16,7 @@ against a real index produced by scip-python 0.6.6.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -326,3 +327,80 @@ def _parse_relationship(data: bytes) -> ScipRelationship:
         elif number == _IS_TYPE_DEFINITION and isinstance(value, int):
             is_type_definition = bool(value)
     return ScipRelationship(symbol, is_implementation, is_type_definition)
+
+
+# ---- what the code graph keeps of an index --------------------------------------------------------
+
+_DESCRIPTOR = re.compile(r"(?:`([^`]+)`|([A-Za-z_$][\w$]*))(?:\([^)]*\))?[.#:/!]*$")
+_ACCESSOR = re.compile(r"^<(?:get|set)>")
+
+
+def symbol_name(symbol: str) -> str:
+    """The name a SCIP symbol ends in: `... pkg/a/Client#send().` -> `send`; an accessor
+    `<get>size` -> `size`. '' for a symbol local to its file."""
+    if symbol.startswith("local "):
+        return ""
+    match = _DESCRIPTOR.search(symbol.rsplit(" ", 1)[-1])
+    return _ACCESSOR.sub("", (match.group(1) or match.group(2))) if match else ""
+
+
+def tool_name(data: bytes) -> str:
+    """The indexer that wrote the index, from its metadata; '' when it does not say."""
+    try:
+        for number, _, value in iter_fields(data):
+            if number == 1 and isinstance(value, bytes):                # Index.metadata
+                for inner, _, info in iter_fields(value):
+                    if inner == 2 and isinstance(info, bytes):          # Metadata.tool_info
+                        for last, _, name in iter_fields(info):
+                            if last == 1 and isinstance(name, bytes):   # ToolInfo.name
+                                return name.decode("utf-8", "replace")[:80]
+                return ""
+    except WireFormatError:
+        pass
+    return ""
+
+
+@dataclass(frozen=True)
+class Reduced:
+    """One document, reduced to what answers "what does this refer to": lines and columns count from 0."""
+    path: str
+    references: list[tuple[int, int, str, int, str]]   # (line, column, the defining file, the line of the definition's name, its name)
+    outside: list[tuple[int, int]]                     # where it refers to something no document of the index defines: a library
+    depends_on: list[str]                              # the other documents whose definitions it refers to
+
+
+def is_inside(path: str) -> bool:
+    """Whether a document's path is a plain path under the root: an index is data from elsewhere."""
+    parts = path.split("/")
+    return bool(path) and not path.startswith("/") and "\\" not in path and "\0" not in path and ".." not in parts and "" not in parts
+
+
+def reduce(index: ScipIndex) -> tuple[list[Reduced], int]:
+    """Every document's references resolved to where they are defined, and how many documents were
+    left out because their path leaves the tree."""
+    sites: dict[tuple[str, str], tuple[str, int]] = {}
+    kept_documents = [document for document in index.documents if is_inside(document.relative_path)]
+    for document in kept_documents:
+        for occurrence in document.definitions():
+            scope = document.relative_path if occurrence.symbol.startswith("local ") else ""
+            sites.setdefault((scope, occurrence.symbol), (document.relative_path, occurrence.start_line))
+    out: list[Reduced] = []
+    for document in kept_documents:
+        references: list[tuple[int, int, str, int, str]] = []
+        outside: list[tuple[int, int]] = []
+        depends: set[str] = set()
+        for occurrence in document.occurrences:
+            if occurrence.is_definition:
+                continue
+            local = occurrence.symbol.startswith("local ")
+            site = sites.get((document.relative_path if local else "", occurrence.symbol))
+            if site is None:
+                if not local:
+                    outside.append((occurrence.start_line, occurrence.start_char))
+                continue
+            references.append((occurrence.start_line, occurrence.start_char, site[0], site[1], symbol_name(occurrence.symbol)))
+            if site[0] != document.relative_path:
+                depends.add(site[0])
+        out.append(Reduced(document.relative_path, references, outside, sorted(depends)))
+    return out, len(index.documents) - len(kept_documents)
+

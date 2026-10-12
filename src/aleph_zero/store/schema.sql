@@ -83,6 +83,28 @@ CREATE TABLE IF NOT EXISTS graph_facts (
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
+-- Compiler-grade indexes (SCIP) made elsewhere and imported (M9). One row per document: the blob
+-- it is taken to have been made from, the documents it depends on, and its references to
+-- definitions inside the tree. Believed in a view only while those blobs are the view's
+-- (ADR-004); scipstore.py checks. Not tied to `blobs`: an import stays until it is replaced or forgotten.
+CREATE TABLE IF NOT EXISTS scip_imports (
+    import_id   INTEGER PRIMARY KEY,
+    tool        TEXT NOT NULL,       -- the indexer that wrote it, as the index says
+    stamped     TEXT NOT NULL,       -- what its documents were stamped with: a revision, or 'worktree'
+    imported_at INTEGER NOT NULL,
+    skipped     INTEGER NOT NULL     -- documents left out: a path outside the tree, or not in what it was stamped with
+);
+
+CREATE TABLE IF NOT EXISTS scip_documents (
+    path      TEXT PRIMARY KEY,
+    import_id INTEGER NOT NULL REFERENCES scip_imports(import_id) ON DELETE CASCADE,
+    blob_oid  TEXT NOT NULL,
+    depends   BLOB NOT NULL,         -- zlib(JSON): the paths it depends on
+    refs      BLOB NOT NULL          -- zlib(JSON): where it refers to what
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS scip_documents_by_import ON scip_documents(import_id);
+
 -- Which row of a vector file holds a chunk's embedding. One file per kind of vector
 -- (model, prefix version, width). A row is never moved; when its chunk is collected it
 -- goes on the free list and is given to a later chunk (vectors.py).

@@ -72,6 +72,7 @@ class Reference:
     candidates: int      # how many definitions this call may reach; 1 is not yet certain: see `certain`
     certain: bool        # one candidate, not by its name alone, and nothing else in doubt
     note: str = ""       # why a lone candidate is not certain, when the reason is not its name
+    downgraded: str = ""  # why this was not answered from the imported compiler index, when one covers the file
 
 
 @dataclass(frozen=True)
@@ -282,15 +283,42 @@ def _calls(index: Index, key: tuple[str, str]) -> list[Call]:
     return [Call(*row) for row in _unpack(rows[0][0])] if rows else []
 
 
-def _reference(path: str, of_file: FileFacts, call: Call, edge: Edge, target: Target) -> Reference:
+def resolve(graph: Graph, compiled, path: str, call: Call) -> tuple[Edge | None, str]:
+    """What a call reaches, and why the answer is not the compiler's when an imported index covers the
+    file but may not be believed. A believed document answers alone: what it places outside the tree
+    is a call into a library, and gets no answer; where it says nothing, the resolver does."""
+    state = compiled.status(path) if compiled is not None else None
+    if state != "":
+        return graph.resolve(path, call), state or ""
+    said = compiled.target(path, call.line - 1, call.column)
+    if said is False:
+        return None, ""
+    if said is not None:
+        target = _defined_at(graph, *said)
+        if target is not None:
+            return Edge((target,), "L2", "scip", "compiler index"), ""
+    return graph.resolve(path, call), ""
+
+
+def _defined_at(graph: Graph, path: str, line: int, name: str) -> Target | None:
+    """The definition the index points at: it gives the line of the name (from 0), the graph knows
+    where each definition starts (from 1, decorators included): the nearest one of that name at or above."""
+    of_file = graph.files.get(path)
+    if of_file is None:
+        return None
+    above = [each for each in of_file.definitions if each.start_line <= line + 1 and (not name or each.name == name)]
+    return max(above, key=lambda each: each.start_line) if above else None
+
+
+def _reference(path: str, of_file: FileFacts, call: Call, edge: Edge, target: Target, downgraded: str = "") -> Reference:
     joined = "::" if call.via == "path" else "."
     caller = of_file.definitions[call.caller].qualified if call.caller is not None and call.caller < len(of_file.definitions) else ""
     return Reference(path, call.line, f"{call.receiver}{joined}{call.name}" if call.receiver else call.name, caller,
                      target.path, target.start_line, target.qualified, target.kind, edge.level, edge.provenance,
-                     len(edge.targets), edge.certain, edge.doubt)
+                     len(edge.targets), edge.certain, edge.doubt, downgraded)
 
 
-def callers(index: Index, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[list[Reference], bool]:
+def callers(index: Index, graph: Graph, hits: list[symbols.SymbolHit], compiled=None) -> tuple[list[Reference], bool]:
     """Every call in the view that may reach one of `hits`: the certain ones first. Also whether the
     answer may be short: the text index named more places than were looked at, or cannot look the name up.
 
@@ -326,17 +354,17 @@ def callers(index: Index, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[
                 for call in sites:
                     if call.name not in written:
                         continue
-                    edge = graph.resolve(path, call)
+                    edge, downgraded = resolve(graph, compiled, path, call)
                     for target in (edge.targets if edge is not None else ()):
                         site = (path, call.line, call.column, target.qualified)
                         if (target.path, target.qualified, target.start_line) in wanted and site not in counted:
                             counted.add(site)
-                            out.append(_reference(path, of_file, call, edge, target))
+                            out.append(_reference(path, of_file, call, edge, target, downgraded))
     out.sort(key=lambda r: (not r.certain, r.candidates, r.path, r.line, r.target_path, r.target))
     return out, truncated
 
 
-def callees(index: Index, view: View, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[list[Reference], int]:
+def callees(index: Index, view: View, graph: Graph, hits: list[symbols.SymbolHit], compiled=None) -> tuple[list[Reference], int]:
     """What each of `hits` calls (for a type: what its members call), in source order, and how many
     of its calls reach nothing in the view."""
     out: list[Reference] = []
@@ -353,11 +381,11 @@ def callees(index: Index, view: View, graph: Graph, hits: list[symbols.SymbolHit
             if call.caller not in inside or (hit.path, call.column + call.line * 100_000) in seen:
                 continue
             seen.add((hit.path, call.column + call.line * 100_000))
-            edge = graph.resolve(hit.path, call)
+            edge, downgraded = resolve(graph, compiled, hit.path, call)
             if edge is None:
                 unanswered += 1
             for target in (edge.targets if edge is not None else ()):
-                out.append(_reference(hit.path, of_file, call, edge, target))
+                out.append(_reference(hit.path, of_file, call, edge, target, downgraded))
     return out, unanswered
 
 
@@ -386,7 +414,7 @@ def text(answer: Answer) -> str:
                     if not callers or several:
                         where += f"  ->  {item.target_path}:{item.target_line}  {item.target}"
                     if item.certain:
-                        why = ""
+                        why = "  (compiler index)" if item.level == "L2" else ""
                     elif item.provenance == "name":
                         why = f"  by name alone, 1 of {item.candidates}: nothing states the receiver's type"
                     elif item.candidates > 1:
@@ -394,6 +422,10 @@ def text(answer: Answer) -> str:
                     else:
                         why = f"  {item.note}"
                     lines.append(where + why)
+    stale = sorted({item.downgraded for item in (*answer.callers, *answer.callees) if item.downgraded})
+    if stale:
+        lines.append(f"note: an imported compiler index covers these files but could not be used for {len(stale)} of them, "
+                     f"answered by the resolver instead: {stale[0]}" + (f" (and {len(stale) - 1} more)" if len(stale) > 1 else ""))
     if answer.unanswered:
         lines.append(f"note: {answer.unanswered} calls inside it reach nothing in this worktree (libraries, local functions)")
     if answer.truncated:

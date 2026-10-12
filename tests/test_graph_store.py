@@ -117,7 +117,7 @@ def test_an_index_of_schema_6_gets_the_graph_table_and_nothing_is_indexed_again(
     conn.pragma("user_version", 6)
     conn.close()
     conn = open_db(path)
-    assert conn.pragma("user_version") == SCHEMA_VERSION == 7
+    assert conn.pragma("user_version") == SCHEMA_VERSION
     assert conn.execute("SELECT blob_oid, chunker_version FROM blobs ORDER BY 1").fetchall() == blobs
     engine = Engine(repo.root)
     assert engine.search("refresh token").pending == 0

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, lang
+from . import gitio, indexers, lang
 from .lang import parse
 from .store import SCHEMA_VERSION, index_file, state_reason
 from .store import db as store_db
@@ -25,7 +25,7 @@ class Row:
 
 
 def check(cwd: Path) -> list[Row]:
-    rows = [_git(), _sqlite(), _tree_sitter(), _grammars(), _worker()]
+    rows = [_git(), _sqlite(), _tree_sitter(), _grammars(), _worker(), _compiler_indexes()]
     try:
         info = gitio.repo_info(cwd)
     except gitio.GitError:
@@ -63,6 +63,16 @@ def _checkout(cwd: Path) -> list[Row]:
         rows.append(Row("note", "submodules", f"submodules are not searched ({listed}); link one as a source "
                         f"with `aleph source add {worktree.submodules[0]}`"))
     return rows
+
+
+def _compiler_indexes() -> Row:
+    """Which SCIP indexers are installed, and which languages `aleph scip run` may run one for."""
+    parts = []
+    for indexer, found in indexers.present():
+        how = ("on request" + (f" ({indexer.note})" if indexer.note else "")) if indexer.on_demand else "import-only (not measured under the limit)"
+        parts.append(f"{indexer.language}: {indexer.program} {'found' if found else 'not installed'}, {how}")
+    return Row("note", "compiler indexes", "SCIP indexers for `aleph scip run`: " + "; ".join(parts)
+               + f". A run may use {indexers.limit_mb():.0f} MB (ALEPH_SCIP_MEMORY_MB)")
 
 
 def _git() -> Row:
