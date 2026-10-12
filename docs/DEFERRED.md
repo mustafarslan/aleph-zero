@@ -142,3 +142,14 @@ Also from M8:
 - **A flaky test turned out to be a small bug, fixed.** On a busy machine the embedding worker was stopped for its memory before it was ready, and the next request then said "it did not become ready in time" instead of why. It now says why.
 - **Strings in the history of this branch.** The plan said nothing from your repositories would be copied here. The independent review found four test fixture strings and one path in the plan that resemble names in them (an environment name, a task name, a mount path, a file path). They are renamed, but the earlier commits of this branch still hold them. Nothing is pushed: if you want them gone from the history, say so before the first push and I will rewrite those commits.
 - **Minor findings of the review, not fixed:** the `oxn.yaml` reader misreads a quoted pattern containing a comma, a mapping nested under a layer, and an apostrophe before a comment (none in the forms oxn writes; it should also say how many lines it skipped); a name both set and read on one line is reported once, as set; a reader that fails on a file records that file as stating nothing until the readers' version changes (the code graph does the same); `aleph decisions --for` a path outside the worktree answers "in no layer" instead of saying so; a `tsconfig.json` you create while the JavaScript indexer runs would be removed with the one it inferred; the first path question of a process misses a path whose word ends in a Greek capital sigma.
+
+## 13. Releasing (M10): what only you decide
+
+M10 makes the repository releasable; it publishes nothing. Before a release:
+
+- **The version, the name it is published under, and where.** It is `0.0.1`, `aleph-zero`, and nowhere. I have not looked the name up anywhere (that needs the network).
+- **Whether the gated tools ship on or off:** `references`, `decisions`, `facts` and the compiler indexes are offered to the agent only with `ALEPH_GRAPH=1`, because ADR-003 ships a graph feature only if the A/B run improves with it, and that run spends your plan's usage.
+- **More languages.** Python, TypeScript, JavaScript, Go, Rust, Java, C++ and C are read. A further one is yours to name; I have not picked one.
+- **What a public tree may say.** Tracked documents name your repositories private repository A and private repository B (you named them; this file, ADR-003, a commit subject) and give counts from them, no names of routes or settings. The plans and ledgers under `docs/superpowers/` describe how this was built, rulings and mistakes included. Both are yours to keep or cut before publishing; and see entry 12 about four strings in earlier commits.
+- **Nothing has ever been pushed.** `master` is far ahead of `origin`; the first push is yours.
+
