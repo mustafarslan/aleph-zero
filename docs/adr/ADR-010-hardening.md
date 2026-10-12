@@ -88,27 +88,30 @@ Methods of an object literal bound to a name are definitions (`api.get`), nested
 
 ## The gate: thirty minutes, four sessions, three worktrees (measured 2026-10-12)
 
-`bench/stress/run.py --minutes 30 --real-worker`: a real `aleph serve` process in each of three worktrees of one repository, each driven through edits, deletes, renames, commits, stashes and branch switches and checked after every step; a fourth session that only asks, about all three; vectors made in the background by the real embedding worker; garbage collected by the sessions themselves and by a separate process every 15 seconds, with the ages shortened (content unused for 40 seconds is collected, content in use is marked every 5).
+`bench/stress/run.py --minutes 30 --real-worker`: a real `aleph serve` process in each of three worktrees of one repository, each driven through edits, deletes, renames, commits, stashes and branch switches and checked after every step; a fourth session that only asks, about all three; vectors made in the background by the real embedding worker; garbage collected by the sessions themselves and by a separate process every 15 seconds, from each worktree in turn, with the ages shortened (content unused for 40 seconds is collected, content in use is marked every 5).
+
+The run was made twice: before the independent review, and again on the code as merged, after the review's fixes. Both passed. The figures are of the second; the first are in brackets where they differ in kind.
 
 | | Result | Required |
 |---|---|---|
-| Steps driven, each followed by checks | 26,634 | |
-| Tool calls answered | 141,528 | |
+| Steps driven, each followed by checks | 26,566 | |
+| Tool calls answered | 141,282 | |
 | Calls that failed, lock errors, wrong or stale answers | 0 | 0 |
-| Content collected while a session's view used it | 0 | 0 |
+| Content collected while a session's view used it, the asking session included | 0 | 0 |
 | Database integrity, foreign keys, text index, text-index rows = chunks, write-ahead log emptied | all clean | clean |
-| Vector file: rows in use + free = rows in file, no row owned twice | 22,389 + 0 = 22,389 | equal |
-| Collections that removed something | 119 runs, 2,954 blobs, 9,658 chunks | |
-| Slowest single call | 224 ms | |
-| Private memory, the four sessions | 63, 72, 75 and 95 MB at their highest | 130 MB each |
-| Private memory, worker and its supervisor | 314 MB and 15 MB | 600 MB |
-| Private memory, everything together, at its highest | 566 MB | 1,024 MB |
+| Vector file: rows in use + free = rows in file, no row owned twice | 22,252 + 136 = 22,388 | equal |
+| Collections that removed something | 119 runs, 3,018 blobs, 9,862 chunks | |
+| Slowest single call | 227 ms | |
+| Private memory, the four sessions | 71, 73, 86 and 98 MB at their highest (first run: 63 to 95) | 130 MB each |
+| Private memory, worker and its supervisor | 323 MB and 15 MB | 600 MB |
+| Private memory, everything together, at its highest | 628 MB (first run: 566) | 1,024 MB |
+| Chip temperature (CPU and GPU share the die), read every 30 s | 61.6 to 64.1 °C, no thermal pressure | |
 
-The session at 95 MB is the one that asks about all three worktrees: it holds a connection, with its page cache, per worktree, and so does its background embedding thread. That is bounded, not a leak: 15,000 varied queries against one fixed index left a session at 38 to 40 MB throughout.
+The session at 98 MB is the one that asks about all three worktrees: it holds a connection, with its page cache, per worktree, and so does its background embedding thread while calls keep coming. That is bounded, not a leak: 15,000 varied queries against one fixed index left a session at 38 to 40 MB throughout.
 
 Runs of 90 seconds with the stand-in worker, in both modes, were part of development after every task. In the harsh mode (the collector takes content that is in use) 1,765 blobs were collected under live views in one such run and every answer was still right; that mode is what found the two faults described under "Reading the index".
 
-What the gate does not show: more than three worktrees or four sessions; a repository of real size under this load (the stress repository grows from 150 to a few thousand files); Linux.
+What the gate does not show: more than three worktrees or four sessions; a repository of real size under this load (the stress repository grows from 150 to a few thousand files); Linux. What the harness cannot see, as the review pointed out: a wrong vector read for one query (words and names find the hit whatever the vector vote; the stored vectors are checked at rest, on a sample), and a transaction left open while the run is going (the write-ahead log is checked after the sessions have closed).
 
 ## Not done, on purpose
 

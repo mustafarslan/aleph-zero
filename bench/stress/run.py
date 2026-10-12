@@ -38,6 +38,9 @@ import apsw
 
 from aleph_zero import memstat
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import temps  # noqa: E402  chip temperature, read without sudo
+
 ROOT = Path(__file__).resolve().parents[2]
 SESSION_LIMIT_MB = 130
 BUDGET_MB = 1024   # four sessions and the embedding worker (ADR-005)
@@ -231,6 +234,7 @@ class Run:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.memory_mb: dict[str, float] = {}
+        self.temperature: dict = {}
         self.collected = {"runs": 0, "blobs_removed": 0, "chunks_removed": 0}
         self.env = {**os.environ, "ALEPH_DENSE": "1", "ALEPH_SEEN_REFRESH_SECONDS": str(SEEN_REFRESH_SECONDS),
                     # The sessions' own collection, with a day shortened to ten seconds.
@@ -417,6 +421,18 @@ class Run:
                 total += megabytes
                 self.memory_mb[name] = max(self.memory_mb.get(name, 0.0), megabytes)
             self.memory_mb["all together"] = max(self.memory_mb.get("all together", 0.0), total)
+            try:
+                heat = temps.reading()
+            except Exception:  # noqa: BLE001 - not a Mac, or a sensor that could not be read
+                heat = None
+            if heat is not None:
+                hot = temps.hottest_chip(heat)
+                self.temperature["highest_c"] = max(self.temperature.get("highest_c", 0.0), hot)
+                if heat["pressure"] not in ("nominal", "unknown"):
+                    self.temperature["thermal_pressure"] = heat["pressure"]
+                if hot >= self.args.temp_limit or heat["pressure"] not in ("nominal", "unknown"):
+                    self.fail(f"stopped to protect the machine: chip at {hot:.0f} C (limit {self.args.temp_limit:.0f} C), "
+                              f"macOS thermal pressure: {heat['pressure']}")
             if total > BUDGET_MB:
                 self.fail(f"{total:.0f} MB of private memory in all, over the budget of {BUDGET_MB} MB")
 
@@ -530,6 +546,7 @@ class Run:
             except Failure as exc:
                 self.failures.append(str(exc))
         report["memory_mb"] = {name: round(value, 1) for name, value in sorted(self.memory_mb.items())}
+        report["temperature"] = self.temperature
         if index is not None:
             try:
                 report["index"] = self.final_checks(index)
@@ -551,6 +568,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--real-worker", action="store_true", help="embed with the installed worker, not the stand-in")
     parser.add_argument("--harsh", action="store_true", help="collect with age zero: content in use is taken too")
     parser.add_argument("--collect-every", type=float, default=15.0, help="seconds between collections")
+    parser.add_argument("--temp-limit", type=float, default=100.0,
+                        help="stop the run when the chip reaches this many degrees Celsius")
     parser.add_argument("--keep", action="store_true", help="keep the working directory even when nothing failed")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)

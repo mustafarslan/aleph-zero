@@ -52,6 +52,9 @@ from aleph_zero.store import index_file, open_db
 from aleph_zero.vectors import VectorStore
 from aleph_zero.view import View
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from temps import Guard  # noqa: E402  the temperature guard lives beside the other bench tools
+
 DATASET = ("czlll/Loc-Bench_V1", "data/test-00000-of-00001.parquet")
 CACHE = Path(__file__).resolve().parents[1] / "data" / "locbench"
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
@@ -99,8 +102,11 @@ def view_at(clone: Path, commit: str) -> View:
     return View(info.root, info.common_dir, info.object_format, tree, gitio.ls_tree(clone, tree), frozenset())
 
 
-def prepare(workdir: Path, rows: list[dict], max_chunks: int) -> None:
+def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float = 95.0) -> None:
     done = partial = 0
+    # Hours of GPU work: after every batch the chip's temperature is looked at (at most every
+    # 15 s), and embedding waits while it is at the limit or macOS reports thermal pressure.
+    cool = Guard(limit=temp_limit, resume=temp_limit - 15, say=lambda text: print(text, flush=True))
     for number, row in enumerate(rows, 1):
         started = time.monotonic()
         try:
@@ -120,7 +126,7 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int) -> None:
             continue
         sock = worker.ensure()  # a long fetch may have outlasted the worker's idle limit
         pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
-        report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots())
+        report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=cool)
         pool.close()
         index.conn.close()
         done += report.remaining == 0
@@ -129,6 +135,7 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int) -> None:
               f"embedded {report.embedded:6} left {report.remaining} {time.monotonic() - started:6.1f} s {report.reason}", flush=True)
     print(f"prepared {done} of {len(rows)} instances; {partial} left partly embedded (run prepare again); "
           f"{len(rows) - done - partial} skipped or not fetched", flush=True)
+    print(f"chip temperature: highest {cool.highest:.0f} C, paused {cool.pauses} times to cool", flush=True)
 
 
 def first_files(paths: list[str], count: int = 10) -> list[str]:
@@ -298,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repos", help="comma-separated owner/name; default: every repository of Loc-Bench")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
+    parser.add_argument("--temp-limit", type=float, default=95.0,
+                        help="prepare: pause embedding while the chip is at or above this many degrees Celsius")
     parser.add_argument("--no-bm25", action="store_true")
     parser.add_argument("--k", type=int, default=10,
                         help="run: results asked of Aleph per question. The product's default is 8; 10 is the "
@@ -318,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{count:4}  {repo}")
         print(f"{len(rows)} instances in {len(counts)} repositories")
     elif args.action == "prepare":
-        prepare(workdir, rows, args.max_chunks)
+        prepare(workdir, rows, args.max_chunks, args.temp_limit)
     else:
         if args.min_pool:
             from aleph_zero import search as search_module
