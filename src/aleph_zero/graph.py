@@ -237,14 +237,15 @@ class Graph:
             return self._edge(path, here, "scope")
         bound = self._bound[path].get(name)
         if bound:
-            reached = False
-            for binding in bound:
+            reached, imported = False, []
+            for binding in bound:       # usually one; a name imported twice as two things is both of them
                 targets, modules, placed = self._stands_for(path, binding)
                 reached = reached or placed
                 if not targets and modules and facts.family in _ECMA:   # `const Linter = require('./linter'); new Linter()`
                     targets = [found for module in modules for found in self._exported(module, "default")[0]]
-                if targets:
-                    return self._edge(path, targets, "import")
+                imported += targets
+            if imported:
+                return self._edge(path, imported, "import")
             if not reached:
                 return None     # imported from outside these files: whatever shares its name here is a coincidence
             return self._by_name(path, facts, call, members=False, rule="name, import not followed")
@@ -290,13 +291,13 @@ class Graph:
             return self._rust_path(path, facts, call, list(segments))
         bound = self._bound[path].get(head)
         if bound:
-            reached = False
+            reached, found = False, []
             for binding in bound:
                 targets, modules, placed = self._stands_for(path, binding)
                 reached = reached or placed
-                found = self._member_of(targets, modules, rest, name)
-                if found:
-                    return self._edge(path, found, "import")
+                found += self._member_of(targets, modules, rest, name)
+            if found:
+                return self._edge(path, found, "import")
             if not reached:
                 return None     # `np.array()`: the receiver is an import from outside these files
             return self._by_name(path, facts, call, members=True, rule="name, import not followed")
@@ -437,13 +438,12 @@ class Graph:
         facts = self.files[path]
         bound = self._bound[path].get(head)
         if bound:
+            found: list[tuple[str, str]] = []
             for binding in bound:
                 targets, modules, _ = self._stands_for(path, binding)
                 targets, modules = self._walk(targets, modules, list(segments[1:]))
-                found = [(target.path, target.qualified) for target in targets if target.kind in _TYPES]
-                if found:
-                    return found
-            return []
+                found += [(target.path, target.qualified) for target in targets if target.kind in _TYPES]
+            return list(dict.fromkeys(found))
         if facts.family == "rust" and len(segments) > 1:
             module, rest = self._rust_module(path, list(segments), 0)
             targets, _ = self._walk([], [module], rest) if module is not None else ([], [])

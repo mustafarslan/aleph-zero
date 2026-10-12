@@ -118,6 +118,12 @@ def test_what_a_type_is_built_on(name, source, expected):
     ("python", "class A:\n    limit: Limit\n    def __init__(self, store: Store, raw):\n        self.store = store\n        self.raw = raw\n"
                "        self.engine = Engine()\n        self.note: Note = load()\n    def later(self):\n        self.cache = Cache(1)\n",
      [("A", "limit", "Limit"), ("A", "store", "Store"), ("A", "engine", "Engine()"), ("A", "note", "Note"), ("A", "cache", "Cache()")]),
+    # A field given two different things has no one type, unless the class declares one.
+    ("python", "class R:\n    kept: Stream\n    def __init__(self, stream, other: Other):\n        self.stream = stream\n        self.kept = other\n"
+               "        self.twice = Other()\n    def read(self):\n        self.stream = ByteStream(b'')\n        self.twice = Third()\n",
+     [("R", "kept", "Stream")]),
+    ("typescript", "class A {\n  declared: Base;\n  constructor(x: X) { this.declared = new Derived(); this.mixed = new One(); }\n  later() { this.mixed = load(); }\n}\n",
+     [("A", "declared", "Base")]),
 ])
 def test_the_types_a_type_declares_for_its_fields(name, source, expected):
     from aleph_zero.lang.bindings import fields

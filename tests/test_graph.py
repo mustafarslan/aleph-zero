@@ -294,3 +294,49 @@ def test_a_call_through_a_field_follows_the_fields_type():
     assert answers(java, "a/Ctl.java", "findAll") == ("L1", "import-resolved", [("a/Owners.java", "Owners.findAll")])
     assert answers(java, "a/Ctl.java", "findAll", nth=1) == ("L1", "import-resolved", [("a/Owners.java", "Owners.findAll")])
     assert answers(java, "a/Ctl.java", "findAll", nth=2) == ("L1", "import-resolved", [("a/Other.java", "Other.findAll")])
+
+
+def test_a_name_imported_twice_as_two_things_is_both_and_so_not_certain():
+    files = {
+        "src/lib.rs": "mod args;\nmod defs;\n",
+        "src/args.rs": "pub struct Context;\nimpl Context { pub fn new() -> Context { Context } }\npub struct Field;\nimpl Field { pub fn new() -> Field { Field } }\n",
+        "src/defs.rs": "fn a() {\n    use crate::args::Context as Separator;\n    Separator::new();\n}\nfn b() {\n    use crate::args::Field as Separator;\n    Separator::new();\n}\n",
+    }
+    graph, sites = build(files)
+    found = edge(graph, sites, "src/defs.rs", "new")
+    assert sorted(t.qualified for t in found.targets) == ["Context.new", "Field.new"] and not found.certain
+
+
+def test_a_name_imported_one_way_or_another_is_either():
+    files = {
+        "fast.py": "def dumps(x):\n    pass\n", "slow.py": "def dumps(x):\n    pass\n",
+        "use.py": "try:\n    from fast import dumps\nexcept ImportError:\n    from slow import dumps\n\ndef f():\n    dumps(1)\n",
+    }
+    assert answers(files, "use.py", "dumps") == ("L1", "import-resolved", [("fast.py", "dumps"), ("slow.py", "dumps")])
+
+
+BUILT = {
+    "pkg/store.py": "class Store:\n    def save(self):\n        pass\n\nclass Other:\n    def save(self):\n        pass\n\n"
+                    "class Factory:\n    def build(self) -> Store:\n        return Store()\n\ndef make_store() -> Store:\n    return Store()\n\ndef untyped():\n    return Store()\n",
+    "pkg/more.py": "from .store import make_store, untyped\n\ndef f(loose):\n    made = make_store()\n    made.save()\n    built = loose.build()\n    built.save()\n"
+                   "    plain = untyped()\n    plain.save()\n",
+}
+
+
+def test_a_value_built_by_a_call_takes_the_type_the_callee_says_it_returns():
+    assert answers(BUILT, "pkg/more.py", "save") == ("L1", "import-resolved", [("pkg/store.py", "Store.save")])
+    # `loose.build()` is found by name only, so what it returns is not known; neither is the result of a function that states no type.
+    assert answers(BUILT, "pkg/more.py", "save", nth=1) == ("L1", "name", [("pkg/store.py", "Store.save"), ("pkg/store.py", "Other.save")])
+    assert answers(BUILT, "pkg/more.py", "save", nth=2) == ("L1", "name", [("pkg/store.py", "Store.save"), ("pkg/store.py", "Other.save")])
+    go = {
+        "go.mod": "module example.com/kit\n",
+        "generic/generic.go": "package generic\n\ntype Gauge struct{}\n\nfunc NewGauge() *Gauge { return nil }\nfunc Pair() (*Gauge, error) { return nil, nil }\nfunc (g *Gauge) Set(v float64) {}\n",
+        "other/other.go": "package other\n\ntype T struct{}\n\nfunc (t T) Set(v float64) {}\n",
+        "use/use.go": "package use\n\nimport \"example.com/kit/generic\"\n\nfunc f() {\n\tz := generic.NewGauge()\n\tz.Set(1)\n}\n",
+    }
+    assert answers(go, "use/use.go", "Set") == ("L1", "import-resolved", [("generic/generic.go", "Gauge.Set")])
+    rust = {
+        "src/lib.rs": "mod b;\nuse crate::b::Builder;\nfn f() {\n    let made = Builder::new();\n    made.build();\n}\nstruct Other;\nimpl Other { fn build(&self) {} }\n",
+        "src/b.rs": "pub struct Builder;\nimpl Builder {\n    pub fn new() -> Self { Builder }\n    pub fn build(&self) {}\n}\n",
+    }
+    assert answers(rust, "src/lib.rs", "build") == ("L1", "import-resolved", [("src/b.rs", "Builder.build")])
