@@ -69,11 +69,11 @@ Graded with oxn's protocol on oxn's six corpora at its pinned commits. Confident
 | Corpus | Graded calls | Confident precision | Confident recall | oxn's recall | Bar |
 |---|---|---|---|---|---|
 | go-kit (Go) | 2,081 | 100.0% | 80.7% | 64.1% | met |
-| ripgrep (Rust) | 6,901 | 100.0% | 60.2% | 42.3% | met |
-| nest (TypeScript) | 9,158 | 100.0% | 80.0% | 56.7% | met |
-| httpx (Python) | 1,556 | 100.0% | 87.7% | not reported | precision met |
-| eslint (JavaScript) | 15,301 | 100.0% | 48.5% | not reported | precision met |
-| spring-petclinic (Java) | 369 | 100.0% | 94.0% | not reported | precision met |
+| ripgrep (Rust) | 6,901 | 100.0% | 60.1% | 42.3% | met |
+| nest (TypeScript) | 9,158 | 100.0% | 80.1% | 56.7% | met |
+| httpx (Python) | 1,556 | 100.0% | 87.5% | not reported | precision met |
+| eslint (JavaScript) | 15,301 | 99.9% (4 of 7,426 differ from the oracle) | 48.5% | not reported | precision met |
+| spring-petclinic (Java) | 369 | 100.0% | 94.6% | not reported | precision met |
 
 C and C++ are not graded: no SCIP indexer for them is installed.
 
@@ -86,13 +86,13 @@ So an edge is **certain** only when it has one target and was not found by name 
 | Corpus | Certain precision | Wrong certain answers | Certain recall | Single name matches at library calls (listed as possible) |
 |---|---|---|---|---|
 | go-kit | 100.0% | 0 at 3,595 library calls | 76.4% | 35 |
-| ripgrep | 100.0% | 1 at 6,333 | 56.4% | 1,213 |
+| ripgrep | 100.0% | 1 at 6,333 | 56.2% | 1,242 |
 | nest | 100.0% | 0 at 3,327 | 78.9% | 64 |
-| httpx | 99.8% | 3 at 1,484 | 82.1% | 95 |
-| eslint | 100.0% | 0 at 6,604 | 46.9% | 309 |
+| httpx | 99.8% | 3 at 1,484 | 81.8% | 95 |
+| eslint | 100.0% | 0 at 6,604, and 2 inside the repository | 46.9% | 309 |
 | spring-petclinic | 100.0% | 0 at 1,241 | 87.3% | 33 |
 
-The stricter stamp also clears oxn's recall bars (76.4 against 64.1, 56.4 against 42.3, 78.9 against 56.7). The three on httpx are calls of a method named `set` that the oracle resolves to Python's builtin `set`; the one on ripgrep is a `use` inside a function that shadows a function of the same name.
+The stricter stamp also clears oxn's recall bars (76.4 against 64.1, 56.2 against 42.3, 78.9 against 56.7). The three on httpx are calls of a method named `set` that the oracle resolves to Python's builtin `set`, where Aleph names the method. The two on eslint are classes imported through a destructured `require` of the repository's own package: the oracle names the importing file's constant, Aleph the class. The one on ripgrep is a `use` inside a function that shadows a function of the same name; that one is Aleph's error.
 
 ### The three extensions, each switched off alone
 
@@ -101,17 +101,22 @@ Confident recall / certain recall.
 | Corpus | All three | Without re-exports | Without packages of the same repository | Without stated types |
 |---|---|---|---|---|
 | go-kit | 80.7% / 76.4% | 80.7% / 76.4% | 80.7% / 76.4% | 60.1% / 50.9% |
-| ripgrep | 60.2% / 56.4% | 54.6% / 50.7% | 52.8% / 48.8% | 53.7% / 45.1% |
-| nest | 80.0% / 78.9% | 75.7% / 69.2% | 79.2% / 78.0% | 63.3% / 49.8% |
-| httpx | 87.7% / 82.1% | 41.8% / 36.1% | 87.7% / 82.1% | 66.3% / 51.3% |
+| ripgrep | 60.1% / 56.2% | 54.4% / 50.4% | 52.8% / 48.8% | 53.7% / 45.1% |
+| nest | 80.1% / 78.9% | 75.7% / 69.2% | 79.2% / 78.0% | 63.3% / 49.8% |
+| httpx | 87.5% / 81.8% | 41.8% / 36.0% | 87.5% / 81.8% | 66.3% / 51.3% |
 | eslint | 48.5% / 46.9% | 48.1% / 46.5% | 48.5% / 46.9% | 48.8% / 45.0% |
-| spring-petclinic | 94.0% / 87.3% | 94.0% / 87.3% | 94.0% / 87.3% | 89.4% / 24.9% |
+| spring-petclinic | 94.6% / 87.3% | 94.6% / 87.3% | 94.6% / 87.3% | 89.4% / 24.9% |
 
 Without stated types Go is below oxn's bar (60.1 against 64.1): following the types of receivers and fields is what clears it. go-kit, eslint and petclinic are one package each, so the second column cannot move them.
 
-### An adversarial read of the certain stamp
+### Two adversarial reads of the certain stamp
 
-agy (a second model, asked for realistic sources where a certain edge is wrong) gave six. All six reproduced and are fixed, each with a test that failed first: Python's method resolution order through several bases, Go's shallowest embedding, a Java overload inherited past a same-named method (the number of arguments now narrows overloads, which took petclinic's confident recall from 90.2% to 94.0%), two star imports that bring the same name, a module that imports a name for itself and re-exports another of that name through a star, and two Rust types of one name in one crate. None of the six occurred in the graded corpora: the figures above did not move except Java's. The grade says what the corpora contain, not what the rules get wrong.
+Both asked for realistic sources where a certain edge is wrong. Every case was reproduced before it was fixed, and each fix has a test that failed first.
+
+- **agy (a second model)** gave six: Python's method resolution order through several bases, Go's shallowest embedding, a Java overload inherited past a same-named method (the number of arguments now narrows overloads, which took petclinic's confident recall from 90.2% to 94.6%), two star imports that bring the same name, a module that imports a name for itself and re-exports another of that name through a star, and two Rust types of one name in one crate.
+- **An independent reviewer** of the whole branch found the gap the first rule set left open: a method inherited *past a base that is not among the files* (`class MyAdmin(admin.ModelAdmin, ExportMixin)`, a Go struct embedding `sync.Mutex`, a Java class extending a library class). The base that comes first may declare the method itself. Such an answer is now given but not certain, and says why. It also found: a signature too long to have been stored whole deciding between overloads (a regression of the fix above); a value built by a factory the function receives as a parameter taking the type of the file's function of that name; a parameter's stated type surviving a loop that rebinds it; a type parameter `T` read as a type `T` of the package; a loop variable at file level read as the function of its name; a package entered by its declarations instead of its code; and callers missed when the definition reaches them under a name given by a renaming re-export.
+
+None of these occurred in the graded corpora: the figures moved by a few tenths, except Java's. A grade says what the corpora contain, not what the rules get wrong.
 
 ### On repositories the resolver was not developed against
 
@@ -120,8 +125,8 @@ The six corpora are both what the resolver was developed against and what it is 
 | Corpus | Graded calls | Confident precision | Confident recall | Certain precision | Certain recall |
 |---|---|---|---|---|---|
 | Flask, first run | 476 | 100.0% | 69.3% | 98.1% (6 wrong at 844 library calls) | 63.7% |
-| Flask, after the fix | 476 | 100.0% | 69.3% | 100.0% | 63.7% |
-| FastAPI, graded once, after the fix | 6,026 | 100.0% | 72.2% | 100.0% (0 wrong at 2,674) | 71.6% |
+| Flask, after the fix and the two reads above | 476 | 100.0% | 69.3% | 100.0% | 63.0% |
+| FastAPI, wrong answers never looked at | 6,026 | 100.0% | 72.2% | 100.0% (0 wrong at 2,674) | 71.6% |
 | routing-controllers (TypeScript) | 273 | 98.2% | 82.4% | 100.0% (0 wrong at 260) | 74.0% |
 
 - Flask's six were one bug: inside the package `flask.json`, `import json` was resolved to the package itself. Fixed; Flask is no longer unseen for that rule, FastAPI is.
@@ -132,8 +137,10 @@ The six corpora are both what the resolver was developed against and what it is 
 
 - **Functions defined inside functions** are not definitions in Aleph (M1), so a call to one gets no answer. That is 36% of eslint's graded calls and most of its distance from the others.
 - **httpx:** 27.7% of the call sites SCIP resolves are excluded as untrustworthy by the protocol (scip-python resolves re-exported names to a place that contradicts what is written). oxn reports 19% for the same corpus; the difference was not traced.
-- **The oracle is not the truth.** Where SCIP cannot follow a destructured `require` it names the local constant; Aleph's answer, the function in the other file, is graded wrong.
-- **Cost:** the first graph question about a worktree reads every code file (3.6 s for Django); after that a question costs 6 to 94 ms on Django beyond finding the view, and the graph keeps about 15 MB once it has touched 500 files. A name mentioned in more than 3,000 chunks is answered from the first 3,000 and says so.
+- **The oracle is not the truth.** Where SCIP cannot follow a destructured `require` it names the local constant; Aleph's answer, the class or function in the other file, is graded wrong.
+- **Cost:** the first graph question about a worktree reads every code file: 3.6 s for Django's 2,280 code files, of which the readers themselves are about 1.8 s and the rest is reading the files from git and writing the rows. After that a question costs 6 to 94 ms on Django beyond finding the view, and the graph keeps about 15 MB of Python objects once it has touched 500 large files (the limit it keeps loaded). A name mentioned in more than 3,000 chunks is answered from the first 3,000 and says so.
+- **Callers that are not found:** a caller that reaches a definition through a default export under a name of its own (`import s from './util'`), or under a name built at run time, does not mention the definition's name, and the text index is what finds callers. A name with no letter or digit in it (`$`) cannot be looked up; the answer says so.
+- **Linked sources:** an absolute Python import inside a linked repository is not followed.
 
 ## Decision
 
