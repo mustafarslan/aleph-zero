@@ -264,14 +264,14 @@ class Engine:
         try:
             (found,), pending, late = self._consistent(cwd, started, until, prepare, ())
         except gitio.GitTimeout:
-            return callgraph.Answer(name, [], [], [], late=True, elapsed_ms=_elapsed(started))
+            return callgraph.Answer(name, [], [], [], late=True, elapsed_ms=_elapsed(started), direction=direction)
         if not found:       # out of time before the index could be read
             return callgraph.Answer(name, [], [], [], pending=pending, graph_pending=left[0], late=True,
-                                    elapsed_ms=_elapsed(started))
+                                    elapsed_ms=_elapsed(started), direction=direction)
         definitions, callers, callees, unanswered, truncated = found
         return callgraph.Answer(name, definitions, callers[:k], callees[:k], unanswered, pending, left[0],
                                 late or left[0] > 0 and until is not None, _elapsed(started),
-                                truncated or len(callers) > k or len(callees) > k)
+                                truncated or len(callers) > k or len(callees) > k, direction)
 
     def _references(self, index: Index, view: View, name: str, direction: str) -> tuple:
         definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT)

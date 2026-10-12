@@ -81,6 +81,7 @@ class Answer:
     late: bool = False
     elapsed_ms: int = 0
     truncated: bool = False      # more callers may exist than were looked at
+    direction: str = "both"      # what was asked: 'callers', 'callees' or 'both'
 
 
 def pending(index: Index) -> list[tuple[str, str]]:
@@ -336,3 +337,39 @@ def callees(index: Index, view: View, graph: Graph, hits: list[symbols.SymbolHit
             for target in (edge.targets if edge is not None else ()):
                 out.append(_reference(hit.path, of_file, call, edge, target))
     return out, unanswered
+
+
+def text(answer: Answer) -> str:
+    """The answer for a reader: each definition, then who calls it and what it calls. Certain answers
+    first; what was found by name alone is listed apart and says how many candidates it is one of."""
+    if not answer.definitions:
+        lines = [f'no definition named "{answer.symbol}" in this worktree']
+    else:
+        lines = [f"{hit.path}:{hit.line}  {hit.kind}  {hit.qualified}" for hit in answer.definitions]
+        several = len(answer.definitions) > 1
+        for title, found, callers in (("callers", answer.callers, True), ("callees", answer.callees, False)):
+            if answer.direction not in ("both", title):
+                continue
+            if not found:
+                lines.append(f"{title}: none in this worktree")
+                continue
+            certain = [item for item in found if item.certain]
+            possible = [item for item in found if not item.certain]
+            lines.append(f"{title}: {len(certain)} certain, {len(possible)} possible")
+            for group in (certain, possible):
+                if group is possible and possible:
+                    lines.append("  possible (same name; the receiver's type is not stated):")
+                for item in group:
+                    where = f"  {item.path}:{item.line}  " + (f"in {item.caller}  " if callers and item.caller else "") + f"{item.written}()"
+                    if not callers or several:
+                        where += f"  ->  {item.target_path}:{item.target_line}  {item.target}"
+                    lines.append(where + ("" if item.certain else f"  1 of {item.candidates} candidates"))
+    if answer.unanswered:
+        lines.append(f"note: {answer.unanswered} calls inside it reach nothing in this worktree (libraries, local functions)")
+    if answer.truncated:
+        lines.append("note: more calls exist than are listed")
+    if answer.graph_pending:
+        lines.append(f"note: the calls of {answer.graph_pending} files are not read yet; ask again for a complete answer")
+    if answer.pending:
+        lines.append(f"note: {answer.pending} files are not indexed yet; results may be incomplete")
+    return "\n".join(lines)

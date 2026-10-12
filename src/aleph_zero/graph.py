@@ -890,11 +890,12 @@ class Graph:
         rooted: list[tuple[int, str]] = []
         for suffix in (tail + ".py", tail + "/__init__.py"):
             for file, root in self._python.get(suffix, []):
+                # An absolute import starts at a directory that is not itself a package. Inside the package
+                # `flask.json`, `import json` is the standard library's, never `flask/json`.
+                if root and (root + "/__init__.py" in self.files or "packages" not in self.features):
+                    continue
                 above = not root or path.startswith(root + "/")
-                if not root or above or root + "/__init__.py" not in self.files:
-                    if root and "packages" not in self.features:
-                        continue
-                    rooted.append((len(root) if above else -1, file))
+                rooted.append((len(root) if above else -1, file))
         if not rooted:
             return []
         best = max(rank for rank, _ in rooted)

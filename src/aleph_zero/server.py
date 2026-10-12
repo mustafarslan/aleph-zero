@@ -8,6 +8,7 @@ ever written to standard output.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -15,7 +16,7 @@ import time
 from dataclasses import asdict
 from typing import IO
 
-from . import gitio, outline, render
+from . import callgraph, gitio, outline, render
 from .engine import Cancelled, Engine
 from .store import StoreError
 
@@ -118,7 +119,31 @@ TOOLS = [
             **_COMMON}},
     },
 ]
-_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in TOOLS}
+# The code graph (M7) is built ahead of its gate (ADR-003: a graph feature ships only if the A/B run
+# improves with it). Until then the agent is offered this tool only when the owner sets ALEPH_GRAPH=1.
+GRAPH_TOOL = {
+    "name": "references",
+    "description": "Who calls a function, method or class, and what it calls. Each answer says whether it is "
+                   "certain or one of several same-named candidates. A qualified name narrows it (TokenStore.get).",
+    "inputSchema": {"type": "object", "required": ["name"], "properties": {
+        "name": {"type": "string"},
+        "direction": {"type": "string", "enum": ["both", "callers", "callees"], "default": "both"},
+        "k": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+        **_COMMON, **_TIMEOUT}},
+}
+GRAPH_SECONDS = 20.0     # how long a first graph question may spend reading files when the caller sets no limit
+
+
+def graph_enabled() -> bool:
+    return os.environ.get("ALEPH_GRAPH", "") == "1"
+
+
+def tools() -> list[dict]:
+    """The tools offered to this session."""
+    return TOOLS + [GRAPH_TOOL] if graph_enabled() else TOOLS
+
+
+_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL]}
 _JSON_TYPES = {"string": str, "integer": int}
 
 
@@ -267,10 +292,10 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
         elif method == "ping":
             send({"jsonrpc": "2.0", "id": ident, "result": {}})
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": ident, "result": {"tools": TOOLS}})
+            send({"jsonrpc": "2.0", "id": ident, "result": {"tools": tools()}})
         elif method == "tools/call":
             name = params.get("name")
-            if not isinstance(name, str) or name not in _SCHEMAS:
+            if not isinstance(name, str) or name not in {tool["name"] for tool in tools()}:
                 send(_error(ident, -32602, f"Unknown tool: {name}"))
                 continue
             with state:
@@ -386,6 +411,11 @@ def _run(engine: Engine, name: str, args: dict) -> str:
         if found.pending:
             lines.append(f"note: {found.pending} files are not indexed yet; results may be incomplete")
         return "\n".join(lines)
+    if name == "references":
+        found = engine.references(args["name"], direction=args.get("direction", "both"), k=args.get("k", 50), cwd=cwd,
+                                  timeout_ms=args.get("timeout_ms"),
+                                  prepare_seconds=None if args.get("timeout_ms") else GRAPH_SECONDS)
+        return json.dumps(asdict(found)) if as_json else callgraph.text(found)
     if name == "outline":
         result = engine.outline(args["path"], cwd=cwd, timeout_ms=args.get("timeout_ms"))
         return json.dumps(asdict(result)) if as_json else outline.text(result)

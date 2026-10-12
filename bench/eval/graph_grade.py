@@ -282,7 +282,8 @@ def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("workdir", type=Path, help="holds <corpus>/ and <corpus>.scip for each corpus")
-    parser.add_argument("--corpus", action="append", choices=sorted(CORPORA))
+    parser.add_argument("--corpus", action="append",
+                        help=f"one of {', '.join(sorted(CORPORA))}; or NAME:LANGUAGE for another corpus prepared the same way")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--population", action="store_true", help="report the population alone, with no answers")
     parser.add_argument("--disagreements", type=int, default=0, help="print this many wrong answers per corpus")
@@ -294,16 +295,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="switch one of the resolver's extensions off, to measure what it adds")
     args = parser.parse_args(argv)
     report = {}
-    for name in args.corpus or sorted(CORPORA):
+    languages = dict(CORPORA)
+    for given in args.corpus or ():
+        name, _, language = given.partition(":")
+        if language:
+            languages[name] = language
+        elif name not in languages:
+            parser.error(f"{name} is not one of the six corpora: say its language as {name}:LANGUAGE")
+    for name in [given.partition(":")[0] for given in args.corpus] if args.corpus else sorted(CORPORA):
         root, index_file = args.workdir / name, args.workdir / f"{name}.scip"
         if not root.is_dir() or not index_file.is_file():
             print(f"{name}: not prepared under {args.workdir} (the corpus or its .scip is missing)", file=sys.stderr)
             continue
         index = scip.load_index(index_file)
         answer = None if args.population else aleph_answer(aleph_graph(root, FEATURES - set(args.without)))
-        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, args.unanswered, args.outside, 40),
+        grade = grade_corpus(root, index, languages[name], answer, keep=max(args.disagreements, args.unanswered, args.outside, 40),
                              confident_only=args.confident_only)
-        report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(CORPORA[name])}
+        report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(languages[name])}
         row = report[name]
         print(f"{name:22} graded {row['graded_call_sites']:5} excl {row['excluded_share']:5.1%} | oxn's protocol: recall {row['recall']:.1%}, "
               f"confident precision {row['confident_precision']:.1%}, confident recall {row['confident_recall']:.1%} | "

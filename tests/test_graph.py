@@ -340,3 +340,16 @@ def test_a_value_built_by_a_call_takes_the_type_the_callee_says_it_returns():
         "src/b.rs": "pub struct Builder;\nimpl Builder {\n    pub fn new() -> Self { Builder }\n    pub fn build(&self) {}\n}\n",
     }
     assert answers(rust, "src/lib.rs", "build") == ("L1", "import-resolved", [("src/b.rs", "Builder.build")])
+
+
+def test_an_absolute_python_import_is_never_looked_up_inside_the_importing_package():
+    """`import json` inside the package `flask.json` is the standard library's, not the package itself:
+    only a directory that is not a package can be where an absolute import starts."""
+    files = {
+        "src/flask/__init__.py": "",
+        "src/flask/json/__init__.py": "import json as _json\n\ndef dumps(obj):\n    return _json.dumps(obj)\n",
+        "src/flask/json/provider.py": "import json\nfrom flask.json import dumps as ours\n\ndef to_text(obj):\n    json.dumps(obj)\n    return ours(obj)\n",
+    }
+    assert answers(files, "src/flask/json/__init__.py", "dumps") is None
+    assert answers(files, "src/flask/json/provider.py", "dumps") is None
+    assert answers(files, "src/flask/json/provider.py", "ours") == ("L1", "import-resolved", [("src/flask/json/__init__.py", "dumps")])

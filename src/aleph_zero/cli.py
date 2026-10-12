@@ -1,4 +1,4 @@
-"""Command line: aleph index | search | symbol | outline | status | gc."""
+"""Command line: aleph index | search | symbol | outline | callers | callees | status | gc."""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import doctor, gitio, outline, render, sources
+from . import callgraph, doctor, gitio, outline, render, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -60,6 +60,15 @@ def _symbol(args) -> int:
         print(f"    {hit.signature[:160]}")
     if found.pending:
         print(f"note: {found.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
+    return 0
+
+
+def _references(args) -> int:
+    found = Engine(args.cwd).references(args.name, direction=args.command, k=args.k, timeout_ms=args.timeout_ms)
+    if args.json:
+        print(json.dumps(asdict(found), indent=2))
+        return 0
+    print(callgraph.text(found))
     return 0
 
 
@@ -211,6 +220,14 @@ def main(argv: list[str] | None = None) -> int:
     symbol.add_argument("--timeout-ms", type=int)
     symbol.add_argument("--json", action="store_true")
     symbol.set_defaults(run=_symbol)
+
+    for direction, what in (("callers", "who calls a definition"), ("callees", "what a definition calls")):
+        graph = commands.add_parser(direction, help=f"{what}, and how sure each answer is")
+        graph.add_argument("name", help="a name, or a qualified one: TokenStore.get")
+        graph.add_argument("-k", type=int, default=50)
+        graph.add_argument("--timeout-ms", type=int)
+        graph.add_argument("--json", action="store_true")
+        graph.set_defaults(run=_references)
 
     skeleton = commands.add_parser("outline", help="what a file defines, without reading it all")
     skeleton.add_argument("path", help="a path in this worktree, relative to its top")

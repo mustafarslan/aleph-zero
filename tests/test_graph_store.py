@@ -122,3 +122,42 @@ def test_an_index_of_schema_6_gets_the_graph_table_and_nothing_is_indexed_again(
     engine = Engine(repo.root)
     assert engine.search("refresh token").pending == 0
     assert len(engine.references("helper").callers) == 2
+
+
+def test_the_answer_as_text_keeps_what_is_certain_apart_from_what_is_possible(repo):
+    from aleph_zero import callgraph
+
+    text = callgraph.text(app(repo).references("Store.save"))
+    assert text.splitlines() == [
+        "src/app/store.py:2  method  Store.save",
+        "callers: 1 certain, 1 possible",
+        "  src/app/service.py:7  in Service.run  self.store.save()",
+        "  possible (same name; the receiver's type is not stated):",
+        "  src/app/service.py:9  in Service.run  loose.save()  1 of 2 candidates",
+        "callees: none in this worktree",
+    ]
+    text = callgraph.text(app(repo).references("Service.run", direction="callees"))
+    assert text.splitlines() == [
+        "src/app/service.py:6  method  Service.run",
+        "callees: 2 certain, 2 possible",
+        "  src/app/service.py:7  self.store.save()  ->  src/app/store.py:2  Store.save",
+        "  src/app/service.py:8  helper()  ->  src/app/service.py:11  helper",
+        "  possible (same name; the receiver's type is not stated):",
+        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:2  Store.save  1 of 2 candidates",
+        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:6  Cache.save  1 of 2 candidates",
+    ]
+    assert callgraph.text(app(repo).references("nowhere_at_all")) == 'no definition named "nowhere_at_all" in this worktree'
+
+
+def test_callers_and_callees_on_the_command_line(repo, capsys):
+    import json
+
+    from aleph_zero import cli
+
+    app(repo).close()
+    assert cli.main(["--cwd", str(repo.root), "callers", "helper"]) == 0
+    out = capsys.readouterr().out
+    assert "src/use.py:4  in main  h()" in out and "callees" not in out
+    assert cli.main(["--cwd", str(repo.root), "callees", "Service.run", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [item["target"] for item in payload["callees"]][:2] == ["Store.save", "helper"] and payload["callers"] == []

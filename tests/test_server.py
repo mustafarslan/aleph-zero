@@ -1,4 +1,5 @@
 import json
+import os
 import select
 import subprocess
 import sys
@@ -14,9 +15,10 @@ LATEST = "2025-11-25"
 class Client:
     """Speaks newline-delimited JSON-RPC to `aleph serve` running as a child process."""
 
-    def __init__(self, cwd):
+    def __init__(self, cwd, env=None):
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "aleph_zero.cli", "--cwd", str(cwd), "serve"],
+            env={**os.environ, **(env or {})},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         self.next_id = 0
@@ -314,3 +316,26 @@ def test_with_semantic_search_on_the_server_makes_vectors_in_the_background(repo
             client.proc.kill()
         subprocess.run([sys.executable, "-m", "aleph_zero.cli", "embed", "stop"], env=env, capture_output=True)
         shutil.rmtree(cache, ignore_errors=True)
+
+
+def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
+    """M7 is built ahead of its gate: the agent is not offered the tool unless ALEPH_GRAPH=1."""
+    repo.write("src/billing/use.py", "from .invoice import render_invoice\n\ndef bill():\n    return render_invoice(1)\n")
+    off = Client(repo.root)
+    try:
+        off.start()
+        assert "references" not in {tool["name"] for tool in off.request("tools/list")["result"]["tools"]}
+        assert off.call("references", name="render_invoice")["error"]["message"] == "Unknown tool: references"
+    finally:
+        off.close()
+    on = Client(repo.root, env={"ALEPH_GRAPH": "1"})
+    try:
+        on.start()
+        tools = {tool["name"]: tool for tool in on.request("tools/list")["result"]["tools"]}
+        assert tools["references"]["inputSchema"]["required"] == ["name"] and "_meta" not in tools["references"]
+        text = on.text("references", name="render_invoice")
+        assert "src/billing/use.py:4  in bill  render_invoice()" in text
+        as_json = json.loads(on.text("references", name="render_invoice", direction="callers", format="json"))
+        assert as_json["callers"][0]["certain"] is True and as_json["graph_pending"] == 0
+    finally:
+        on.close()
