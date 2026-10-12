@@ -28,7 +28,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 - **What:** two things the M2 plan lists and that were not run. (a) The split-threshold sweep of ADR-001: chunk at 96, 128, 192, 256 and 384 tokens and compare on Loc-Bench, with a signature-only control. (b) Re-tuning M1's starting values against Benchmark C: the column weights of the text index, the path and name rules, how many words a long query keeps.
 - **Why it waits:** every setting of (a) changes the chunks, so all 235 base commits must be re-indexed and re-embedded per setting: about 1.5 hours of GPU each, five settings. (b) needs no GPU for most settings but a re-index for the column weights.
-- **Status:** not started. Ranking and chunking run on the starting values, which passed the gate as they are.
+- **Status:** not started. Ranking and chunking run on the starting values, which passed the gate provisionally as they are (entry 1).
 
 ## 2. Fifty hand-written questions for Benchmark C
 
