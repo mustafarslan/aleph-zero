@@ -280,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     made_from.add_argument("--tree", help="the revision the index was made from (default: HEAD)")
     made_from.add_argument("--worktree", action="store_true", help="it was made from the worktree as it is now, uncommitted changes included")
     running = scip_actions.add_parser("run", help="run this language's indexer here, inside the memory limit, and keep the result")
-    running.add_argument("--lang", help="python or java (the languages measured under the limit); default: the worktree's main language")
+    running.add_argument("--lang", help="python, java, go or rust (the languages measured under the limit); default: the worktree's main language")
     running.add_argument("--json", action="store_true")
     scip_actions.add_parser("list").add_argument("--json", action="store_true")
     forgetting = scip_actions.add_parser("forget")

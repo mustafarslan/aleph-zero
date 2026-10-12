@@ -53,7 +53,7 @@ def test_a_worktree_that_changed_while_the_indexer_ran_is_not_stamped(project, t
 def test_a_language_that_was_not_measured_or_an_indexer_that_is_absent_is_said_not_run(project, tmp_path, monkeypatch, capsys):
     repo, _ = project
     with pytest.raises(indexers.CannotRun, match="import-only"):
-        Engine(repo.root).scip_run("rust")                                   # known, not measured under the limit
+        Engine(repo.root).scip_run("javascript")                             # measured, over the limit
     monkeypatch.setitem(indexers.INDEXERS, "python", indexers.Indexer(
         "python", "aleph-no-such-indexer", ("{out}",), on_demand=True, how_to_get="npm install -g @sourcegraph/scip-python"))
     assert cli.main(["--cwd", str(repo.root), "scip", "run", "--lang", "python"]) == 1

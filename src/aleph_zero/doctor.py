@@ -69,7 +69,7 @@ def _compiler_indexes() -> Row:
     """Which SCIP indexers are installed, and which languages `aleph scip run` may run one for."""
     parts = []
     for indexer, found in indexers.present():
-        how = ("on request" + (f" ({indexer.note})" if indexer.note else "")) if indexer.on_demand else "import-only (not measured under the limit)"
+        how = ("on request" + (f" ({indexer.note})" if indexer.note else "")) if indexer.on_demand else f"import-only ({indexer.why_not})"
         parts.append(f"{indexer.language}: {indexer.program} {'found' if found else 'not installed'}, {how}")
     try:
         allowed = f"A run may use {indexers.limit_mb():.0f} MB (ALEPH_SCIP_MEMORY_MB)"

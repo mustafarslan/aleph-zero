@@ -2,9 +2,11 @@
 
 Aleph never installs an indexer and never runs one for a query. `aleph scip run` runs the
 one for a language whose peak memory was measured under the limit on a mid-size project
-(M9: scip-python 459 MB, scip-java with Maven 896 MB), watches the memory of everything
-it starts, and stops it all above the limit. The other languages are import-only until
-measured: their indexer is made to run elsewhere and the result imported.
+(M9: scip-python 459 MB, scip-java with Maven 881 MB, scip-go 948 MB, rust-analyzer
+1,499 MB), watches the memory of everything it starts, and stops it all above the limit.
+JavaScript is import-only (scip-typescript took 2,295 MB on eslint) and so is TypeScript
+(not measured: the corpus's dependencies would not install): their index is made
+elsewhere and imported.
 
 An indexer for a compiled language runs the project's own build. That is the project's
 code running on this machine: only ever on the owner's explicit request.
@@ -43,6 +45,7 @@ class Indexer:
     needs: str = ""                 # a file the project must have for the measured way of running it
     note: str = ""
     in_a_copy: bool = False         # the indexer runs the project's build: on a copy of the files, never in the worktree
+    why_not: str = ""               # for an import-only language: what the measurement said
 
 
 INDEXERS: dict[str, Indexer] = {
@@ -54,12 +57,17 @@ INDEXERS: dict[str, Indexer] = {
                                           "--offline", "--batch-mode", "clean", "test-compile"), True,
                     "coursier install scip-java (sourcegraph.github.io/scip-java)", needs="pom.xml",
                     note="Maven projects: it compiles the project, offline, in a copy of its files", in_a_copy=True),
+    "go": Indexer("go", "scip-go", ("index", "--output", "{out}"), True, "go install github.com/sourcegraph/scip-go/cmd/scip-go@latest",
+                  needs="go.mod", note="the module's dependencies must already be in Go's module cache"),
+    # rust-analyzer runs cargo, which runs the project's build scripts and writes a target directory: in a copy.
+    "rust": Indexer("rust", "rust-analyzer", ("scip", ".", "--output", "{out}"), True, "rustup component add rust-analyzer",
+                    needs="Cargo.toml", note="it runs cargo, offline, in a copy of the files", in_a_copy=True),
     "typescript": Indexer("typescript", "scip-typescript", ("index", "--output", "{out}"), False,
-                          "npm install -g @sourcegraph/scip-typescript"),
+                          "npm install -g @sourcegraph/scip-typescript",
+                          why_not="its memory has not been measured (the corpus's dependencies would not install)"),
     "javascript": Indexer("javascript", "scip-typescript", ("index", "--infer-tsconfig", "--output", "{out}"), False,
-                          "npm install -g @sourcegraph/scip-typescript"),
-    "go": Indexer("go", "scip-go", ("index", "--output", "{out}"), False, "go install github.com/sourcegraph/scip-go/cmd/scip-go@latest"),
-    "rust": Indexer("rust", "rust-analyzer", ("scip", ".", "--output", "{out}"), False, "rustup component add rust-analyzer"),
+                          "npm install -g @sourcegraph/scip-typescript",
+                          why_not="it was measured at 2,295 MB on eslint, over the limit"),
 }
 
 
@@ -201,7 +209,7 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
     if indexer is None:
         raise CannotRun(f"no SCIP indexer is known for {language}")
     if not indexer.on_demand:
-        raise CannotRun(f"{language} is import-only: the memory of {indexer.program} has not been measured under the limit here. "
+        raise CannotRun(f"{language} is import-only: {indexer.program} is not run here because {indexer.why_not}. "
                         f"Run it yourself (or in CI) and keep the result with `aleph scip import`")
     if shutil.which(indexer.program) is None:
         raise CannotRun(f"{indexer.program} is not installed. Aleph does not install it; to get it: {indexer.how_to_get}")
