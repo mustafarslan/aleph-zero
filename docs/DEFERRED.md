@@ -76,7 +76,8 @@ Things that are not being done now on purpose. Each entry says what it is, why i
   | TypeScript | 165 | 11 |
 
   With about 110 questions the interval of a 5-point gate is roughly ±9 points: for C++, C and Go the public sets can show a large effect and cannot settle a small one. Java, JavaScript, TypeScript and Rust have enough to say more.
-- **To run C++ (yours to start: a GPU run, after the Python one has finished; five small repositories, 108 commits, probably under an hour):**
+- **To run C++ (yours to start: a GPU run, after the Python one has finished; five small repositories, 108 commits, probably under an hour).** Only `list` has been run with these sets so far: the first `prepare` is where the rest of that path runs for the first time, so look at its first lines.
+
 
       nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare bench/data/benchc-cpp --set others --language cpp --away > bench/data/benchc-cpp.prepare.log 2>&1 &
       uv run --group bench python bench/eval/benchmark_c.py run bench/data/benchc-cpp --set others --language cpp --out bench/data/results/benchmark_c_cpp.json

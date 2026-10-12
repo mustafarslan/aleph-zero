@@ -537,7 +537,9 @@ def main(argv: list[str] | None = None) -> int:
 
             search_module.MIN_POOL = args.min_pool
         settings = {"k": args.k, "min_pool": args.min_pool, "bm25": not args.no_bm25, "code_and_docs_only": args.code_and_docs_only,
-                    "alphas": ALPHAS, "forms": FORMS}       # the set is not among them: a question is known by its instance and commit
+                    "alphas": ALPHAS, "forms": FORMS}
+        if args.set != "locbench":      # another set's result for an instance of the same name is not this set's (Loc-Bench's cache stays as it is)
+            settings["set"] = args.set
         cache = None if args.no_cache else ResultCache(workdir / "run-cache", settings, code_fingerprint())
         run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k, cache)
     return 0
