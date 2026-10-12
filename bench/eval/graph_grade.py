@@ -30,11 +30,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from aleph_zero import lang, scip
-from aleph_zero.graph import FileFacts, Graph
+from aleph_zero.graph import FEATURES, MANIFESTS, FileFacts, Graph
 from aleph_zero.lang import parse
+from aleph_zero.lang.bindings import bases, bindings
 from aleph_zero.lang.calls import Call, calls
 from aleph_zero.lang.definitions import definitions
-from aleph_zero.lang.imports import extract_imports
 
 CORPORA = {
     "python-httpx": "python", "go-kit": "go", "rust-ripgrep": "rust", "typescript-nest": "typescript",
@@ -76,6 +76,7 @@ class Grade:
     confident_answered: int = 0
     confident_correct: int = 0
     disagreements: list[str] = field(default_factory=list)
+    unanswered: list[str] = field(default_factory=list)
     by_how: dict[str, list[int]] = field(default_factory=dict)  # 'how, confident|several' -> [answered, correct]
     keep: int = 40                # how many wrong answers to keep
     confident_only: bool = False  # keep only wrong answers that had one candidate
@@ -159,6 +160,9 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
         grade.graded += 1
         candidates = answer(path, call) if answer is not None else []
         if not candidates:
+            if len(grade.unanswered) < grade.keep:
+                grade.unanswered.append(f"{path}:{call.line} {call.receiver + '.' if call.receiver else ''}{call.name} "
+                                        f"[{call.via or 'plain'}, {call.head or 'unbound'}] SCIP says {truth.path}:{truth.line + 1}")
             continue
         grade.answered += 1
         right = is_correct(candidates[0], truth)
@@ -197,18 +201,24 @@ def tracked_files(root: Path) -> list[str]:
     return [name for name in listed.decode("utf-8", "surrogateescape").split("\0") if name]
 
 
-def aleph_graph(root: Path) -> Graph:
+def aleph_graph(root: Path, features: frozenset[str] = FEATURES) -> Graph:
     """Aleph's graph of a corpus on disk, from the same facts the index would hold per file."""
     facts: dict[str, FileFacts] = {}
+    manifests: dict[str, bytes] = {}
     for path in tracked_files(root):
-        profile = lang.profile_for_path(path)
         file = root / path
-        if profile is None or not file.is_file() or file.is_symlink():
+        if not file.is_file() or file.is_symlink():
+            continue
+        if path.rsplit("/", 1)[-1] in MANIFESTS:
+            manifests[path] = file.read_bytes()
+        profile = lang.profile_for_path(path)
+        if profile is None:
             continue
         data = file.read_bytes()
         tree = parse.tree(profile, data)
-        facts[path] = FileFacts(profile.name, definitions(profile, tree, data), extract_imports(tree.root_node, profile))
-    return Graph(facts)
+        facts[path] = FileFacts(profile.name, definitions(profile, tree, data), bindings(profile, tree, data),
+                                bases(profile, tree, data))
+    return Graph(facts, manifests, features)
 
 
 def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
@@ -216,7 +226,7 @@ def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
         edge = graph.resolve(path, call)
         if edge is None:
             return []
-        how = f"{edge.level} {edge.provenance}"
+        how = f"{edge.level} {edge.provenance}: {edge.rule}"
         return [Candidate(t.path, t.name, t.start_line, t.end_line, how) for t in edge.targets]
     return answer
 
@@ -229,7 +239,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--population", action="store_true", help="report the population alone, with no answers")
     parser.add_argument("--disagreements", type=int, default=0, help="print this many wrong answers per corpus")
     parser.add_argument("--confident-only", action="store_true", help="of the wrong answers, print those with one candidate")
+    parser.add_argument("--unanswered", type=int, default=0, help="print this many graded sites that got no answer")
     parser.add_argument("--by-how", action="store_true", help="print answers and precision by how they were found")
+    parser.add_argument("--without", action="append", choices=sorted(FEATURES), default=[],
+                        help="switch one of the resolver's extensions off, to measure what it adds")
     args = parser.parse_args(argv)
     report = {}
     for name in args.corpus or sorted(CORPORA):
@@ -238,8 +251,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name}: not prepared under {args.workdir} (the corpus or its .scip is missing)", file=sys.stderr)
             continue
         index = scip.load_index(index_file)
-        answer = None if args.population else aleph_answer(aleph_graph(root))
-        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, 40),
+        answer = None if args.population else aleph_answer(aleph_graph(root, FEATURES - set(args.without)))
+        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, args.unanswered, 40),
                              confident_only=args.confident_only)
         report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(CORPORA[name])}
         row = report[name]
@@ -248,9 +261,11 @@ def main(argv: list[str] | None = None) -> int:
               f"confident precision {row['confident_precision']:.1%}  confident recall {row['confident_recall']:.1%}", flush=True)
         if args.by_how:
             for how, counts in row["by_how"].items():
-                print(f"    {how:36} answered {counts['answered']:6}  correct {counts['correct']:6}  {counts['precision']:.1%}")
+                print(f"    {how:62} answered {counts['answered']:6}  correct {counts['correct']:6}  {counts['precision']:.1%}")
         for line in grade.disagreements[:args.disagreements]:
             print("   ", line)
+        for line in grade.unanswered[:args.unanswered]:
+            print("    no answer:", line)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2) + "\n")
