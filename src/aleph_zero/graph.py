@@ -81,6 +81,13 @@ class Edge:
     def confidence(self) -> float:
         return 1.0 / len(self.targets) if self.targets else 0.0
 
+    @property
+    def certain(self) -> bool:
+        """One target, reached by what the code says and not by its name alone. A lone candidate found by
+        name is not certain: the receiver's type is unknown, and a library's method of that name would not
+        be among the candidates at all (on ripgrep, three of four such answers at library calls were wrong)."""
+        return len(self.targets) == 1 and self.provenance != "name"
+
 
 class Graph:
     def __init__(self, files: dict[str, FileFacts], manifests: dict[str, bytes] | None = None,

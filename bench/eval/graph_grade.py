@@ -15,6 +15,12 @@ because the bars in ADR-003 are oxn's figures:
 - confident: an answer with exactly one candidate. Confident precision is correct confident
   answers over confident answers; confident recall is confident answers over the population.
 
+Reported beside these and outside oxn's protocol, so it decides no bar: what Aleph answers
+at call sites whose callee SCIP places in another package than any this index defines (a
+library, the standard library). Every such answer is a wrong edge the figures above cannot
+see, since those sites are not graded. Sites SCIP could not resolve at all (a symbol local
+to the file with no definition there) are left out: they say nothing either way.
+
 The answers come from a function `answer(path, call) -> list[Candidate]`; with none, the
 grader reports the population alone (recall 0), which is how it was first run.
 """
@@ -53,6 +59,7 @@ class Candidate:
     start_line: int   # 1-based, of the definition's whole range
     end_line: int
     how: str = ""     # how the answer was found (level and provenance); grouped in the report, decides nothing
+    certain: bool = False   # Aleph's own stamp: one target, and not by its name alone
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,14 @@ class Grade:
     correct: int = 0
     confident_answered: int = 0
     confident_correct: int = 0
+    outside: int = 0                # sites whose callee SCIP places outside the tree
+    outside_answered: int = 0       # ... that Aleph answered anyway: wrong edges
+    outside_confident: int = 0      # ... with one candidate
+    outside_examples: list[str] = field(default_factory=list)
+    certain_answered: int = 0       # graded sites answered with Aleph's own "certain" stamp
+    certain_correct: int = 0
+    outside_certain: int = 0        # outside sites answered with that stamp: wrong, every one
+    packages: set[str] = field(default_factory=set)   # the packages this index defines symbols of
     disagreements: list[str] = field(default_factory=list)
     unanswered: list[str] = field(default_factory=list)
     by_how: dict[str, list[int]] = field(default_factory=dict)  # 'how, confident|several' -> [answered, correct]
@@ -92,6 +107,13 @@ class Grade:
             "confident_answered": self.confident_answered,
             "confident_precision": ratio(self.confident_correct, self.confident_answered),
             "confident_recall": ratio(self.confident_answered, self.graded),
+            "outside_sites": self.outside, "outside_answered": self.outside_answered,
+            "outside_confident": self.outside_confident,
+            "confident_wrong_edge_share": ratio(self.outside_confident + self.confident_answered - self.confident_correct,
+                                                self.outside_confident + self.confident_answered),
+            "certain_answered": self.certain_answered, "outside_certain": self.outside_certain,
+            "certain_precision_all_sites": ratio(self.certain_correct, self.certain_answered + self.outside_certain),
+            "certain_recall": ratio(self.certain_answered, self.graded),
             "by_how": {how: {"answered": answered, "correct": correct, "precision": ratio(correct, answered)}
                        for how, (answered, correct) in sorted(self.by_how.items())},
         }
@@ -118,6 +140,17 @@ def constructed_type(symbol: str) -> str:
         return ""
     owner = _OWNER.search(symbol.rsplit(" ", 1)[-1])
     return (owner.group(1) or owner.group(2)) if owner else ""
+
+
+def package_of(symbol: str) -> str:
+    """`scheme manager package version descriptors` -> 'manager package'; '' for a symbol local to its file."""
+    parts = symbol.split(" ", 4)
+    return "" if symbol.startswith("local ") or len(parts) < 5 else f"{parts[1]} {parts[2]}"
+
+
+def _written(call: Call) -> str:
+    receiver = " ".join(call.receiver.split())
+    return f"{receiver[:40]}.{call.name}" if receiver else call.name
 
 
 def definition_sites(index: scip.ScipIndex) -> dict[tuple[str, str], Truth]:
@@ -152,8 +185,19 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
             continue  # SCIP resolved nothing here
         scope = path if occurrence.symbol.startswith("local ") else ""
         truth = sites.get((scope, occurrence.symbol))
-        if truth is None:
-            continue  # defined outside the tree: a library, a builtin
+        if truth is None:   # no definition in this index: a library, a builtin, or something SCIP could not resolve
+            if answer is None or package_of(occurrence.symbol) in grade.packages:
+                continue    # unresolved, or declared by a package of this tree in a way the index does not show
+            grade.outside += 1
+            given = answer(path, call)
+            grade.outside_answered += bool(given)
+            grade.outside_certain += bool(given) and given[0].certain
+            if len(given) == 1:
+                grade.outside_confident += 1
+                if len(grade.outside_examples) < grade.keep:
+                    grade.outside_examples.append(f"{path}:{call.line} {_written(call)} -> {given[0].path}:{given[0].start_line} "
+                                                  f"[{given[0].how}] but SCIP says {occurrence.symbol[:70]}")
+            continue
         if truth.name and call.name not in truth.names():
             grade.excluded_untrustworthy += 1  # the oracle names something other than what is written
             continue
@@ -161,13 +205,16 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
         candidates = answer(path, call) if answer is not None else []
         if not candidates:
             if len(grade.unanswered) < grade.keep:
-                grade.unanswered.append(f"{path}:{call.line} {call.receiver + '.' if call.receiver else ''}{call.name} "
+                grade.unanswered.append(f"{path}:{call.line} {_written(call)} "
                                         f"[{call.via or 'plain'}, {call.head or 'unbound'}] SCIP says {truth.path}:{truth.line + 1}")
             continue
         grade.answered += 1
         right = is_correct(candidates[0], truth)
         grade.correct += right
         confident = len(candidates) == 1
+        if candidates[0].certain:
+            grade.certain_answered += 1
+            grade.certain_correct += right
         if confident:
             grade.confident_answered += 1
             grade.confident_correct += right
@@ -175,7 +222,7 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
         counts[0] += 1
         counts[1] += right
         if not right and len(grade.disagreements) < grade.keep and (confident or not grade.confident_only):
-            grade.disagreements.append(f"{path}:{call.line} {call.receiver + '.' if call.receiver else ''}{call.name} -> "
+            grade.disagreements.append(f"{path}:{call.line} {_written(call)} -> "
                                        f"{candidates[0].path}:{candidates[0].start_line} [{candidates[0].how}, {len(candidates)}] "
                                        f"but SCIP says {truth.path}:{truth.line + 1}")
 
@@ -185,6 +232,7 @@ def grade_corpus(root: Path, index: scip.ScipIndex, language: str,
                  confident_only: bool = False) -> Grade:
     grade = Grade(language, keep=keep, confident_only=confident_only)
     sites = definition_sites(index)
+    grade.packages = {package_of(symbol) for _, symbol in sites} | {""}
     families = {language, "tsx"} if language == "typescript" else {language}
     for document in index.documents:
         profile = lang.profile_for_path(document.relative_path)
@@ -227,7 +275,7 @@ def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
         if edge is None:
             return []
         how = f"{edge.level} {edge.provenance}: {edge.rule}"
-        return [Candidate(t.path, t.name, t.start_line, t.end_line, how) for t in edge.targets]
+        return [Candidate(t.path, t.name, t.start_line, t.end_line, how, edge.certain) for t in edge.targets]
     return answer
 
 
@@ -240,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--disagreements", type=int, default=0, help="print this many wrong answers per corpus")
     parser.add_argument("--confident-only", action="store_true", help="of the wrong answers, print those with one candidate")
     parser.add_argument("--unanswered", type=int, default=0, help="print this many graded sites that got no answer")
+    parser.add_argument("--outside", type=int, default=0, help="print this many confident answers at sites SCIP places outside")
     parser.add_argument("--by-how", action="store_true", help="print answers and precision by how they were found")
     parser.add_argument("--without", action="append", choices=sorted(FEATURES), default=[],
                         help="switch one of the resolver's extensions off, to measure what it adds")
@@ -252,18 +301,22 @@ def main(argv: list[str] | None = None) -> int:
             continue
         index = scip.load_index(index_file)
         answer = None if args.population else aleph_answer(aleph_graph(root, FEATURES - set(args.without)))
-        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, args.unanswered, 40),
+        grade = grade_corpus(root, index, CORPORA[name], answer, keep=max(args.disagreements, args.unanswered, args.outside, 40),
                              confident_only=args.confident_only)
         report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(CORPORA[name])}
         row = report[name]
-        print(f"{name:24} graded {row['graded_call_sites']:6}  excluded {row['excluded_untrustworthy']:5} "
-              f"({row['excluded_share']:.1%})  recall {row['recall']:.1%}  precision {row['precision']:.1%}  "
-              f"confident precision {row['confident_precision']:.1%}  confident recall {row['confident_recall']:.1%}", flush=True)
+        print(f"{name:22} graded {row['graded_call_sites']:5} excl {row['excluded_share']:5.1%} | oxn's protocol: recall {row['recall']:.1%}, "
+              f"confident precision {row['confident_precision']:.1%}, confident recall {row['confident_recall']:.1%} | "
+              f"certain: precision {row['certain_precision_all_sites']:.1%} (with {row['outside_certain']} wrong at {row['outside_sites']} "
+              f"outside calls), recall {row['certain_recall']:.1%} | by name at outside calls: {row['outside_confident'] - row['outside_certain']}",
+              flush=True)
         if args.by_how:
             for how, counts in row["by_how"].items():
                 print(f"    {how:62} answered {counts['answered']:6}  correct {counts['correct']:6}  {counts['precision']:.1%}")
         for line in grade.disagreements[:args.disagreements]:
             print("   ", line)
+        for line in grade.outside_examples[:args.outside]:
+            print("    outside:", line)
         for line in grade.unanswered[:args.unanswered]:
             print("    no answer:", line)
     if args.out:
