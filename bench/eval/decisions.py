@@ -29,6 +29,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
+from aleph_zero import decisions as decision_records
 from aleph_zero.chunking import estimate_tokens
 from aleph_zero.engine import Engine
 
@@ -40,7 +41,7 @@ NOISE = re.compile(
     r"|^\s*(Co-Authored-By|Closes|Fixes|Refs|Signed-off-by):.*$|https?://\S+",
     re.M | re.I,
 )
-_NUMBERED = re.compile(r"\d+[-_]")
+_NUMBERED = re.compile(r"(?:ADR[-_])?(\d+)[-_]", re.I)   # oxn's `0012-…`; the optional prefix is for development corpora
 K = 60      # chunks asked for: enough for every decision of a corpus to appear
 
 
@@ -60,8 +61,9 @@ def decisions(root: Path, sha: str, adr_dir: str) -> dict[str, int]:
     found = {}
     for path in git(root, "ls-tree", "--name-only", sha, adr_dir.rstrip("/") + "/").split("\n"):
         name = Path(path).name
-        if path.endswith(".md") and _NUMBERED.match(name):
-            found[path] = int(re.sub(r"\D", "", Path(path).stem.split("-")[0]) or -1)
+        numbered = _NUMBERED.match(name)
+        if path.endswith(".md") and numbered is not None:
+            found[path] = int(numbered.group(1))
     return found
 
 
@@ -99,7 +101,7 @@ def reference_order(texts: dict[str, str], numbers: dict[str, int], query: str, 
         for path, frequency in found.items():
             norm = k1 * (1 - b + b * (lengths[path] / average if average else 1.0))
             scores[path] = scores.get(path, 0.0) + weight * frequency * (k1 + 1) / (frequency + norm)
-    ranked = sorted(scores.items(), key=lambda hit: (-hit[1], Path(hit[0]).stem.split("-")[0]))
+    ranked = sorted(scores.items(), key=lambda hit: (-hit[1], f"{numbers[hit[0]]:04d}"))
     return [numbers[path] for path, _ in ranked]
 
 
@@ -135,9 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--dense", action="store_true", help="with vectors (needs the embed worker); default: words and names alone")
     parser.add_argument("--reference", action="store_true", help="oxn's own ranker over the same candidates: calibrates this harness")
+    parser.add_argument("--ranker", choices=("words", "fused5", "fused60"),
+                        help="Aleph's ranker for decisions (`Engine.decisions`): by words alone, or fused with vectors at that k")
+    parser.add_argument("--labels", default="labels-external.json", help="the pairs, a file in the workdir (default: oxn's 100)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    labels = json.loads((args.workdir / "labels-external.json").read_text())
+    labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []
     notes: dict[str, str] = {}
     with tempfile.TemporaryDirectory(prefix="aleph-decisions-") as scratch:
@@ -152,19 +157,25 @@ def main(argv: list[str] | None = None) -> int:
                     rows.append({"corpus": name, "sha": pair["sha"], "gold": set(pair["gold"]), "order": reference_order(texts, numbers, query),
                                  "tokens": 0, "restates_title": pair["restates_title"], "agent_authored": pair["agent_authored"]})
                 continue
-            engine = Engine(where, dense=args.dense)
-            if args.dense:
+            fused = args.ranker in ("fused5", "fused60")
+            engine = Engine(where, dense=args.dense or fused)
+            if args.dense or fused:
                 report = engine.embed()
                 notes[name] = f"embedded {getattr(report, 'embedded', '?')} chunks"
             for pair in spec["pairs"]:
                 query = task_text(root, pair["sha"])
-                order, tokens = ranked(engine, query, numbers)
+                if args.ranker:
+                    answer = engine.decisions(query, k=len(numbers), rrf_k={"words": 0, "fused5": 5, "fused60": 60}[args.ranker])
+                    order, tokens = [hit.number for hit in answer.decisions], estimate_tokens(decision_records.text(
+                        decision_records.Answer(query, answer.decisions[:7], answer.known)))
+                else:
+                    order, tokens = ranked(engine, query, numbers)
                 rows.append({"corpus": name, "sha": pair["sha"], "gold": set(pair["gold"]), "order": order, "tokens": tokens,
                              "restates_title": pair["restates_title"], "agent_authored": pair["agent_authored"],
                              "query_words": len(query.split())})
             engine.close()
     report = {
-        "arm": "oxn's BM25 (reference)" if args.reference else "words, names and vectors" if args.dense else "words and names",
+        "arm": f"Aleph's decision ranker ({args.ranker})" if args.ranker else "oxn's BM25 (reference)" if args.reference else "words, names and vectors" if args.dense else "words and names",
         "all": score(rows), "oxn_bm25": OXN,
         "not restating the title": score([row for row in rows if not row["restates_title"]]),
         "not written by an agent": score([row for row in rows if not row["agent_authored"]]),

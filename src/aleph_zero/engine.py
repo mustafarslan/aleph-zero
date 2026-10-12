@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import callgraph, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
+from . import callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -101,6 +101,7 @@ class Engine:
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
+        self._records: dict[Path, tuple[str, decisions.Records]] = {}   # per worktree: its decision records, read once per view
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
         self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
@@ -146,6 +147,7 @@ class Engine:
         for store in self._stores.values():
             store.release_memory()
         self._graphs.clear()
+        self._records.clear()
         views.forget_trees()
         forget_parsers()
         self._shown.clear()
@@ -167,6 +169,7 @@ class Engine:
         self._stores.pop(root, None)
         self._files.pop(root, None)
         self._graphs.pop(root, None)
+        self._records.pop(root, None)
         if index is not None:
             self._decisions.pop(id(index), None)
             try:
@@ -291,6 +294,52 @@ class Engine:
         callers, truncated = callgraph.callers(index, graph, definitions, compiled) if direction != "callees" else ([], False)
         callees, unanswered = callgraph.callees(index, view, graph, definitions, compiled) if direction != "callers" else ([], 0)
         return definitions, callers, callees, unanswered, truncated or more
+
+    @_rebuilding
+    def decisions(self, task: str, k: int = 7, cwd: Path | str | None = None, rrf_k: int | None = None) -> decisions.Answer:
+        """The decision records that govern a task (a sentence, a commit message), best first: whole
+        records ranked by every word of the task, fused with vectors where the worktree has them.
+        An empty task lists the records. `rrf_k=0` ranks by words alone."""
+        started = time.monotonic()
+        view = self._view(cwd)
+        cached = self._records.get(view.root)
+        if cached is None or cached[0] != view.fingerprint:
+            found = []
+            with gitio.Readers() as reader:
+                for path in view.files:
+                    number = decisions.is_record(path)
+                    data = view.read(path, reader, decisions.MAX_BYTES) if number is not None else None
+                    if isinstance(data, bytes):
+                        found.append(decisions.parse(path, number, data.decode("utf-8", "replace")))
+            cached = (view.fingerprint, decisions.Records(found))
+            self._records[view.root] = cached
+        records = cached[1]
+        by_vectors, note = ([], "") if rrf_k == 0 or not task.strip() or not records.decisions else self._nearest_records(view, task, records)
+        hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k)
+        return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
+
+    def _nearest_records(self, view: View, task: str, records: decisions.Records) -> tuple[list[str], str]:
+        """The records' paths in the order of their nearest chunk to the task, and how vectors took part."""
+        index = self._index(view)
+        if not self._dense_decision(index)[0]:
+            return [], ""
+        index.sync(view, budget_seconds=SYNC_SECONDS, stop=self._stop.is_set)
+        note, _, _, nearest = self._dense(index, view, task)
+        if nearest is None:
+            return [], note
+        paths = {each.path for each in records.decisions}
+        index.narrow(view, "any", paths.__contains__, ("decisions", view.fingerprint))
+        chunk_ids = nearest(decisions.NEAREST, True)
+        order: list[str] = []
+        for start in range(0, len(chunk_ids), 500):
+            some = chunk_ids[start:start + 500]
+            held: dict[int, list[str]] = {}
+            for chunk_id, oid, family in index.conn.execute(
+                    f"SELECT chunk_id, blob_oid, family FROM blob_chunks WHERE chunk_id IN ({','.join('?' * len(some))})", some):
+                held.setdefault(chunk_id, []).extend(path for path in index.paths_for(oid, family) if path in paths)
+            for chunk_id in some:
+                order += [path for path in held.get(chunk_id, []) if path not in order]
+        return order, note
 
     @_rebuilding
     def scip_import(self, file: Path | str, tree: str | None = None, worktree: bool = False,

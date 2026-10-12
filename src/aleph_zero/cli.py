@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import callgraph, doctor, gitio, indexers, outline, render, scipstore, sources
+from . import callgraph, decisions, doctor, gitio, indexers, outline, render, scipstore, sources
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -69,6 +69,12 @@ def _references(args) -> int:
         print(json.dumps(asdict(found), indent=2))
         return 0
     print(callgraph.text(found))
+    return 0
+
+
+def _decisions(args) -> int:
+    found = Engine(args.cwd).decisions(" ".join(args.task), k=args.k)
+    print(json.dumps(asdict(found), indent=2) if args.json else decisions.text(found))
     return 0
 
 
@@ -271,6 +277,12 @@ def main(argv: list[str] | None = None) -> int:
         graph.add_argument("--timeout-ms", type=int)
         graph.add_argument("--json", action="store_true")
         graph.set_defaults(run=_references)
+
+    governing = commands.add_parser("decisions", help="the decision records (ADRs) that govern a task; with no task, all of them")
+    governing.add_argument("task", nargs="*", help="what is being done, in plain words or as a commit message")
+    governing.add_argument("-k", type=int, default=7)
+    governing.add_argument("--json", action="store_true")
+    governing.set_defaults(run=_decisions)
 
     compiled = commands.add_parser("scip", help="compiler-grade indexes (SCIP) made elsewhere: exact answers while their files are unchanged")
     scip_actions = compiled.add_subparsers(dest="action", required=True)
