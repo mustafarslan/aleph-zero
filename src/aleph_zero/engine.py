@@ -274,9 +274,11 @@ class Engine:
                                 truncated or len(callers) > k or len(callees) > k, direction)
 
     def _references(self, index: Index, view: View, name: str, direction: str) -> tuple:
-        definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT)
+        definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT + 1)
         if not definitions:
             return [], [], [], 0, False
+        more = len(definitions) > callgraph.DEFINITION_LIMIT     # answered for the first few: said, not hidden
+        definitions = definitions[:callgraph.DEFINITION_LIMIT]
         ready = callgraph.coverage(index)[0]
         token = (view.fingerprint, ready)
         cached = self._graphs.get(view.root)
@@ -286,7 +288,7 @@ class Engine:
         graph = cached[1]
         callers, truncated = callgraph.callers(index, graph, definitions) if direction != "callees" else ([], False)
         callees, unanswered = callgraph.callees(index, view, graph, definitions) if direction != "callers" else ([], 0)
-        return definitions, callers, callees, unanswered, truncated
+        return definitions, callers, callees, unanswered, truncated or more
 
     def outline(self, path: str, cwd: Path | str | None = None,
                 timeout_ms: int | None = None) -> outlines.Outline:

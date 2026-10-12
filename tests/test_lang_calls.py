@@ -170,3 +170,26 @@ def typed(name: str, source: str):
 ])
 def test_a_call_on_a_local_name_carries_the_type_the_function_declares_for_it(name, source, expected):
     assert typed(name, source) == expected
+
+
+@pytest.mark.parametrize("name,source", [
+    ("python", "def f(store: Store, others):\n    for store in others:\n        store.save()\n"),
+    ("python", "def f(store: Store, make):\n    if (store := make()):\n        store.save()\n"),
+    ("python", "def f(store: Store, make):\n    store, other = make()\n    store.save()\n"),
+    ("go", "package p\nfunc F[T any](x T) { x.Lock() }\n"),
+    ("typescript", "class Repo<T> {\n  run(item: T) { item.save(); }\n}\n"),
+    ("java", "class A {\n  <T> void run(T item) { item.save(); }\n}\n"),
+    ("rust", "fn run<T: Save>(item: T) { item.save(); }\n"),
+])
+def test_a_name_bound_again_or_typed_by_a_type_parameter_has_no_stated_type(name, source):
+    assert typed(name, source) == []
+
+
+def test_a_loop_variable_at_file_level_is_not_the_function_of_the_same_name():
+    assert shaped("python", "def handler():\n    pass\n\nfor handler in handlers:\n    handler()\nresults = [f(1) for f in fs]\nhandler2()\n") == [
+        ("|handler", "", "local"), ("|f", "", "local"), ("|handler2", "", "")]
+
+
+def test_calls_name_the_innermost_definition_they_sit_in_whatever_the_order():
+    source = "class A:\n    def m(self):\n        one()\n    class B:\n        def n(self):\n            two()\n    def o(self):\n        three()\nfour()\n"
+    assert found("python", source) == [("one", "", 3, "A.m"), ("two", "", 6, "A.B.n"), ("three", "", 8, "A.o"), ("four", "", 9, None)]

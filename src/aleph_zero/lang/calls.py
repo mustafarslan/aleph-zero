@@ -18,12 +18,13 @@ Which nodes are calls, and which field holds the callee, follows oxn's language 
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
 from . import query
-from .bindings import constructed, named_type
+from .bindings import TYPE_PARAMETERS, constructed, named_type, type_parameter_names
 from .definitions import Definition
 from .profile import LanguageProfile
 
@@ -96,6 +97,13 @@ _PATTERNS = frozenset({
     "optional_parameter_declaration", "init_declarator", "pointer_declarator", "reference_declarator", "array_declarator",
 })
 _PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4}
+_FILE = 0       # the scope that stands for the file itself
+# What binds a name at file level without declaring anything: a loop variable there is not the function it is named like.
+_FILE_LEVEL_BINDERS: dict[str, frozenset[str]] = {
+    "python": frozenset({"for_statement", "for_in_clause", "as_pattern", "named_expression"}),
+    "typescript": frozenset({"for_in_statement", "catch_clause"}), "tsx": frozenset({"for_in_statement", "catch_clause"}),
+    "javascript": frozenset({"for_in_statement", "catch_clause"}),
+}
 _NOT_A_NAME = frozenset({"type", "value", "right", "default_value", "parameters", "size", "key", "dimensions"})
 _BOUND_LEAVES = frozenset({"identifier", "shorthand_property_identifier_pattern", "shorthand_field_identifier"})
 _OWNER_HEADS = ("object", "operand", "value", "argument", "path", "scope")
@@ -124,18 +132,21 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     sites = _SITES.get(family)
     if not sites:
         return []
-    callables = sorted((definition.end_byte - definition.start_byte, definition.start_byte, definition.end_byte, index)
-                       for index, definition in enumerate(found) if definition.kind in _CALLABLE)
     scopes, binders = _SCOPES.get(family, frozenset()), _BINDERS.get(family, {})
-    bound: dict[int, set[str]] = {}     # scope -> the names bound in it
-    declared: dict[int, dict[str, str]] = {}  # scope -> name -> the type the scope states for it ('' when it states two)
+    at_file_level = _FILE_LEVEL_BINDERS.get(family, frozenset())
+    # scope -> name -> where it is bound. Scope 0 is the file itself, and holds only what a loop, a
+    # comprehension or a handler binds there: the file's own declarations are definitions, not local names.
+    bound: dict[int, dict[str, set[int]]] = {_FILE: {}}
+    stated: dict[int, dict[str, list[str]]] = {_FILE: {}}   # scope -> name -> each type a statement gives it ('' for none)
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
     seen: list[tuple[Node, Node | None, str, int, tuple[int, ...]]] = []
     # Only the nodes that matter are visited, found by the parser's query engine: scopes, what binds or
     # types a local name, and calls. In source order, an outer node first, so a scope is open before what
     # it holds is met; one node can play several parts, taken in the order of _PARTS.
     parts = query.by_role(family, tree, {"named": _NAMED_OUTSIDE, "scope": scopes, "binds": binders,
-                                         "typed": _TYPED.get(family, frozenset()), "call": sites})
+                                         "typed": _TYPED.get(family, frozenset()), "call": sites,
+                                         "generic": TYPE_PARAMETERS})
+    generic = type_parameter_names(parts.pop("generic", []))
     events = sorted(((node.start_byte, -node.end_byte, _PARTS[part], node) for part, nodes in parts.items() for node in nodes),
                     key=lambda event: event[:3])
     open_scopes: list[tuple[int, int]] = []    # (where it ends, its id), innermost last
@@ -145,24 +156,26 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
         if part == 0:           # a declaration whose own name belongs to the scope around it
             name = node.child_by_field_name("name")
             if open_scopes and name is not None:
-                bound[open_scopes[-1][1]].add(_text(name))
+                bound[open_scopes[-1][1]].setdefault(_text(name), set()).add(name.start_byte)
         elif part == 1:         # a scope opens
             open_scopes.append((node.end_byte, node.id))
-            bound[node.id], declared[node.id] = set(), {}
+            bound[node.id], stated[node.id] = {}, {}
             receiver = _receiver_name(family, node)
             if receiver:
                 receivers[node.id] = receiver
-                bound[node.id].add(receiver)
+                bound[node.id][receiver] = {-1}
         elif part == 2:
-            if open_scopes and not _is_require(node):
+            if (open_scopes or node.type in at_file_level) and not _is_require(node):
+                into = bound[open_scopes[-1][1] if open_scopes else _FILE]
                 for field in binders[node.type]:
                     for holder in ([node] if not field else node.children_by_field_name(field)):
-                        bound[open_scopes[-1][1]].update(_bound_names(holder, family))
+                        for name, where in _bound_names(holder, family):
+                            into.setdefault(name, set()).add(where)
         elif part == 3:
             if open_scopes:
-                known = declared[open_scopes[-1][1]]
-                for name, stated in _stated(family, node):
-                    known[name] = stated if known.get(name, stated) == stated else ""
+                known = stated[open_scopes[-1][1]]
+                for name, kind in _stated(family, node):
+                    known.setdefault(name, []).append(kind)
         else:
             callee = node.child_by_field_name(sites[node.type])
             if callee is None:
@@ -172,21 +185,64 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             if split is not None:
                 passed = node.child_by_field_name("arguments")
                 arity = sum(1 for child in passed.named_children if child.type != "comment") if passed is not None else -1
-                seen.append((*split, arity, tuple(scope for _, scope in open_scopes)))
+                # A function sees the file's loop variables only as it would any global; a call at file level is inside them.
+                seen.append((*split, arity, tuple(scope for _, scope in open_scopes) or (_FILE,)))
+    inside = _innermost(found, [name.start_byte for name, *_ in seen])
     out: list[Call] = []
-    for name, owner, via, arity, chain in seen:
-        position = name.start_byte
-        caller = next((index for _, start, end, index in callables if start <= position < end), None)
+    for (name, owner, via, arity, chain), caller in zip(seen, inside):
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
-        stated = next((declared[scope].get(first, "") for scope in reversed(chain) if first in bound[scope]), "") \
-            if head == "local" and owner is not None else ""
+        kind = _type_of(first, chain, bound, stated, generic) if head == "local" and owner is not None else ""
         out.append(Call(_text(name), _receiver(owner) if owner is not None else "", name.start_point[0] + 1,
-                        name.start_point[1], caller, via, head, stated, arity))
+                        name.start_point[1], caller, via, head, kind, arity))
     out.sort(key=lambda call: (call.line, call.column))
     return out
 
 
-def _head(start: Node, via: str, chain: tuple[int, ...], bound: dict[int, set[str]], receivers: dict[int, str]) -> tuple[str, str]:
+def _innermost(found: list[Definition], positions: list[int]) -> list[int | None]:
+    """For each position, the index of the innermost function or method it lies in. One sweep over both,
+    sorted: a file of ten thousand definitions is no slower per call than one of ten."""
+    spans = sorted((definition.start_byte, -definition.end_byte, index)
+                   for index, definition in enumerate(found) if definition.kind in _CALLABLE)
+    answer: list[int | None] = [None] * len(positions)
+    open_spans: list[tuple[int, int]] = []     # (where it ends, its index), innermost last
+    upcoming = 0
+    for order in sorted(range(len(positions)), key=positions.__getitem__):
+        position = positions[order]
+        while upcoming < len(spans) and spans[upcoming][0] <= position:
+            start, negative_end, index = spans[upcoming]
+            while open_spans and open_spans[-1][0] <= start:
+                open_spans.pop()
+            open_spans.append((-negative_end, index))
+            upcoming += 1
+        while open_spans and open_spans[-1][0] <= position:
+            open_spans.pop()
+        answer[order] = open_spans[-1][1] if open_spans else None
+    return answer
+
+
+def _type_of(name: str, chain: tuple[int, ...], bound: dict[int, dict[str, set[int]]],
+             stated: dict[int, dict[str, list[str]]], generic: set[str]) -> str:
+    """The one type the scope that binds `name` states for it. '' when it states none, states two, binds
+    the name again without saying (a loop over it, an unpacking), names a type parameter, or builds it
+    with something the function binds itself (a factory passed in is not the file's function of that name)."""
+    scope = next((scope for scope in reversed(chain) if name in bound[scope]), None)
+    if scope is None:
+        return ""
+    said = stated[scope].get(name, [])
+    if not said or not said[0] or len(set(said)) != 1 or len(said) < len(bound[scope][name] - {-1}):
+        return ""
+    kind = said[0]
+    if kind in generic:
+        return ""
+    if kind.endswith("()"):
+        builder = re.split(r"\.|::", kind[:-2])[0]
+        if any(builder in bound[each] for each in chain):
+            return ""
+    return kind
+
+
+def _head(start: Node, via: str, chain: tuple[int, ...], bound: dict[int, dict[str, set[int]]],
+          receivers: dict[int, str]) -> tuple[str, str]:
     """What the first name of a call is bound to (see `Call.head`), and that name."""
     node = start
     while node.child_count:
@@ -346,9 +402,9 @@ def _receiver_name(family: str, scope: Node) -> str:
     return ""
 
 
-def _bound_names(holder: Node, family: str) -> set[str]:
-    """The names a parameter list, an assignment target or a pattern binds."""
-    names: set[str] = set()
+def _bound_names(holder: Node, family: str) -> list[tuple[str, int]]:
+    """The names a parameter list, an assignment target or a pattern binds, each with where it stands."""
+    names: list[tuple[str, int]] = []
     stack = [holder]
     while stack:
         node = stack.pop()
@@ -356,7 +412,7 @@ def _bound_names(holder: Node, family: str) -> set[str]:
         if kind in _BOUND_LEAVES:
             text = _text(node)
             if family != "rust" or not text[:1].isupper():   # `None`, `Ordering::Less`: a pattern names them, it does not bind them
-                names.add(text)
+                names.append((text, node.start_byte))
         elif kind == "identifier" or kind not in _PATTERNS and node is not holder:
             continue
         elif kind in ("pair_pattern", "field_pattern") and (node.child_by_field_name("value") or node.child_by_field_name("pattern")):

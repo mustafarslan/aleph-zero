@@ -433,3 +433,102 @@ def test_a_call_through_an_import_from_outside_is_not_answered_with_a_method_tha
     }
     assert answers(files, "pkg/use.py", "post") is None             # requests.post, though Client.post is the tree's only `post`
     assert answers(files, "pkg/use.py", "post", nth=1) is None
+
+
+# ---- found by the independent review of the branch ------------------------------------------------
+
+def certainty(files, path, name, nth=0):
+    graph, sites = build(files)
+    found = edge(graph, sites, path, name, nth)
+    return None if found is None else (sorted(t.qualified for t in found.targets), found.certain)
+
+
+def test_a_method_inherited_past_a_base_from_outside_is_not_certain():
+    """The base that comes first may define it too, and nothing here can look."""
+    python = {
+        "app/mixins.py": "class ExportMixin:\n    def get_queryset(self):\n        pass\n    def only_here(self):\n        pass\n",
+        "app/admin.py": ("from django.contrib import admin\nfrom .mixins import ExportMixin\n\n"
+                         "class MyAdmin(admin.ModelAdmin, ExportMixin):\n    def run(self):\n        self.get_queryset()\n        self.own()\n"
+                         "    def own(self):\n        return super().get_queryset()\n\n"
+                         "class Other(ExportMixin, admin.ModelAdmin):\n    def run(self):\n        self.get_queryset()\n"),
+    }
+    assert certainty(python, "app/admin.py", "get_queryset") == (["ExportMixin.get_queryset"], False)
+    assert certainty(python, "app/admin.py", "get_queryset", nth=1) == (["ExportMixin.get_queryset"], False)    # super()
+    assert certainty(python, "app/admin.py", "own") == (["MyAdmin.own"], True)                    # its own: nothing comes before
+    assert certainty(python, "app/admin.py", "get_queryset", nth=2) == (["ExportMixin.get_queryset"], True)   # the mixin is first
+    go = {"go.mod": "module x\n", "p/p.go": "package p\n\nimport \"sync\"\n\ntype Deep struct{}\nfunc (Deep) Lock() {}\ntype Mid struct{ Deep }\n"
+                                            "type S struct {\n\tsync.Mutex\n\tMid\n}\nfunc (s *S) Test() { s.Lock() }\n"}
+    assert certainty(go, "p/p.go", "Lock") == (["Deep.Lock"], False)
+    java = {"a/Iface.java": "package a;\ninterface Iface {\n  default void close() {}\n}\n",
+            "a/C.java": "package a;\nimport java.io.InputStream;\nclass C extends InputStream implements Iface {\n  void run() { close(); this.close(); }\n}\n"}
+    assert certainty(java, "a/C.java", "close") == (["Iface.close"], False)
+    assert certainty(java, "a/C.java", "close", nth=1) == (["Iface.close"], False)
+
+
+def test_a_signature_too_long_to_be_kept_whole_does_not_decide_between_overloads():
+    annotation = '@RequestMapping(value = "' + "/a/very/long/path" * 16 + '", method = RequestMethod.POST, produces = "application/json")'
+    assert len(annotation) > 300
+    files = {"a/Base.java": "package a;\nclass Base {\n  String save(String s) { return s; }\n}\n",
+             "a/Ctl.java": "package a;\nclass Ctl extends Base {\n  " + annotation + "\n  public String save(String s) { return s; }\n  void run() { save(\"x\"); }\n}\n"}
+    targets, certain = certainty(files, "a/Ctl.java", "save")
+    assert "Ctl.save" in targets and not (targets == ["Base.save"])         # never the base alone: the override is right there
+    alone = {"a/Ctl.java": files["a/Ctl.java"].replace(" extends Base", "")}
+    assert certainty(alone, "a/Ctl.java", "save") == (["Ctl.save"], True)
+    many = ", ".join(f"String p{n}" for n in range(40))
+    wide = {"a/Ctl.java": "package a;\nclass Ctl {\n  void save(" + many + ") {}\n  void run() { save(" + ", ".join(['"x"'] * 40) + "); }\n}\n"}
+    assert certainty(wide, "a/Ctl.java", "save") == (["Ctl.save"], True)
+
+
+def test_overrides_are_recognised_through_annotations_and_cpp_defaults_do_not_narrow():
+    java = {"a/Base.java": "package a;\nclass Base {\n  void keep(String s) {}\n}\n",
+            "a/D.java": "package a;\nclass D extends Base {\n  void keep(@javax.validation.Valid String s) {}\n  void run() { keep(\"x\"); }\n}\n"}
+    assert certainty(java, "a/D.java", "keep") == (["D.keep"], True)
+    cpp = {"base.h": "struct Base { void save(int a); };\n",
+           "d.cpp": "#include \"base.h\"\nstruct D : Base { void save(int a, int b = 0); void run() { save(1); } };\n"}
+    found = certainty(cpp, "d.cpp", "save")
+    assert found is not None and "D.save" in found[0]                      # a default argument: one argument does call it
+
+
+def test_a_value_built_by_a_name_the_function_binds_itself_has_no_known_type():
+    files = {
+        "pkg/store.py": "class Store:\n    def save(self):\n        pass\n\nclass Other:\n    def save(self):\n        pass\n\ndef make_store() -> Store:\n    return Store()\n",
+        "pkg/use.py": ("from .store import make_store\n\ndef f(make_store):\n    s = make_store()\n    s.save()\n\n"
+                       "def g(kind, registry):\n    make_store = registry[kind]\n    s = make_store()\n    s.save()\n\n"
+                       "class Service:\n    def __init__(self, make_store):\n        self.store = make_store()\n    def run(self):\n        self.store.save()\n"),
+    }
+    for nth in range(3):
+        found = certainty(files, "pkg/use.py", "save", nth)
+        assert found is None or found[1] is False                          # the parameter is not the imported factory
+    rust = {"src/lib.rs": ("struct A;\nimpl A { fn go(&self) {} }\nstruct B;\nimpl B { fn go(&self) {} }\nfn make() -> A { A }\n"
+                           "mod tests {\n    use super::*;\n    fn make() -> B { B }\n    fn t() { let s = make(); s.go(); }\n}\n")}
+    assert certainty(rust, "src/lib.rs", "go") == (["B.go"], True)          # the inline module's own `make`
+
+
+def test_a_type_parameter_or_a_rebound_name_is_not_a_type_of_these_files():
+    go = {"go.mod": "module x\n", "p/a.go": "package p\n\nfunc F[T any](x T) { x.Lock() }\n", "p/b.go": "package p\n\ntype T struct{}\nfunc (t T) Lock() {}\n"}
+    found = certainty(go, "p/a.go", "Lock")
+    assert found is None or found[1] is False
+    ts = {"a.ts": "class T { save() {} }\nclass Repo<T> {\n  private kept: T;\n  run(item: T) { item.save(); this.kept.save(); }\n}\n"}
+    for nth in (0, 1):
+        found = certainty(ts, "a.ts", "save", nth)
+        assert found is None or found[1] is False
+    alias = {"pkg/store.py": "class Store:\n    def save(self):\n        pass\nclass Cache:\n    def save(self):\n        pass\n",
+             "pkg/use.py": "from .store import Store, Cache\n\nStore = Cache\n\ndef f(s: Store):\n    s.save()\n"}
+    found = certainty(alias, "pkg/use.py", "save")
+    assert found is None or found[1] is False
+
+
+def test_a_package_that_names_both_its_code_and_its_declarations_is_entered_by_its_code():
+    files = {"packages/x/package.json": '{"name": "x", "main": "x.js", "types": "x.d.ts"}',
+             "packages/x/x.d.ts": "export declare class X { run(): void; }\n",
+             "packages/x/x.js": "class X { run() {} }\nmodule.exports = { X };\n",
+             "app.js": "const { X } = require('x');\nnew X();\n"}
+    assert answers(files, "app.js", "X") == ("L1", "import-resolved", [("packages/x/x.js", "X")])
+
+
+def test_a_value_built_by_a_call_that_is_only_guessed_has_no_known_type():
+    files = dict(BUILT)
+    files["pkg/late.py"] = "from .plugins import registry\n\ndef f():\n    built = registry.build()\n    built.save()\n"
+    files["pkg/plugins.py"] = "registry = object()\n"
+    # `registry.build()` is answered by name (Factory.build is the only `build`), so what it returns is not known.
+    assert answers(files, "pkg/late.py", "save") == ("L1", "name", [("pkg/store.py", "Store.save"), ("pkg/store.py", "Other.save")])

@@ -17,6 +17,7 @@ mentions it.
 from __future__ import annotations
 
 import json
+import re
 import time
 import zlib
 from dataclasses import dataclass
@@ -33,11 +34,14 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 2           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 3           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for
 MANIFEST_LIMIT = 2000
+RENAMINGS = 2               # how many times a definition may change its name on the way to a caller and still be followed
+NAMES_FOLLOWED = 12         # names looked up for one question, the definition's own included
+_WORD = re.compile(r"\w")
 MANIFEST_BYTES = 262_144
 _TYPES = frozenset({"class", "interface", "enum", "type"})
 _EMPTY = (zlib.compress(b"[[],[],[]]", 1), zlib.compress(b"[]", 1))
@@ -66,7 +70,8 @@ class Reference:
     level: str           # 'L0' the same file, 'L1' another
     provenance: str      # 'syntactic', 'import-resolved', or 'name': found by its name alone
     candidates: int      # how many definitions this call may reach; 1 is not yet certain: see `certain`
-    certain: bool        # one candidate, and not by its name alone
+    certain: bool        # one candidate, not by its name alone, and nothing else in doubt
+    note: str = ""       # why a lone candidate is not certain, when the reason is not its name
 
 
 @dataclass(frozen=True)
@@ -104,7 +109,6 @@ def prepare(index: Index, view: View, budget_seconds: float, stop=None) -> int:
     if not todo:
         return 0
     deadline = _now() + budget_seconds
-    done = 0
     with gitio.Readers() as reader:
         for start in range(0, len(todo), PREPARE_BATCH):
             if _now() >= deadline or (stop is not None and stop()):
@@ -122,8 +126,7 @@ def prepare(index: Index, view: View, budget_seconds: float, stop=None) -> int:
                             "shape = excluded.shape, calls = excluded.calls", (oid, family, GRAPH_VERSION, *found))
                     except apsw.ConstraintError:
                         pass        # another session collected the blob meanwhile
-            done += len(batch)
-    return len(todo) - done
+    return len(pending(index))      # also what git could not supply: unread is unread, and the answer says so
 
 
 def _read(index: Index, view: View, reader: gitio.Readers, key: tuple[str, str]) -> tuple[bytes, bytes] | None:
@@ -284,31 +287,50 @@ def _reference(path: str, of_file: FileFacts, call: Call, edge: Edge, target: Ta
     caller = of_file.definitions[call.caller].qualified if call.caller is not None and call.caller < len(of_file.definitions) else ""
     return Reference(path, call.line, f"{call.receiver}{joined}{call.name}" if call.receiver else call.name, caller,
                      target.path, target.start_line, target.qualified, target.kind, edge.level, edge.provenance,
-                     len(edge.targets), edge.certain)
+                     len(edge.targets), edge.certain, edge.doubt)
 
 
 def callers(index: Index, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[list[Reference], bool]:
-    """Every call in the view that may reach one of `hits`: the certain ones first. Also whether
-    the text index named more places than were looked at."""
+    """Every call in the view that may reach one of `hits`: the certain ones first. Also whether the
+    answer may be short: the text index named more places than were looked at, or cannot look the name up.
+
+    A caller may know the definition under another name: `from .util import slugify as slug` in a
+    package's `__init__` makes `slug` the name its users write. The files that mention the definition's
+    own name say what else it is called, and those names are looked up too."""
     wanted = {(hit.path, hit.qualified, hit.line) for hit in hits}
     out: list[Reference] = []
     truncated = False
-    for name in sorted({hit.name for hit in hits}):
+    waiting = [(name, 0) for name in sorted({hit.name for hit in hits})]
+    looked: set[str] = set()
+    counted: set[tuple[str, int, int, str]] = set()
+    while waiting:
+        name, renamings = waiting.pop(0)
+        if name in looked:
+            continue
+        looked.add(name)
+        if not _WORD.search(name):
+            truncated = True    # `$`: nothing the text index keeps as a word
+            continue
         keys, cut = mentions(index, name)
         truncated = truncated or cut
         for key in keys:
             sites = _calls(index, key)
-            for path in index.paths_for(*key) if sites else ():
+            for path in index.paths_for(*key):
                 of_file = graph.files.get(path)
                 if of_file is None:
                     continue
-                written = {name} | {b.local for b in of_file.bindings if b.kind == "import" and b.name == name}
+                given = {b.local for b in of_file.bindings if b.name == name and b.kind in ("import", "reexport", "export")} - {"*", "default"}
+                if renamings < RENAMINGS and len(looked) + len(waiting) < NAMES_FOLLOWED:
+                    waiting += [(other, renamings + 1) for other in sorted(given - looked - {name})]
+                written = {name} | {b.local for b in of_file.bindings if b.name == name and b.kind == "import"}
                 for call in sites:
                     if call.name not in written:
                         continue
                     edge = graph.resolve(path, call)
                     for target in (edge.targets if edge is not None else ()):
-                        if (target.path, target.qualified, target.start_line) in wanted:
+                        site = (path, call.line, call.column, target.qualified)
+                        if (target.path, target.qualified, target.start_line) in wanted and site not in counted:
+                            counted.add(site)
                             out.append(_reference(path, of_file, call, edge, target))
     out.sort(key=lambda r: (not r.certain, r.candidates, r.path, r.line, r.target_path, r.target))
     return out, truncated
@@ -358,16 +380,24 @@ def text(answer: Answer) -> str:
             lines.append(f"{title}: {len(certain)} certain, {len(possible)} possible")
             for group in (certain, possible):
                 if group is possible and possible:
-                    lines.append("  possible (same name; the receiver's type is not stated):")
+                    lines.append("  possible:")
                 for item in group:
                     where = f"  {item.path}:{item.line}  " + (f"in {item.caller}  " if callers and item.caller else "") + f"{item.written}()"
                     if not callers or several:
                         where += f"  ->  {item.target_path}:{item.target_line}  {item.target}"
-                    lines.append(where + ("" if item.certain else f"  1 of {item.candidates} candidates"))
+                    if item.certain:
+                        why = ""
+                    elif item.provenance == "name":
+                        why = f"  by name alone, 1 of {item.candidates}: nothing states the receiver's type"
+                    elif item.candidates > 1:
+                        why = f"  1 of {item.candidates} candidates"
+                    else:
+                        why = f"  {item.note}"
+                    lines.append(where + why)
     if answer.unanswered:
         lines.append(f"note: {answer.unanswered} calls inside it reach nothing in this worktree (libraries, local functions)")
     if answer.truncated:
-        lines.append("note: more calls exist than are listed")
+        lines.append("note: the answer may be short: more definitions or calls than are listed, or a name that cannot be looked up")
     if answer.graph_pending:
         lines.append(f"note: the calls of {answer.graph_pending} files are not read yet; ask again for a complete answer")
     if answer.pending:

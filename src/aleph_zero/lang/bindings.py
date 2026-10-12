@@ -44,11 +44,12 @@ def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> tuple[list[Bindi
     family = "ecma" if profile.name in _ECMA else profile.name
     found = query.by_role(profile.name, tree, {
         "binds": _STATEMENTS.get(family, ()), "types": _TYPE_NODES.get(family, ()), "owners": _OWNERS.get(family, ()),
-        "assigns": _ASSIGNMENTS.get(family, ())})
+        "assigns": _ASSIGNMENTS.get(family, ()), "generic": TYPE_PARAMETERS})
+    generic = type_parameter_names(found.get("generic", []))
     in_order = lambda nodes: sorted(nodes, key=lambda node: (node.start_byte, -node.end_byte))  # noqa: E731
     assigned = in_order(found.get("assigns", []))
     return (_bindings(family, in_order(found.get("binds", []))), _bases(family, in_order(found.get("types", []))),
-            _fields(family, in_order(found.get("owners", [])), assigned, [node.start_byte for node in assigned]))
+            _fields(family, in_order(found.get("owners", [])), assigned, [node.start_byte for node in assigned], generic))
 
 
 def bindings(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Binding]:
@@ -565,7 +566,19 @@ def fields(profile: LanguageProfile, tree: Tree, data: bytes) -> list[tuple[str,
     return facts(profile, tree, data)[2]
 
 
-def _fields(family: str, owners: list[Node], assigned: list[Node], starts: list[int]) -> list[tuple[str, str, str]]:
+# Where a function, a method or a type declares names that stand for types.
+TYPE_PARAMETERS = ("type_parameter", "type_parameter_declaration", "constrained_type_parameter", "optional_type_parameter")
+
+
+def type_parameter_names(nodes: list[Node]) -> set[str]:
+    """`T` of `class Repo<T>` or `func F[T any]`: a name for a type, never one of the file's types. (Python's
+    grammar calls the arguments of `Optional[Store]` by the same name: those are uses, not declarations.)"""
+    return {_text(node.child_by_field_name("name") or (node.named_children[0] if node.named_children else node))
+            for node in nodes if node.parent is None or node.parent.type != "generic_type"}
+
+
+def _fields(family: str, owners: list[Node], assigned: list[Node], starts: list[int],
+            generic: set[str] = frozenset()) -> list[tuple[str, str, str]]:
     said: dict[tuple[str, str], list[tuple[str, bool]]] = {}      # (type, field) -> (a type, whether it is declared)
 
     def inside(node: Node | None) -> list[Node]:
@@ -587,7 +600,7 @@ def _fields(family: str, owners: list[Node], assigned: list[Node], starts: list[
         declared = [kind for kind, is_declared in stated if is_declared]
         inferred = {kind for kind, _ in stated}
         kind = declared[0] if declared else next(iter(inferred)) if len(inferred) == 1 else ""   # given two things: no one type
-        if kind:
+        if kind and kind not in generic:
             out.append((owner, name, kind))
     return out
 
@@ -694,9 +707,12 @@ def _python_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> I
             continue
         receiver = _text(listed[0])
         typed = {}
+        passed = set()      # every parameter's name: a factory passed in is not the file's function of that name
         for parameter in listed[1:]:
+            name = parameter if parameter.type == "identifier" else \
+                parameter.child_by_field_name("name") or (parameter.named_children[0] if parameter.named_children else None)
+            passed.add(_text(name))
             if parameter.type in ("typed_parameter", "typed_default_parameter"):
-                name = parameter.child_by_field_name("name") or (parameter.named_children[0] if parameter.named_children else None)
                 typed[_text(name)] = named_type(_text(parameter.child_by_field_name("type")))
         for assigned in inside(method.child_by_field_name("body")):
             left, right, kind = (assigned.child_by_field_name(field) for field in ("left", "right", "type"))
@@ -706,7 +722,8 @@ def _python_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> I
             if kind is not None:
                 yield name, named_type(_text(kind)), True
             elif right is not None and right.type == "call":
-                yield name, constructed(_text(right.child_by_field_name("function"))), False
+                built = constructed(_text(right.child_by_field_name("function")))
+                yield name, "" if re.split(r"\.", built)[0].removesuffix("()") in passed else built, False
             elif right is not None:
                 yield name, typed.get(_text(right), "") if right.type == "identifier" else "", False
 

@@ -29,7 +29,7 @@ import re
 import tomllib
 from collections import OrderedDict
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
@@ -39,7 +39,7 @@ from .lang.definitions import Definition
 
 CANDIDATE_LIMIT = 20
 HOPS = 6
-FILES_KEPT = 500            # records of files a graph keeps loaded (some 15 KB each); the least recently used go first
+FILES_KEPT = 500            # records of files a graph keeps loaded (some 30 KB each); the least recently used go first
 # The three extensions over oxn's resolver, switchable so each can be measured apart (ADR-003).
 FEATURES = frozenset({"reexports", "packages", "receivers"})
 MANIFESTS = ("go.mod", "Cargo.toml", "package.json", "tsconfig.json", "tsconfig.base.json")
@@ -51,11 +51,14 @@ _VALUES = frozenset({"constant", "variable"})
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
 _IMPLICIT_THIS = frozenset({"java", "cpp"})
 _OVERLOADING = frozenset({"java", "cpp"})         # one name, several methods, told apart by their arguments
+_TOLD_BY_COUNT = frozenset({"java"})              # ... where the number of arguments says which: C++ has defaults
 _PACKAGE_WIDE_TYPES = frozenset({"go", "rust"})   # a type's methods may be declared in another file
 _ECMA_SUFFIXES = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs")
 _RUST_ROOTS = ("lib.rs", "main.rs")
 _SEGMENT = re.compile(r"^[A-Za-z_$][\w$]*$")
 _UNSTATED = "unstated"      # the source does not say what type a value has: the name is all there is to go on
+_PAST_OUTSIDE = "inherited past a base that is not among these files, which may declare it too"
+_OUTSIDE = ""               # the file of a base that could not be placed: a stand-in kept in a lookup order
 
 
 class Defined(NamedTuple):
@@ -162,8 +165,9 @@ class _File:
         self.bases: dict[str, list[str]] = {}           # type -> what it is built on, as written
         self.fields: dict[str, dict[str, str]] = {}     # type -> field -> its type as written
         self.imported = frozenset(binding.local for binding in facts.bindings if binding.kind == "import")
+        required = self.imported if facts.family in _ECMA else frozenset()
         for target in self.definitions:
-            if target.kind in _VALUES and target.name in self.imported and "." not in target.qualified:
+            if target.kind in _VALUES and target.name in required and "." not in target.qualified:
                 continue    # `const Thing = require('./thing')` declares nothing: the name is the import
             self.kinds[target.qualified] = target.kind
             if target.kind in _UNNAMED:
@@ -246,6 +250,7 @@ class Edge:
     level: str          # 'L0' | 'L1'
     provenance: str     # 'syntactic' | 'import-resolved' | 'name'
     rule: str = ""      # which step answered: for reports, decides nothing
+    doubt: str = ""     # why a lone target is still not certain, when the reason is not its name: see `certain`
 
     @property
     def confidence(self) -> float:
@@ -255,8 +260,10 @@ class Edge:
     def certain(self) -> bool:
         """One target, reached by what the code says and not by its name alone. A lone candidate found by
         name is not certain: the receiver's type is unknown, and a library's method of that name would not
-        be among the candidates at all (on ripgrep, three of four such answers at library calls were wrong)."""
-        return len(self.targets) == 1 and self.provenance != "name"
+        be among the candidates at all (on ripgrep, three of four such answers at library calls were wrong).
+        Nor is a method inherited past a base that is not among these files: that base comes first, and may
+        declare the method itself."""
+        return len(self.targets) == 1 and self.provenance != "name" and not self.doubt
 
 
 class Graph:
@@ -289,6 +296,7 @@ class Graph:
         self._java_packages: dict[str, list[str]] = {}
         self._rooted: dict[str, list[tuple[str, str]]] = {}  # what `_python_rooted` has answered
         self._orders: dict[tuple[str, str], list[tuple[str, str]]] = {}   # Python classes' method resolution orders
+        self._doubt = ""                                    # set while one call is answered: see `Edge.doubt`
         self._go_names: dict[str, str] = {}                 # a Go import path -> the name its package gives itself
         self._read_layout(manifests or {})
 
@@ -403,7 +411,7 @@ class Graph:
                 elif name == "package.json":
                     manifest = json.loads(text)
                     if isinstance(manifest, dict) and isinstance(manifest.get("name"), str):
-                        entries = [str(manifest[key]) for key in ("source", "types", "typings", "module", "main")
+                        entries = [str(manifest[key]) for key in ("source", "module", "main", "types", "typings")
                                    if isinstance(manifest.get(key), str)]
                         self._node_packages[manifest["name"]] = (here, entries)
                 elif name.startswith("tsconfig"):
@@ -427,11 +435,19 @@ class Graph:
         facts = self.files.get(path)
         if facts is None:
             return None
-        if not call.via:
-            return self._plain(path, facts, call)
-        if call.head in ("self", "super"):
-            return self._on_self(path, facts, call)
-        return self._qualified(path, facts, call)
+        outer, self._doubt = self._doubt, ""     # answering one call may ask about another (what built a value)
+        try:
+            if not call.via:
+                found = self._plain(path, facts, call)
+            elif call.head in ("self", "super"):
+                found = self._on_self(path, facts, call)
+            else:
+                found = self._qualified(path, facts, call)
+            if found is not None and self._doubt and found.provenance != "name":
+                found = replace(found, doubt=self._doubt)
+            return found
+        finally:
+            self._doubt = outer
 
     def _plain(self, path: str, facts: FileFacts, call: Call) -> Edge | None:
         """`helper()`: the file's own scope, then its imports, then its package, then the name alone."""
@@ -479,7 +495,7 @@ class Graph:
         """`a.f()` and `a::f()` where `a` is not the method's own object."""
         segments = _segments(call.receiver)
         if call.head == "local" and call.receiver_type and segments is not None and "receivers" in self.features:
-            kinds = self._value_type(path, call.receiver_type)
+            kinds = self._value_type(path, call.receiver_type, call.caller)
             typed = (_UNSTATED if kinds is None else
                      self._through(path, kinds, list(segments[1:]), call.name, call.arity) if kinds else None)
             if typed is not _UNSTATED:
@@ -584,8 +600,17 @@ class Graph:
         file = self._of(kind[0])
         family = file.family if file is not None else ""
         if family == "python":
+            passed_outside = False
             order = self._linearized(kind)
-            return next((own for each in (order[1:] if above else order) if (own := self._own_members(*each, name))), [])
+            for each in (order[1:] if above else order):
+                if each[0] == _OUTSIDE:
+                    passed_outside = True
+                    continue
+                own = self._own_members(*each, name)
+                if own:
+                    self._doubt = _PAST_OUTSIDE if passed_outside else self._doubt
+                    return own
+            return []
         if family == "go":
             return self._shallowest(kind, name, above)
         seen = seen if seen is not None else set()
@@ -596,19 +621,27 @@ class Graph:
         own = [] if above else self._own_members(path, qualified, name)
         if own and family not in _OVERLOADING:
             return own
-        fitting = [target for target in own if self._fits(target, arity)]
+        fitting = [target for target in own if family not in _TOLD_BY_COUNT or self._fits(target, arity)]
         inherited: list[Target] = []
+        passed_outside = False
         for declared_in, base in self._bases_of(path, qualified):
-            for found in self._type(declared_in, base):
+            placed = self._type(declared_in, base)
+            passed_outside = passed_outside or not placed
+            for found in placed:
                 inherited = self._method(found, name, False, seen, arity)
                 if inherited:
                     break
             if inherited:
                 break
         if not fitting:
+            if inherited and passed_outside:
+                self._doubt = _PAST_OUTSIDE
             return inherited        # nothing here takes that many arguments (or nothing here has the name at all)
         # An inherited method of the same name that this type does not override takes part in the choice.
+        # A signature too long to have been kept whole says nothing: its method may or may not be the override.
         shapes = {self._parameters(target) for target in own}
+        if None in shapes:
+            return fitting + inherited
         return fitting + [target for target in inherited if self._parameters(target) not in shapes]
 
     def _linearized(self, kind: tuple[str, str], active: frozenset[tuple[str, str]] = frozenset()) -> list[tuple[str, str]]:
@@ -620,9 +653,10 @@ class Graph:
         bases: list[tuple[str, str]] = []
         for declared_in, base in self._bases_of(*kind):
             found = self._type(declared_in, base)
-            if found and found[0] not in bases and found[0] != kind:
-                bases.append(found[0])
-        sequences = [list(self._linearized(base, active | {kind})) for base in bases] + [list(bases)]
+            placed = found[0] if found else (_OUTSIDE, base)    # kept in the order: what comes after it is inherited past it
+            if placed not in bases and placed != kind:
+                bases.append(placed)
+        sequences = [[base] if base[0] == _OUTSIDE else list(self._linearized(base, active | {kind})) for base in bases] + [list(bases)]
         order = [kind]
         while any(sequences):
             head = next((sequence[0] for sequence in sequences
@@ -643,29 +677,41 @@ class Graph:
         """Go promotes the method of the embedded type nearest the top; two at one depth are both returned."""
         level, seen = [kind], {kind}
         skip = above
+        passed_outside = False      # an embedded type from outside, shallower than where the method is found
         while level and len(seen) <= 64:
             found = [] if skip else [target for each in level for target in self._own_members(*each, name)]
             if found:
+                self._doubt = _PAST_OUTSIDE if passed_outside else self._doubt
                 return found
             skip = False
             below: list[tuple[str, str]] = []
+            outside_here = False
             for each in level:
                 for declared_in, base in self._bases_of(*each):
-                    for embedded in self._type(declared_in, base):
+                    placed = self._type(declared_in, base)
+                    outside_here = outside_here or not placed
+                    for embedded in placed:
                         if embedded not in seen:
                             seen.add(embedded)
                             below.append(embedded)
-            level = below
+            # What is found one level further down is deeper than an outside type embedded at this one.
+            found_next = [target for each in below for target in self._own_members(*each, name)]
+            if found_next:
+                self._doubt = _PAST_OUTSIDE if passed_outside else self._doubt
+                return found_next
+            passed_outside = passed_outside or outside_here
+            level, skip = below, True
         return []
 
-    def _parameters(self, target: Target) -> tuple[str, ...]:
-        """The parameter types a method's signature writes, in order: what tells an override from an overload."""
+    def _parameters(self, target: Target) -> tuple[str, ...] | None:
+        """The parameter types a method's signature writes, in order: what tells an override from an overload.
+        None when the signature does not show them whole (it is kept only up to a length)."""
         signature = self.source.signature(target)
         named = re.search(rf"(?<![\w$]){re.escape(target.name)}\s*\(", signature)     # not the brackets of an annotation before it
-        opening = named.end() - 1 if named else signature.find("(")
-        if opening < 0:
-            return ()
-        depth, start, parts = 0, opening + 1, []
+        if named is None:
+            return None
+        opening = named.end() - 1
+        depth, start, parts, closed = 0, opening + 1, [], False
         for index in range(opening, len(signature)):
             char = signature[index]
             if char in "(<[":
@@ -674,23 +720,28 @@ class Graph:
                 depth -= 1
                 if depth == 0:
                     parts.append(signature[start:index])
+                    closed = True
                     break
             elif char == "," and depth == 1:
                 parts.append(signature[start:index])
                 start = index + 1
+        if not closed:
+            return None
         kinds = []
         for part in parts:
-            words = [word for word in re.sub(r"@\w+(\([^)]*\))?", " ", part).split() if word != "final"]
+            words = [word for word in re.sub(r"@[\w.]+(\([^)]*\))?", " ", part).split() if word != "final"]
             if words:
                 kinds.append(" ".join(words[:-1]) if len(words) > 1 else words[0])
         return tuple(kinds)
 
     def _fits(self, target: Target, arity: int) -> bool:
         """Whether a call passing `arity` arguments can be a call of this method. Anything that is not a
-        method, and any call whose arguments are not known, fits."""
+        method, any call whose arguments are not known, and any method whose parameters are not, fits."""
         if arity < 0 or target.kind != "method":
             return True
         kinds = self._parameters(target)
+        if kinds is None:
+            return True
         return arity >= len(kinds) - 1 if kinds and kinds[-1].endswith("...") else arity == len(kinds)
 
     def _own_members(self, path: str, qualified: str, name: str) -> list[Target]:
@@ -744,6 +795,8 @@ class Graph:
         if here:
             return [(path, qualified) for qualified in here]
         facts = self.files[path]
+        if self._kinds[path].get(head) in _VALUES:
+            return []       # `Store = Cache` at file level: whatever `Store` was imported as, it is something else now
         bound = self._bound[path].get(head) or self._go_bound(path, head)
         if bound:
             found: list[tuple[str, str]] = []
@@ -801,7 +854,7 @@ class Graph:
                     return inherited
         return None
 
-    def _value_type(self, path: str, written: str) -> list[tuple[str, str]] | None:
+    def _value_type(self, path: str, written: str, caller: int | None = None) -> list[tuple[str, str]] | None:
         """The types of these files that a type written in `path` stands for; [] when it is none of them;
         None when it cannot be told (the result of a call that is not certainly a constructor of these files)."""
         if not written.endswith("()"):
@@ -810,7 +863,7 @@ class Graph:
         if segments is None:
             return None
         joined = "::" if "::" in written else "."
-        built = self.resolve(path, Call(segments[-1], joined.join(segments[:-1]), 0, 0, None,
+        built = self.resolve(path, Call(segments[-1], joined.join(segments[:-1]), 0, 0, caller,
                                         "" if len(segments) == 1 else "path" if joined == "::" else "member"))
         if built is None:
             head = self._bound.get(path, {}).get(segments[0])
@@ -1206,12 +1259,17 @@ class Graph:
         """Every definition of the name: the last resort, and marked as such."""
         pool = [target for target in self._named.get((_group(facts.family), call.name), ())
                 if (target.kind in _MEMBERS or "." in target.qualified) == members and self._visible(target, path, facts.family)
-                and not (target.kind in _VALUES and target.name in (self._of(target.path) or _NO_FILE).imported)]
+                and not (target.kind in _VALUES and self._is_import(target))]
         if not pool or len(pool) > CANDIDATE_LIMIT:
             return None
         here = _parent(path)
         pool.sort(key=lambda target: (target.path != path, _parent(target.path) != here, target.path, target.start_line))
         return Edge(tuple(pool), "L1", "name", rule)
+
+    def _is_import(self, target: Target) -> bool:
+        """`const Thing = require('./thing')`: a definition by its form, an import by what it does."""
+        file = self._of(target.path)
+        return file is not None and file.family in _ECMA and target.name in file.imported
 
     @staticmethod
     def _visible(target: Target, path: str, family: str) -> bool:

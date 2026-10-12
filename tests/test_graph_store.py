@@ -132,8 +132,8 @@ def test_the_answer_as_text_keeps_what_is_certain_apart_from_what_is_possible(re
         "src/app/store.py:2  method  Store.save",
         "callers: 1 certain, 1 possible",
         "  src/app/service.py:7  in Service.run  self.store.save()",
-        "  possible (same name; the receiver's type is not stated):",
-        "  src/app/service.py:9  in Service.run  loose.save()  1 of 2 candidates",
+        "  possible:",
+        "  src/app/service.py:9  in Service.run  loose.save()  by name alone, 1 of 2: nothing states the receiver's type",
         "callees: none in this worktree",
     ]
     text = callgraph.text(app(repo).references("Service.run", direction="callees"))
@@ -142,9 +142,9 @@ def test_the_answer_as_text_keeps_what_is_certain_apart_from_what_is_possible(re
         "callees: 2 certain, 2 possible",
         "  src/app/service.py:7  self.store.save()  ->  src/app/store.py:2  Store.save",
         "  src/app/service.py:8  helper()  ->  src/app/service.py:11  helper",
-        "  possible (same name; the receiver's type is not stated):",
-        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:2  Store.save  1 of 2 candidates",
-        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:6  Cache.save  1 of 2 candidates",
+        "  possible:",
+        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:2  Store.save  by name alone, 1 of 2: nothing states the receiver's type",
+        "  src/app/service.py:9  loose.save()  ->  src/app/store.py:6  Cache.save  by name alone, 1 of 2: nothing states the receiver's type",
     ]
     assert callgraph.text(app(repo).references("nowhere_at_all")) == 'no definition named "nowhere_at_all" in this worktree'
 
@@ -161,3 +161,48 @@ def test_callers_and_callees_on_the_command_line(repo, capsys):
     assert cli.main(["--cwd", str(repo.root), "callees", "Service.run", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert [item["target"] for item in payload["callees"]][:2] == ["Store.save", "helper"] and payload["callers"] == []
+
+
+def test_callers_under_a_name_given_by_a_renaming_re_export_are_found(repo):
+    repo.write("lib/__init__.py", "from .util import slugify as slug\n")
+    repo.write("lib/util.py", "def slugify(text):\n    return text\n")
+    repo.write("main.py", "from lib import slug\n\ndef go():\n    return slug('x')\n")
+    answer = Engine(repo.root).references("slugify", direction="callers")
+    assert [(r.path, r.line, r.written, r.certain) for r in answer.callers] == [("main.py", 4, "slug", True)]
+
+
+def test_a_file_that_cannot_be_read_is_reported_as_not_read(repo, monkeypatch):
+    from aleph_zero import callgraph
+
+    engine = app(repo)
+    engine.search("refresh token")
+    monkeypatch.setattr(callgraph, "_read", lambda *args: None)
+    answer = engine.references("helper")
+    assert answer.graph_pending > 0 and "not read yet" in callgraph.text(answer)
+
+
+def test_what_cannot_be_looked_up_or_listed_in_full_is_said(repo):
+    from aleph_zero import callgraph
+
+    for n in range(10):
+        repo.write(f"many/m{n}.py", "def same_name():\n    pass\n")
+    repo.write("dollar.js", "function $(x) { return x; }\n$('a');\n")
+    engine = Engine(repo.root)
+    assert engine.references("same_name").truncated is True          # ten definitions: eight are answered for
+    assert engine.references("$", direction="callers").truncated is True   # the text index cannot look such a name up
+    repo.write("fast.py", "def dumps(x):\n    pass\n")
+    repo.write("slow.py", "def dumps(x):\n    pass\n")
+    repo.write("use.py", "try:\n    from fast import dumps\nexcept ImportError:\n    from slow import dumps\n\ndef f():\n    dumps(1)\n")
+    text = callgraph.text(engine.references("dumps", direction="callers"))
+    assert "receiver" not in text and "1 of 2 candidates" in text    # two imports of one name: no receiver is involved
+
+
+def test_an_answer_in_doubt_says_why(repo):
+    from aleph_zero import callgraph
+
+    repo.write("adm/mixins.py", "class ExportMixin:\n    def get_queryset(self):\n        pass\n")
+    repo.write("adm/admin.py", "from django.contrib import admin\nfrom .mixins import ExportMixin\n\n"
+                               "class MyAdmin(admin.ModelAdmin, ExportMixin):\n    def run(self):\n        self.get_queryset()\n")
+    answer = Engine(repo.root).references("ExportMixin.get_queryset", direction="callers")
+    assert [(r.path, r.line, r.candidates, r.certain) for r in answer.callers] == [("adm/admin.py", 6, 1, False)]
+    assert "inherited past a base that is not among these files" in callgraph.text(answer)
