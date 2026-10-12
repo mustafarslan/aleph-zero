@@ -110,3 +110,9 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **A held-out corpus for Go and Rust.** The resolver was developed against the six corpora it is graded on. Python and TypeScript were also graded on repositories it had never seen (ADR-003). For Go and Rust no such corpus is on this machine; making one needs the network (clone a repository, run its SCIP indexer).
 - **C and C++.** The readers exist; nothing grades them (no SCIP indexer for them is installed).
 
+## 10. What M8 needs from you before it can start
+
+- **What:** M8, the architectural knowledge graph, starts "with frameworks in the owner's repos": extractors for routes, ORM models and migrations, environment reads, broker topics. Which repositories, and which frameworks in them (Django, FastAPI, Spring, NestJS, something else)? One or two repositories to name is enough to begin.
+- **Why it waits:** I do not look through your repositories to find out. M9 (SCIP import) is being built meanwhile, since it needs nothing from you.
+- **What does not wait:** the part of M8 that has a bar of its own, retrieval of decisions (ADR text) against oxn's 100 labelled pairs, can be built without the answer.
+

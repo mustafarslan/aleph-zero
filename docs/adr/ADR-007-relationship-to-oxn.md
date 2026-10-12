@@ -65,7 +65,7 @@ SCIP ingestion comes before the resolver's acceptance gate, because the resolver
 | `definitions.py` | The containment walk, the bound-name rule for anonymous callables, receiver and `impl` ownership | Written for retrieval: signatures, doc comments and docstrings, line ranges that include decorators and the comment above. Callable bodies are not walked, so closures and locals are not name candidates (one of the oxn behaviours ADR-007 said not to copy) |
 | `imports.py` | The whole extractor, copied and adapted | ECMAScript imports and re-exports record the names they take; `#include` for C and C++ |
 
-Not ported yet, by the order above: module resolution, the L0/L1 resolver, the SCIP reader and the graded evaluation harness (M7 and M9).
+Ported since (M7, 2026-10-12): the SCIP wire reader (`scip.py`), the grading protocol (`bench/eval/graph_grade.py`) and how Go, Rust and Java spell an import (`lang/bindings.py`). The L0/L1 resolver follows oxn's order of steps and its measured rules about qualified calls, and is otherwise written for Aleph (ADR-003).
 
 **The parser library's own extraction was evaluated and not used.** `tree-sitter-language-pack` 1.21 offers `process()`, which returns structure, symbols and imports. On one sample file per language it returned unnamed classes and a wrong function name for C++, no constructors or fields for Java, no types or constants for Go, no docstrings for Python, and an unnamed TypeScript abstract class. A test keeps it as a floor: every named item it finds on the samples must be found by ours, and ours must find more. The library is used for parsers only.
 
