@@ -39,7 +39,10 @@ GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for readi
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
-RECORD_EMBED_SECONDS = 5.0      # for the vectors of a view's decision records, made once and kept
+RECORD_EMBED_SECONDS = 5.0      # in all, for the vectors of a view's decision records at one question; made once and kept
+RECORD_BATCH = 16               # records embedded and kept at a time
+RECORD_RETRY_SECONDS = 30.0     # after the worker failed to make them, before it is asked again
+RECORD_WRITE_MS = 200           # how long keeping them waits for another session's write
 # A session's share of the machine-wide budget (ADR-005): four sessions and the worker's
 # 490 MB worst case inside 1,024 MB. A session usually holds 40 to 60 MB.
 SESSION_MEMORY_MB = 130
@@ -103,6 +106,7 @@ class Engine:
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
         self._records: dict[Path, tuple] = {}   # per worktree: its decision records and what its oxn.yaml states, read once per view
+        self._records_failed: dict[Path, tuple[float, str]] = {}   # per worktree: when the records' vectors could not be made, and why
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
         self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
@@ -323,7 +327,7 @@ class Engine:
         records = cached[1]
         by_vectors, nearness, note = [], None, ""
         if rrf_k != 0 and task.strip() and records.decisions:
-            if decisions.FUSION == "convex":
+            if decisions.FUSION == "convex" and rrf_k is None:      # a `rrf_k` given asks for the fusion by rank, by name
                 nearness, note = self._record_nearness(view, task, records)
             else:
                 by_vectors, note = self._nearest_records(view, task, records)
@@ -378,19 +382,27 @@ class Engine:
         they cannot: switched off by hand, no worker running (a query never starts one), or it did not answer in
         time. All records or none: a ranking over some of them would be scaled wrongly. A record's vector is
         made once and kept by its text; it does not wait for the worktree's chunks to be embedded, and does
-        not follow the verdict for the project's language, which is about searching code."""
+        not follow the verdict for the project's language, which is about searching code.
+
+        The vectors of a view's records are made at the first question, in parts, each kept as it is made, for
+        at most RECORD_EMBED_SECONDS in all. A worker that is busy or fails therefore costs one slow answer by
+        words, not one at every question: what was made stays, and it is not asked again for RECORD_RETRY_SECONDS."""
         if self.dense is False:
             return None, ""
         import hashlib
 
         import numpy as np
 
-        from .embed import worker
+        from .embed import setup, worker
         from .embed.client import VECTOR_KIND, EmbedClient, EmbedPool, Unavailable
 
         sock = worker.socket_path()
         if not sock.exists():
-            return None, "the embedding worker is not running"
+            # Somebody who never set the worker up is not told so at every question; words are what they have.
+            return None, "the embedding worker is not running" if setup.installed() else ""
+        failed = self._records_failed.get(view.root)
+        if failed is not None and time.monotonic() - failed[0] < RECORD_RETRY_SECONDS:
+            return None, failed[1]
         conn = self._index(view).conn
         texts = [decisions.record_text(each) for each in records.decisions]
         hashes = [hashlib.sha256(text.encode("utf-8", "replace")).hexdigest() for text in texts]
@@ -400,24 +412,44 @@ class Engine:
             kept.update(conn.execute(f"SELECT text_hash, vector FROM record_vectors WHERE kind = ? AND text_hash IN ({','.join('?' * len(some))})",
                                      (VECTOR_KIND, *some)))
         missing = [at for at, key in enumerate(hashes) if key not in kept]
+        deadline = time.monotonic() + RECORD_EMBED_SECONDS
         try:
-            if missing:
-                pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots(), timeout=RECORD_EMBED_SECONDS)
+            for start in range(0, len(missing), RECORD_BATCH):
+                part, left = missing[start:start + RECORD_BATCH], deadline - time.monotonic()
+                if left <= 0:
+                    raise Unavailable(f"the vectors of {len(missing) - start} of {len(texts)} decision records are still to be made")
+                pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots(), timeout=left)
                 try:
-                    made = pool.embed([texts[at] for at in missing], kind="document")
+                    made = pool.embed([texts[at] for at in part], kind="document")
                 finally:
                     pool.close()
-                rows = [(hashes[at], VECTOR_KIND, np.ascontiguousarray(row, dtype=np.float32).tobytes()) for at, row in zip(missing, made)]
-                with transaction(conn):
-                    conn.executemany("INSERT OR REPLACE INTO record_vectors(text_hash, kind, vector) VALUES (?, ?, ?)", rows)
+                rows = [(hashes[at], VECTOR_KIND, np.ascontiguousarray(row, dtype=np.float32).tobytes()) for at, row in zip(part, made)]
                 kept.update((key, blob) for key, _, blob in rows)
+                self._keep_record_vectors(conn, rows)
             if self._embedder is None or self._embedder.socket_path != sock:
                 self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
             query = self._embedder.embed([task[:decisions.CUT]], kind="query")[0]
         except Unavailable as exc:
+            if missing:     # the records' vectors, not one query that found the worker asleep: do not ask at every question
+                self._records_failed[view.root] = (time.monotonic(), str(exc))
             return None, str(exc)
+        self._records_failed.pop(view.root, None)
         matrix = np.stack([np.frombuffer(kept[key], dtype=np.float32) for key in hashes])
         return dict(zip((each.path for each in records.decisions), (matrix @ query).tolist())), "used"
+
+    @staticmethod
+    def _keep_record_vectors(conn, rows: list[tuple]) -> None:
+        """Vectors in hand are used whether or not they can be kept. Another session may hold the index's write
+        lock (it is embedding, or indexing): this one does not wait for it and does not fail; the vectors are
+        made again at a later question."""
+        conn.set_busy_timeout(RECORD_WRITE_MS)
+        try:
+            with transaction(conn):
+                conn.executemany("INSERT OR REPLACE INTO record_vectors(text_hash, kind, vector) VALUES (?, ?, ?)", rows)
+        except apsw.BusyError:
+            pass
+        finally:
+            conn.set_busy_timeout(store_db.BUSY_MS)
 
     def _nearest_records(self, view: View, task: str, records: decisions.Records) -> tuple[list[str], str]:
         """The records' paths in the order of their nearest chunk to the task, and how vectors took part."""

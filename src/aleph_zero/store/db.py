@@ -15,6 +15,7 @@ import apsw
 from .. import gitio
 
 SCHEMA_VERSION = 10
+BUSY_MS = 5000       # how long a statement waits for another session's write
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -242,13 +243,13 @@ def _upgrade_8(conn: apsw.Connection) -> None:
     conn.execute(_SCHEMA.read_text())
 
 
-# Versions that are brought up to date where they are, one step at a time. Anything older
-# is a cache of a different shape and is rebuilt; these hold vectors that took GPU time.
 def _upgrade_9(conn: apsw.Connection) -> None:
     """Schema 9 to 10: the table the vectors of whole decision records are kept in. It starts empty."""
     conn.execute(_SCHEMA.read_text())
 
 
+# Versions that are brought up to date where they are, one step at a time. Anything older
+# is a cache of a different shape and is rebuilt; these hold vectors that took GPU time.
 _UPGRADES = {4: _upgrade_4, 5: _upgrade_5, 6: _upgrade_6, 7: _upgrade_7, 8: _upgrade_8, 9: _upgrade_9}
 
 
@@ -297,7 +298,7 @@ def _open(path: Path) -> apsw.Connection:
         raise StoreError(f"SQLite {apsw.sqlite_lib_version()} is older than {'.'.join(map(str, MIN_SQLITE))}")
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = apsw.Connection(str(path))
-    conn.set_busy_timeout(5000)
+    conn.set_busy_timeout(BUSY_MS)
     _retry_while_busy(lambda: conn.pragma("journal_mode", "wal"))
     conn.pragma("synchronous", "normal")
     # 8 MB of page cache per session. 32 MB indexed Django no faster (10.1 s against 10.2 s),

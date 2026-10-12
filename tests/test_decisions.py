@@ -277,11 +277,9 @@ def test_the_engine_ranks_decisions_by_words_and_record_vectors_when_a_worker_ru
     assert [hit.number for hit in answer.decisions] == [hit.number for hit in kept.rank(task, nearness=near, a=decisions.A)]
     alone = engine.decisions(task, rrf_k=0)
     assert alone.vectors == "" and all(hit.sources == ("words",) for hit in alone.decisions)   # asked for words alone: words alone
-    # the records' vectors are kept: a second engine does not make them again
-    count = lambda: engine._index(engine._view(None)).conn.execute("SELECT count(*) FROM record_vectors").fetchone()[0]  # noqa: E731
-    assert count() == 4
+    assert _kept(engine) == 4                                                           # the records' vectors are kept, by their text
     repo.write("docs/adr/0012-use-an-event-bus.md", BUS + "\nAmended.\n")
-    assert engine.decisions(task).vectors == "used" and count() == 5                       # one record changed: one vector more
+    assert engine.decisions(task).vectors == "used" and _kept(engine) == 5              # one record changed: one vector more
 
 
 def test_without_a_worker_or_switched_off_by_hand_the_fused_ranker_is_words_alone_and_says_so(repo, fake_worker, monkeypatch):
@@ -290,10 +288,131 @@ def test_without_a_worker_or_switched_off_by_hand_the_fused_ranker_is_words_alon
     from aleph_zero import decisions
     from aleph_zero.embed import worker
 
+    from aleph_zero.embed import setup
+
     monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
+    monkeypatch.setattr(setup, "installed", lambda: True)
     project(repo)
     answer = Engine(repo.root).decisions("publish the order events on the bus")
     assert all(hit.sources == ("words",) for hit in answer.decisions) and "not running" in answer.vectors
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     off = Engine(repo.root, dense=False).decisions("publish the order events on the bus")
     assert all(hit.sources == ("words",) for hit in off.decisions) and off.vectors == ""
+
+
+def _with_worker(repo, fake_worker, monkeypatch):
+    from aleph_zero.embed import worker
+
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    return project(repo)
+
+
+def _kept(engine) -> int:
+    return engine._index(engine._view(None)).conn.execute("SELECT count(*) FROM record_vectors").fetchone()[0]
+
+
+def test_another_session_writing_the_index_does_not_break_or_hold_up_a_question(repo, fake_worker, monkeypatch):
+    import time
+
+    import apsw
+
+    from aleph_zero.store import index_path
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    task = "publish the order events on the bus"
+    assert engine.decisions(task).vectors == "used" and _kept(engine) == 4
+    other = apsw.Connection(str(index_path(repo.root)))
+    other.execute("BEGIN IMMEDIATE")                 # as `aleph embed run`, or another session, in the middle of a write
+    try:
+        repo.write("docs/adr/0012-use-an-event-bus.md", BUS + "\nAmended.\n")
+        started = time.monotonic()
+        answer = engine.decisions(task)              # the new vector is in hand: it is used, and only not kept this time
+        assert answer.vectors == "used" and len(answer.decisions) == 4 and time.monotonic() - started < 3.0
+    finally:
+        other.execute("ROLLBACK")
+        other.close()
+    assert _kept(engine) == 4 and engine.decisions(task).vectors == "used" and _kept(engine) == 5      # kept the next time
+
+
+def test_record_vectors_are_made_in_parts_that_are_kept_and_a_worker_that_fails_is_not_asked_at_every_question(repo, fake_worker, monkeypatch):
+    from aleph_zero import engine as engine_module
+    from aleph_zero.embed.client import EmbedPool, Unavailable
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    monkeypatch.setattr(engine_module, "RECORD_BATCH", 2)
+    real, asked = EmbedPool.embed, []
+
+    def fails_after_the_first_part(self, texts, kind):
+        asked.append(len(texts))
+        if len(asked) == 2:
+            raise Unavailable("the worker went away")
+        return real(self, texts, kind)
+
+    monkeypatch.setattr(EmbedPool, "embed", fails_after_the_first_part)
+    task = "publish the order events on the bus"
+    first = engine.decisions(task)
+    assert all(hit.sources == ("words",) for hit in first.decisions) and "went away" in first.vectors
+    assert asked == [2, 2] and _kept(engine) == 2                                  # the first part is kept
+    again = engine.decisions(task)
+    assert asked == [2, 2] and "went away" in again.vectors                        # not asked again at once: no stall at every question
+    monkeypatch.setattr(engine_module, "RECORD_RETRY_SECONDS", 0.0)
+    assert engine.decisions(task).vectors == "used" and asked == [2, 2, 2] and _kept(engine) == 4      # only what was missing
+
+
+def test_the_first_question_does_not_wait_for_vectors_longer_than_it_is_allowed(repo, fake_worker, monkeypatch):
+    from aleph_zero import engine as engine_module
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    monkeypatch.setattr(engine_module, "RECORD_EMBED_SECONDS", 0.0)
+    answer = engine.decisions("publish the order events on the bus")
+    assert all(hit.sources == ("words",) for hit in answer.decisions) and "still to be made" in answer.vectors and _kept(engine) == 0
+
+
+def test_a_second_session_does_not_make_the_records_vectors_again(repo, fake_worker, monkeypatch):
+    from aleph_zero.embed.client import EmbedClient
+
+    def made() -> int:
+        client = EmbedClient(fake_worker)
+        try:
+            return int(client.metrics().split("llamacpp:n_decode_total ")[1].split()[0])
+        finally:
+            client.close()
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    task = "publish the order events on the bus"
+    assert engine.decisions(task).vectors == "used"
+    before = made()
+    engine.close()
+    assert Engine(repo.root).decisions(task).vectors == "used" and made() == before + 1      # the task's own vector, nothing else
+
+
+def test_asking_for_fusion_by_rank_gets_fusion_by_rank(repo, fake_worker, monkeypatch):
+    """`rrf_k` given is the earlier fusion asked for by name (the benchmark's arms), whatever the default is."""
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    monkeypatch.setattr(Engine, "_record_nearness", lambda *_: (_ for _ in ()).throw(AssertionError("the record vectors were asked for")))
+    engine.decisions("publish the order events on the bus", rrf_k=5)
+    engine.decisions("publish the order events on the bus", rrf_k=0)
+
+
+def test_someone_who_never_installed_the_worker_is_not_told_about_it_at_every_question(repo, monkeypatch):
+    from pathlib import Path
+
+    from aleph_zero.embed import setup, worker
+
+    monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
+    project(repo)
+    monkeypatch.setattr(setup, "installed", lambda: False)
+    assert Engine(repo.root).decisions("publish the order events on the bus").vectors == ""
+    monkeypatch.setattr(setup, "installed", lambda: True)
+    assert "not running" in Engine(repo.root).decisions("publish the order events on the bus").vectors
+
+
+def test_with_two_records_a_hair_s_difference_in_nearness_weighs_as_much_as_every_word():
+    """Known, and left as it was measured: scaling over the records makes the nearer of two worth a full 1, however
+    little nearer. On repositories with 6 and 12 records the fused ranking was level with words at 3 (ADR-003)."""
+    from aleph_zero import decisions
+
+    two = decisions.Records(_three()[:2])
+    near = {"docs/adr/0001-x.md": 0.51, "docs/adr/0002-x.md": 0.50}
+    assert [(hit.number, hit.score) for hit in two.rank("queue per kind of work", nearness=near, a=0.5)] == [(1, 0.5), (2, 0.5)]
+    assert [hit.number for hit in two.rank("queue per kind of work")] == [2]
