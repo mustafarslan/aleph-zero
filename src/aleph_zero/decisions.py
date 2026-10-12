@@ -25,10 +25,12 @@ from . import architecture
 DIRECTORIES = frozenset({"adr", "adrs", "decisions", "decision-records", "decision_records", "architecture-decisions"})
 MAX_BYTES = 400_000
 K1, B = 1.5, 0.75
+STEMS = False           # whether words are reduced to their stems before they are counted
 RRF_K = 5               # small: with tens of records, first and second place must differ by more than 1/61 and 1/62
 NEAREST = 200           # chunks of the records asked of the vectors
 _NUMBERED = re.compile(r"(?:ADR[-_ ]?)?(\d+)[-_]", re.I)
 _TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
+_VOWEL = re.compile(r"[aeiouy]")
 _HEADING = re.compile(r"^#\s+(?:(?:ADR[- ]?)?\d+\s*[.:\-–]\s*)?(.+?)\s*$", re.MULTILINE | re.I)
 _STATUS_SECTION = re.compile(r"^##\s*Status\s*$\n+(.+?)\s*$", re.MULTILINE | re.I)
 _STATUS_LINE = re.compile(r"^\**Status\**\s*:\s*\**\s*(.+?)\s*\**\s*$", re.MULTILINE | re.I)
@@ -94,17 +96,40 @@ def parse(path: str, number: int, content: str) -> Decision:
     return Decision(path, number, title.strip(), status.strip(), f"{title}\n{tags}\n{body}", scope)
 
 
-def tokenize(text: str) -> list[str]:
-    """Lowercased tokens, identifiers split into their parts; acronyms kept whole."""
-    return [match.group(0).lower() for match in _TOKEN.finditer(text)]
+def tokenize(text: str, stems: bool = False) -> list[str]:
+    """Lowercased tokens, identifiers split into their parts; acronyms kept whole. With `stems`,
+    each reduced to what its other forms share."""
+    found = [match.group(0).lower() for match in _TOKEN.finditer(text)]
+    return [stem(token) for token in found] if stems else found
+
+
+def stem(word: str) -> str:
+    """A word without its plural, `-ing`, `-ed` and final `e`: `caches`, `caching` and `cached` are `cach`.
+    Light on purpose: a word is left alone rather than cut to something another word also cuts to
+    (`string` is not `str`, `status` and `redis` keep their `s`), and nothing here knows a dictionary."""
+    if len(word) <= 3 or not word.isalpha():
+        return word
+    if word.endswith("ies") and len(word) > 4:
+        word = word[:-3] + "y"
+    elif word.endswith("sses"):
+        word = word[:-2]
+    elif word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        word = word[:-1]
+    for _ in range(2):      # `embedding` is `embed`, and `embed` is cut as `embedded` is
+        rest = next((word[:-len(suffix)] for suffix in ("ing", "ed") if word.endswith(suffix)), None)
+        if rest is None or len(rest) < 3 or not _VOWEL.search(rest):
+            break
+        word = rest[:-1] if len(rest) > 3 and rest[-1] == rest[-2] and rest[-1] not in "lsz" else rest
+    return word[:-1] if word.endswith("e") and len(word) >= 4 else word
 
 
 class Records:
     """The decision records of one view, ready to be ranked."""
 
-    def __init__(self, found: list[Decision]) -> None:
+    def __init__(self, found: list[Decision], stems: bool | None = None, b: float | None = None) -> None:
         self.decisions = sorted(found, key=lambda each: (each.number, each.path))
-        counted = [Counter(tokenize(each.text)) for each in self.decisions]
+        self._stems, self._b = STEMS if stems is None else stems, B if b is None else b
+        counted = [Counter(tokenize(each.text, self._stems)) for each in self.decisions]
         self._lengths = [sum(terms.values()) for terms in counted]
         self._average = sum(self._lengths) / len(self._lengths) if self._lengths else 0.0
         self._postings: dict[str, dict[int, int]] = {}
@@ -122,13 +147,13 @@ class Records:
         Equal scores keep the records' own order, so the ranking is a function of the records and the task."""
         scores: dict[int, float] = {}
         size = len(self.decisions)
-        for term in tokenize(task):
+        for term in tokenize(task, self._stems):
             found = self._postings.get(term)
             if found is None:
                 continue
             weight = math.log(1 + (size - len(found) + 0.5) / (len(found) + 0.5))
             for at, frequency in found.items():
-                norm = K1 * (1 - B + B * (self._lengths[at] / self._average if self._average else 1.0))
+                norm = K1 * (1 - self._b + self._b * (self._lengths[at] / self._average if self._average else 1.0))
                 scores[at] = scores.get(at, 0.0) + weight * frequency * (K1 + 1) / (frequency + norm)
         return sorted(scores.items(), key=lambda hit: (-hit[1], hit[0]))
 

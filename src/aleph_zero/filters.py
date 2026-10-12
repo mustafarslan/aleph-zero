@@ -1,9 +1,8 @@
 """Which files are worth indexing, and as what."""
 from __future__ import annotations
 
-from pathlib import PurePosixPath
-
 from . import lang
+from .lang.languages import suffix_of
 
 MAX_BYTES = 300_000
 MAX_AVERAGE_LINE = 500
@@ -20,10 +19,9 @@ _LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 def family(path: str) -> str:
     """The treatment a path selects. The index holds one set of chunks per (blob, family),
     so the same bytes at `notes.md` and `notes.py` are each chunked their own way."""
-    pure = PurePosixPath(path)
-    if pure.name in LOCKFILES:
+    if path.rsplit("/", 1)[-1] in LOCKFILES:
         return "lockfile"
-    suffix = pure.suffix.lower()
+    suffix = suffix_of(path).lower()
     if suffix in MARKDOWN_SUFFIXES:
         return "markdown"
     if suffix in PROSE_SUFFIXES:

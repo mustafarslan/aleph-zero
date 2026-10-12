@@ -123,3 +123,25 @@ def test_a_file_two_layers_name_is_in_the_first_as_oxn_has_it():
         "contracts:\n  - name: c\n    kind: layered\n    order: [orchestration, graph]\n")
     assert architecture.place("src/graph/indexer.py", layers, contracts) == ["layer orchestration (contract c): may depend on graph"]
     assert architecture.place("src/graph/store.py", layers, contracts) == ["layer graph (contract c): may depend on no other layer; not on orchestration"]
+
+
+def test_words_that_differ_only_in_their_ending_are_one_word():
+    from aleph_zero.decisions import stem
+
+    for same in (("cache", "caches", "caching", "cached"), ("policy", "policies"), ("class", "classes"), ("bus", "buses"),
+                 ("status", "statuses"), ("need", "needs", "needed"), ("add", "adds", "added", "adding"), ("map", "mapped", "mapping"),
+                 ("store", "stores", "stored", "storing"), ("case", "cases"), ("index", "indexes", "indexed", "indexing"),
+                 ("call", "calls", "called", "calling"), ("embed", "embedded", "embedding"), ("service", "services")):
+        assert len({stem(word) for word in same}) == 1, same
+    for kept in ("string", "thing", "redis", "status", "bus", "is", "its", "http2", "sqs", "less"):
+        assert stem(kept) == kept, kept
+    assert stem("string") != stem("str") and stem("bus") != stem("bu") and stem("analysis") == "analysis"
+
+
+def test_a_ranker_that_stems_finds_the_record_by_another_form_of_its_word():
+    from aleph_zero import decisions
+
+    records = [decisions.parse("docs/adr/0001-a.md", 1, "# 1. Responses are cached at the edge\n\nWe cache.\n"),
+               decisions.parse("docs/adr/0002-b.md", 2, "# 2. Queues carry the work\n\nA queue.\n")]
+    assert [hit.number for hit in decisions.Records(records, stems=False).rank("caching of a response")] == [2]    # only "a" is shared
+    assert [hit.number for hit in decisions.Records(records, stems=True).rank("caching of a response")] == [1, 2]

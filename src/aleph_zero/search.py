@@ -75,7 +75,7 @@ def path_ranking(index: Index, view: View, terms: list[str],
     Files are proposed, not chunks: many files open with the same lines, and a chunk
     shared by all of them would stand for every one."""
     need = min(2, len(terms))
-    anywhere, in_name = index.path_words(view)
+    anywhere, in_name = index.path_words(view, terms)
     matched: dict[str, int] = {}
     named: dict[str, int] = {}
     for term in terms:

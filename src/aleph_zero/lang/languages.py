@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import PurePosixPath
 
 from .profile import ImportSpec, LanguageProfile, Wrapper
 
@@ -214,7 +213,22 @@ _BY_EXTENSION: dict[str, LanguageProfile] = {
 }
 
 
+def suffix_of(path: str) -> str:
+    """The extension of a path's last part, as `PurePosixPath(path).suffix` gives it. Asked of every
+    file of a view on every query, where building a path object for each was a third of the time."""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    at = name.rfind(".")
+    return name[at:] if 0 < at < len(name) - 1 else ""
+
+
+def stem_of(path: str) -> str:
+    """A path's last part without its extension, as `PurePosixPath(path).stem` gives it."""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    at = name.rfind(".")
+    return name[:at] if 0 < at < len(name) - 1 else name
+
+
 def profile_for_path(path: str) -> LanguageProfile | None:
     """The profile for a file, or None if it is not source code in a known language.
     A `.h` file is read as C++, which accepts nearly all C headers."""
-    return _BY_EXTENSION.get(PurePosixPath(path).suffix.lower())
+    return _BY_EXTENSION.get(suffix_of(path).lower())

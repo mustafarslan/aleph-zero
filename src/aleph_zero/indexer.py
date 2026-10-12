@@ -7,13 +7,13 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
 
 import apsw
 
 from . import filters, gitio, lang, lexical
 from .chunking import CHUNKER_VERSION, Chunk, chunk_file, chunk_hash, code_chunks
 from .lang.definitions import Definition
+from .lang.languages import stem_of
 from .lang.imports import RawImport
 from .store import transaction
 from .view import View
@@ -101,6 +101,7 @@ class Index:
         self._paths: dict[Key, list[str]] = {}
         self._path_words: tuple[dict[str, list[str]], dict[str, list[str]]] | None = None
         self._path_names: frozenset[str] = frozenset()
+        self._paths_asked = False       # whether these paths have been asked one question yet
         self._store_seconds = 0.002  # what storing one blob has cost lately; sizes the last batch before a deadline
         self._view_epoch = 0  # goes up whenever temp.view_chunks is rebuilt
         self._scope: tuple | None = None
@@ -240,20 +241,21 @@ class Index:
         """Paths of the synced view that hold this content under this treatment."""
         return self._paths.get((oid, family), [])
 
-    def path_words(self, view: View) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    def path_words(self, view: View, terms: list[str] | None = None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         """For the synced view, two maps from a lower-cased word to the paths it occurs in:
         anywhere in the path, and in the file's own name. Built once per view, so matching
-        a query against paths reads only the query's words, not every path."""
+        a query against paths reads only the query's words, not every path.
+
+        The first question a set of paths is asked (`terms`: its words) is answered without the
+        maps, from the paths that contain one of the words at all: a process that asks once and
+        exits does not read every path of a large repository into words. The second builds them."""
         self._require(view)
+        if self._path_words is None and terms is not None and not self._paths_asked:
+            self._paths_asked = True
+            wanted = set(terms)
+            return _path_words((path for path in view.files if any(term in path.lower() for term in wanted)), wanted)
         if self._path_words is None:
-            anywhere: dict[str, list[str]] = {}
-            in_name: dict[str, list[str]] = {}
-            for path in view.files:
-                for word in set(lexical.query_terms(path)):
-                    anywhere.setdefault(word, []).append(path)
-                for word in set(lexical.query_terms(PurePosixPath(path).stem)):
-                    in_name.setdefault(word, []).append(path)
-            self._path_words = (anywhere, in_name)
+            self._path_words = _path_words(view.files, None)
         return self._path_words
 
     def narrow(self, view: View, kind: str, paths: Callable[[str], bool] | None, key: object) -> None:
@@ -321,6 +323,7 @@ class Index:
     def _load_view_blobs(self, view: View) -> None:
         if view.files.keys() != self._path_names:  # most edits change content, not paths
             self._path_words = None
+            self._paths_asked = False
             self._path_names = frozenset(view.files)
         self._deferred.clear()
         paths: dict[Key, list[str]] = {}
@@ -440,6 +443,20 @@ COLLECT_SECONDS = 0.5           # what one round may take; it runs after a query
 COLLECT_RETRY_SECONDS = 60      # before the next round when one did not finish
 _BLOB_BATCH = 500
 _CHUNK_BATCH = 2000
+
+
+def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """(word -> paths it occurs in anywhere, word -> paths whose own name has it), for all words or the wanted ones."""
+    anywhere: dict[str, list[str]] = {}
+    in_name: dict[str, list[str]] = {}
+    for path in paths:
+        for word in set(lexical.query_terms(path)):
+            if wanted is None or word in wanted:
+                anywhere.setdefault(word, []).append(path)
+        for word in set(lexical.query_terms(stem_of(path))):
+            if wanted is None or word in wanted:
+                in_name.setdefault(word, []).append(path)
+    return anywhere, in_name
 
 
 def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | None = None,

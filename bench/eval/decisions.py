@@ -137,11 +137,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--dense", action="store_true", help="with vectors (needs the embed worker); default: words and names alone")
     parser.add_argument("--reference", action="store_true", help="oxn's own ranker over the same candidates: calibrates this harness")
-    parser.add_argument("--ranker", choices=("words", "fused5", "fused60"),
-                        help="Aleph's ranker for decisions (`Engine.decisions`): by words alone, or fused with vectors at that k")
+    parser.add_argument("--ranker", choices=("words", "fused5", "fused60", "stems", "length", "stems+length"),
+                        help="Aleph's ranker for decisions (`Engine.decisions`): by words alone, fused with vectors at that k, "
+                             "or one of Task 2b's candidates: words reduced to stems, b = 0.4, both")
     parser.add_argument("--labels", default="labels-external.json", help="the pairs, a file in the workdir (default: oxn's 100)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
+    if args.ranker in ("stems", "stems+length"):
+        decision_records.STEMS = True
+    if args.ranker in ("length", "stems+length"):
+        decision_records.B = 0.4
     labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []
     notes: dict[str, str] = {}
@@ -165,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             for pair in spec["pairs"]:
                 query = task_text(root, pair["sha"])
                 if args.ranker:
-                    answer = engine.decisions(query, k=len(numbers), rrf_k={"words": 0, "fused5": 5, "fused60": 60}[args.ranker])
+                    answer = engine.decisions(query, k=len(numbers), rrf_k={"fused5": 5, "fused60": 60}.get(args.ranker, 0))
                     order, tokens = [hit.number for hit in answer.decisions], estimate_tokens(decision_records.text(
                         decision_records.Answer(query, answer.decisions[:7], answer.known)))
                 else:

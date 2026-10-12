@@ -1,6 +1,7 @@
 """Lexical search: identifier-aware text for FTS5, and the query that reads it."""
 from __future__ import annotations
 
+import functools
 import re
 
 import apsw
@@ -67,11 +68,18 @@ def expand(text: str) -> str:
     return " ".join(out)
 
 
+@functools.lru_cache(maxsize=8192)
+def _forms(token: str) -> tuple[str, ...]:
+    """A word as it is searched for: itself, and the sub-words of an identifier. Remembered, because
+    the paths of a view are read through this and repeat the same few thousand words."""
+    return (token.lower(), *split_identifier(token))
+
+
 def query_terms(query: str) -> list[str]:
     terms: dict[str, None] = {}  # ordered, with constant-time membership
     for match in _WORD.finditer(query):
         token = match.group()
-        for term in [token.lower(), *split_identifier(token)]:
+        for term in _forms(token):
             terms.setdefault(term)
         if len(terms) >= 2 * MAX_TERMS:
             break  # a pasted log of thousands of words: the rest would be cut anyway

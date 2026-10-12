@@ -73,3 +73,14 @@ def test_the_language_package_stands_alone():
 
 def test_the_port_says_where_it_came_from():
     assert "oxn" in lang.__doc__ and "2c8ee6d" in lang.__doc__ and "MIT" in lang.__doc__
+
+
+def test_a_path_s_extension_and_stem_are_read_as_pathlib_reads_them():
+    from pathlib import PurePosixPath
+
+    from aleph_zero.lang.languages import stem_of, suffix_of
+
+    for path in ("a.py", "src/a.tar.gz", ".bashrc", "src/.env.example", "Makefile", "a.", "dir.d/file", "dir.d/.hidden",
+                 "x/..", "x/...", "UPPER.PY", "weird name.Md", "a/b.c/d.e.f", "é/ü.rs", "no_ext/", "..a", "a..b"):
+        assert suffix_of(path) == PurePosixPath(path).suffix, path
+        assert stem_of(path) == PurePosixPath(path).stem, path

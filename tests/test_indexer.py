@@ -469,3 +469,24 @@ def test_content_last_seen_within_the_age_is_kept_whoever_collects(repo):
     index.conn.execute("UPDATE meta SET value = value - 90000 WHERE key = 'collected_at'")
     assert indexer.collect_if_due(index.conn)["blobs_removed"] == 0
     assert _total(index, "blobs") == 4
+
+
+def test_the_first_question_of_a_process_reads_only_the_paths_that_can_match(repo):
+    from aleph_zero.search import path_ranking
+
+    repo.write("src/billing/receipt_printer.py", "def print_receipt(): ...\n")
+    repo.write("docs/Receipt-Layout.md", "# Layout\n")
+    def _synced(repo):
+        index, view = _index(repo), build_view(repo.root)
+        index.sync(view)
+        return index, view
+
+    index, view = _synced(repo)
+    index.path_words(view)
+    for terms in (["receipt", "printer"], ["billing", "invoice"], ["token"], ["nothing", "here"], ["receipt"]):
+        fresh, fresh_view = _synced(repo)
+        first = path_ranking(fresh, fresh_view, terms)
+        assert fresh._path_words is None                       # not every path was read for one question
+        assert first == path_ranking(fresh, fresh_view, terms)  # the second builds the maps and agrees
+        assert fresh._path_words is not None
+        assert first == path_ranking(index, view, terms)
