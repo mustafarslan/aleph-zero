@@ -5,7 +5,8 @@ const SEARCH = 'mcp__plugin_aleph-zero_aleph__search'
 const hit = (path: string, sources: string[]) =>
   ({ path, start_line: 4, end_line: 6, kind: 'function', symbol: 'refresh_token', sources, score: 0.03, text: 'def refresh_token' })
 const engine = (hits: unknown[]) => ({ value: { content: [{ type: 'text', text: JSON.stringify({ hits, pending: 0 }) }] } })
-const bash = (stdout: string) => ({ ref: 1, result: { stdout, stderr: '', interrupted: false }, text: stdout || '(Bash completed with no output)' })
+// A Bash result as Claude Code gives it: a search that matched nothing says so in returnCodeInterpretation.
+const bash = (stdout: string) => ({ ref: 1, result: { stdout, stderr: '', interrupted: false, returnCodeInterpretation: stdout ? 'Success' : 'No matches found' }, text: stdout || '(Bash completed with no output)' })
 const rung = (value: string) => ({ options: { rung: value } })
 // Claude Code's answer when the mod connects to its own server: the full name to call it by.
 const FULL_NAME = 'plugin:aleph-zero:aleph'

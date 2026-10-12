@@ -38,6 +38,8 @@ How far it goes is one option, the rung (`/config`, or `pluginConfigs` in settin
 | 2 | Ranked locations ride along with the first prompt of a session, when the engine is confident |
 | 3 | A recursive `grep`, `rg`, `git grep` or `find -name` that found nothing gets ranked locations appended |
 
+The pointer in Grep and Glob has its own switch (`grep_pointer`: on or off).
+
 Rungs 2 and 3 have the mod itself ask the engine, which Claude Code allows only if the
 engine's tools are allowed: add `"mcp__plugin_aleph-zero_aleph__*"` to `permissions.allow`.
 `/aleph check` says whether the mod can reach the engine; `/aleph stats` shows the session's

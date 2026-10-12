@@ -32,16 +32,20 @@ test('anything that is not a plain search of the repository is left alone', asyn
   expect(searchPattern('')).toBe(null)
 })
 
-test('only a command that ran and printed nothing counts as having found nothing', async () => {
-  const ran = (stdout: string, extra = {}) => ({ result: { stdout, stderr: '', interrupted: false, ...extra }, text: stdout })
-  expect(foundNothing(ran(''))).toBe(true)
-  expect(foundNothing(ran('  \n'))).toBe(true)
-  expect(foundNothing(ran('src/a.py:3: refresh_token'))).toBe(false)
-  expect(foundNothing(ran('', { stderr: 'grep: bad regex' }))).toBe(false)
-  expect(foundNothing(ran('', { interrupted: true }))).toBe(false)
-  expect(foundNothing({ deny: 'not allowed' })).toBe(false)
-  expect(foundNothing({ isError: true, result: { stdout: '', stderr: '' } })).toBe(false)
-  expect(foundNothing(undefined)).toBe(false)
+test('found nothing means: ran, printed nothing, and (for grep) reported no match', async () => {
+  const ran = (stdout: string, extra = {}) =>
+    ({ result: { stdout, stderr: '', interrupted: false, returnCodeInterpretation: 'No matches found', ...extra }, text: stdout })
+  expect(foundNothing(ran(''), 'grep')).toBe(true)
+  expect(foundNothing(ran('  \n'), 'grep')).toBe(true)
+  expect(foundNothing(ran('', { returnCodeInterpretation: 'Success' }), 'grep')).toBe(false)   // silent, but it matched
+  expect(foundNothing(ran('', { returnCodeInterpretation: undefined }), 'grep')).toBe(false)
+  expect(foundNothing(ran('', { returnCodeInterpretation: 'Success' }), 'find')).toBe(true)    // find always exits 0
+  expect(foundNothing(ran('src/a.py:3: refresh_token'), 'grep')).toBe(false)
+  expect(foundNothing(ran('', { stderr: 'grep: bad regex' }), 'grep')).toBe(false)
+  expect(foundNothing(ran('', { interrupted: true }), 'find')).toBe(false)
+  expect(foundNothing({ deny: 'not allowed' }, 'grep')).toBe(false)
+  expect(foundNothing({ isError: true, result: { stdout: '', stderr: '' } }, 'find')).toBe(false)
+  expect(foundNothing(undefined, 'grep')).toBe(false)
 })
 
 test('the first prompt is asked about only when it is a sentence', async () => {

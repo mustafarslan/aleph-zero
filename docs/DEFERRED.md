@@ -11,6 +11,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
   2. *The shape.* Four rungs at 30 tasks each cannot read a 20% gate (run-to-run noise is about a factor of two; ADR-011). Two arms with 60 tasks, or 30 tasks twice, come closer for the same number of sessions.
   3. *The model.* The pilot used the cheap and the mid model. The gate should be read on the model you work with.
   4. *The ten tasks from your own repositories* that the design asks for need your questions (as entry 2 below).
+- **Arms:** `none`, `L0`, `L1n` (rung 1 without the pointer in Grep and Glob: what the pilot ran), `L1`, `L2`, `L3`. Running the same command twice appends a second run of the same tasks; the report then pairs on the mean of a task's runs.
 - **How to start it** (example: no plugin against rung 1, 30 tasks, the mid model, at most 60 sessions):
 
       uv run --group bench python bench/ab/run.py run bench/data/benchc --arms none,L1 --count 30 --model sonnet --max-sessions 60

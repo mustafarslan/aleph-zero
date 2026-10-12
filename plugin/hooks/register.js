@@ -7,8 +7,8 @@
 //   3  a recursive grep that found nothing gets ranked locations appended
 // The meter runs on every rung.
 import {
-  DESCRIPTIONS, ENGINE_TOOL, GREP_NOTE, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  promptContext, searchPattern, worthAsking,
+  DESCRIPTIONS, ENGINE_TOOL, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
+  promptContext, readSearch, worthAsking,
 } from './logic.js'
 
 const SERVER = 'aleph'
@@ -76,6 +76,9 @@ function report(rung, meter) {
 
 export function register(on, options) {
   const rung = Number(options && options.rung !== undefined ? options.rung : 1)
+  // The pointer in the descriptions of Grep and Glob is part of rung 1 but has its own switch,
+  // so a measurement can tell it from the rest of the rung.
+  const pointer = !(options && options.grep_pointer === 'off')
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -150,8 +153,8 @@ export function register(on, options) {
 
   on('tool.describe', { tool: ['Grep', 'Glob'] }, async ($, e, next) => {
     const described = await next(e)
-    if (rung < 1 || !described || typeof described.description !== 'string') return described
-    return { ...described, description: described.description + GREP_NOTE }
+    if (rung < 1 || !pointer || !described || typeof described.description !== 'string') return described
+    return { ...described, description: described.description + (POINTERS[e.tool] || '') }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -164,21 +167,28 @@ export function register(on, options) {
   // ---- L2: ranked locations with the first prompt of a session ------------------------------
 
   on('prompt.submit', async ($, e, next) => {
+    // The one chance goes to the first prompt that is a question: "hi" does not use it up.
+    if (rung < 2 || prompts > 0 || !worthAsking(e.text)) return next(e)
     prompts += 1
-    if (rung < 2 || prompts !== 1 || !worthAsking(e.text)) return next(e)
     const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 5 }))
     if (!confident(hits)) return next(e)
     meter.added.prompt += 1
     return next({ ...e, context: [...(e.context ?? []), promptContext(hits)] })
   }).catch(async ($, e, next) => next(e))
 
+  on('session.end', async ($, e, next) => {
+    prompts = 0  // /clear, /resume and /branch end one conversation and start another
+    return next(e)
+  })
+
   // ---- L3: a recursive grep that found nothing -----------------------------------------------
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e)
-    if (rung < 3 || !foundNothing(result)) return result
-    const pattern = searchPattern(e.command)
-    if (!pattern) return result
+    if (rung < 3) return result
+    const read = readSearch(e.command)
+    if (!read || !foundNothing(result, read.program)) return result
+    const pattern = read.query
     const hits = hitsOf(await ask($, 'search', { query: pattern, k: 5 }))
     if (!hits.length) return result
     meter.added.grep += 1

@@ -11,7 +11,8 @@ which files must change, and its event stream is read: tokens, tool calls by nam
 time, and whether the files it named are the ones the fix edited.
 
 Arms: `none` (no plugin: Claude Code as it is), `L0` to `L3` (the plugin at that rung;
-L0 is the engine's tools without steering). Arms are interleaved per task, so a task's
+L0 is the engine's tools without steering), and `L1n` (rung 1 without the pointer in the
+descriptions of Grep and Glob, which is how the pilot ran rung 1). Arms are interleaved per task, so a task's
 sessions run close together. Every session is bounded by a cost limit and a wall clock.
 
 THIS SPENDS THE OWNER'S CLAUDE PLAN USAGE. `run` refuses more than --max-sessions
@@ -28,8 +29,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
+import signal
 import statistics
 import subprocess
 import sys
@@ -49,7 +52,7 @@ QUESTION = (
     "answer with one line of JSON and nothing after it, in exactly this form: "
     '{"files": ["path/relative/to/the/repository/root.py"]} listing at most five files, most likely first.'
 )
-ARMS = ("none", "L0", "L1", "L2", "L3")
+ARMS = ("none", "L0", "L1n", "L1", "L2", "L3")
 
 
 def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False) -> list[dict]:
@@ -89,14 +92,16 @@ def command(arm: str, model: str, budget: float, prompt: str) -> list[str]:
     args = ["claude", "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--max-budget-usd", str(budget)]
     if arm != "none":
-        rung = arm[1]
+        options = {"rung": arm[1]}
+        if arm.endswith("n"):
+            options["grep_pointer"] = "off"  # rung 1 as the pilot ran it: without the pointer in Grep and Glob
         allowed.append(ENGINE_TOOLS)
         args += ["--plugin-dir", str(PLUGIN),
-                 "--settings", json.dumps({"pluginConfigs": {"aleph-zero@inline": {"options": {"rung": rung}}}})]
+                 "--settings", json.dumps({"pluginConfigs": {"aleph-zero@inline": {"options": options}}})]
     return [*args, "--allowedTools", *allowed]
 
 
-def read_stream(text: str, gold: list[str]) -> dict:
+def read_stream(text: str, gold: list[str], root: str | None = None) -> dict:
     """What one session did, from its event stream."""
     calls: list[dict] = []
     result: dict = {}
@@ -117,7 +122,7 @@ def read_stream(text: str, gold: list[str]) -> dict:
         elif kind == "result":
             result = event
     answer = result.get("result") or answer
-    named = _named_files(answer)
+    named = _named_files(answer, root)
     usage = result.get("modelUsage") or {}
     tokens = {key: sum(int(model.get(key, 0) or 0) for model in usage.values())
               for key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")}
@@ -134,22 +139,36 @@ def read_stream(text: str, gold: list[str]) -> dict:
         "aleph_calls": searches.count("aleph"), "grep_calls": searches.count("grep"),
         "first_search": next((kind for kind in searches if kind), None),
         "calls_before_first_gold_read": first_gold,
+        # Kept as the session reported them, so the sums above can be checked later.
+        "usage": result.get("usage"), "model_usage": usage, "subagent_stats": result.get("subagent_stats"),
         "named": named, "file_hit": bool(set(named) & set(gold)),
         "file_recall": round(len(set(named) & set(gold)) / len(gold), 3) if gold else 0.0,
         "gave_up": not named,
     }
 
 
-def _named_files(answer: str) -> list[str]:
-    """The files of the JSON line the session was asked to end with; [] if it did not."""
-    for found in reversed(re.findall(r"\{[^{}]*\"files\"[^{}]*\}", answer or "")):
+def _named_files(answer: str, root: str | None = None) -> list[str]:
+    """The files of the last JSON object with a "files" list in the answer, as paths relative
+    to the repository; [] if there is none. `root` is the session's worktree: an absolute
+    path under it is made relative."""
+    text = answer or ""
+    decoder = json.JSONDecoder()
+    found: list[str] | None = None
+    for position in (index for index, character in enumerate(text) if character == "{"):
         try:
-            files = json.loads(found).get("files")
+            value, _ = decoder.raw_decode(text, position)
         except ValueError:
             continue
-        if isinstance(files, list):
-            return [str(path).lstrip("./") for path in files if isinstance(path, str)][:5]
-    return []
+        if isinstance(value, dict) and isinstance(value.get("files"), list):
+            found = [path for path in value["files"] if isinstance(path, str)]
+    out = []
+    for path in found or []:
+        if root and path.startswith(root.rstrip("/") + "/"):
+            path = path[len(root.rstrip("/")) + 1:]
+        if path.startswith("./"):
+            path = path[2:]
+        out.append(path)
+    return out[:5]
 
 
 def _search_kind(call: dict) -> str | None:
@@ -181,16 +200,27 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
         return {"task": task["id"], "arm": arm, "ok": False, "ended": f"worktree failed: {made.stderr[-200:]}"}
     try:
         if arm != "none":  # index before the clock starts: indexing is not what is being measured
-            subprocess.run([str(ROOT / ".venv" / "bin" / "aleph"), "--cwd", str(tree), "index"], capture_output=True, timeout=1800)
+            try:
+                subprocess.run([str(ROOT / ".venv" / "bin" / "aleph"), "--cwd", str(tree), "index"], capture_output=True, timeout=1800)
+            except subprocess.TimeoutExpired:
+                return {"task": task["id"], "arm": arm, "model": model, "ok": False, "ended": "indexing took over 30 minutes"}
         started = time.monotonic()
+        # Its own process group: on a timeout the session and everything it started (the engine's
+        # server among them) are stopped together, not left behind.
+        proc = subprocess.Popen(command(arm, model, budget, task["issue"] + QUESTION), cwd=tree, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, start_new_session=True)
         try:
-            proc = subprocess.run(command(arm, model, budget, task["issue"] + QUESTION), cwd=tree, capture_output=True,
-                                  text=True, timeout=seconds, stdin=subprocess.DEVNULL)
-            stream, ended_by = proc.stdout, None
-        except subprocess.TimeoutExpired as exc:
-            stream = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stream, _ = proc.communicate(timeout=seconds)
+            ended_by = None
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                stream, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                stream, _ = proc.communicate()
             ended_by = f"stopped after {seconds} s"
-        record = read_stream(stream, task["gold"])
+        record = read_stream(stream or "", task["gold"], str(tree.resolve()))
         record.update(task=task["id"], repo=task["repo"], arm=arm, model=model, gold=task["gold"],
                       wall_seconds=round(time.monotonic() - started, 1))
         if ended_by:
@@ -211,32 +241,46 @@ def bootstrap(ratios: list[float], rounds: int = 10_000, seed: int = 7) -> tuple
 
 
 def report(records: list[dict], baseline: str) -> dict:
-    by_arm: dict[str, dict[str, dict]] = {}
+    """Arms against the baseline, paired by task. A task run more than once in an arm counts
+    with the mean of its runs (so "thirty tasks twice" is thirty pairs, each steadier).
+    Sessions that failed are left out and counted; tasks without a partner are named."""
+    models = sorted({record.get("model") for record in records if record.get("model")})
+    if len(models) > 1:
+        raise ValueError(f"these records are from more than one model ({', '.join(models)}); report each by itself")
+    runs: dict[str, dict[str, list[dict]]] = {}
+    failed: dict[str, int] = {}
     for record in records:
         if record.get("ok"):
-            by_arm.setdefault(record["arm"], {})[record["task"]] = record  # the last run of a task wins
-    out: dict = {"baseline": baseline, "arms": {}}
-    base = by_arm.get(baseline, {})
-    for arm, done in sorted(by_arm.items()):
-        rows = list(done.values())
-        entry = {
-            "sessions": len(rows),
-            "tokens_median": int(statistics.median(row["tokens"] for row in rows)),
-            "tool_calls_median": statistics.median(row["tool_calls"] for row in rows),
-            "cost_usd_total": round(sum(row.get("cost_usd") or 0 for row in rows), 3),
-            "file_hit_rate": round(sum(row["file_hit"] for row in rows) / len(rows), 3),
-            "gave_up": sum(row["gave_up"] for row in rows),
-            "aleph_first": sum(row.get("first_search") == "aleph" for row in rows),
-        }
-        shared = sorted(set(done) & set(base))
-        if arm != baseline and len(shared) >= 2:
-            for measure in ("tokens", "tool_calls"):
-                ratios = [max(done[task][measure], 1) / max(base[task][measure], 1) for task in shared]
-                mean, low, high = bootstrap(ratios)
-                entry[f"{measure}_ratio"] = {"paired_tasks": len(shared), "geometric_mean": round(mean, 3),
-                                             "interval_95": [round(low, 3), round(high, 3)]}
-            entry["file_hits_against_baseline"] = [sum(done[task]["file_hit"] for task in shared),
-                                                   sum(base[task]["file_hit"] for task in shared)]
+            runs.setdefault(record["arm"], {}).setdefault(record["task"], []).append(record)
+        else:
+            failed[record.get("arm", "?")] = failed.get(record.get("arm", "?"), 0) + 1
+            runs.setdefault(record.get("arm", "?"), {})
+    mean = lambda rows, key: statistics.fmean(float(row[key]) for row in rows)  # noqa: E731
+    out: dict = {"baseline": baseline, "model": models[0] if models else None, "arms": {}}
+    base = runs.get(baseline, {})
+    for arm, done in sorted(runs.items()):
+        rows = [row for group in done.values() for row in group]
+        entry: dict = {"sessions": len(rows), "tasks": len(done), "failed_sessions": failed.get(arm, 0)}
+        if rows:
+            entry.update(
+                tokens_median=int(statistics.median(mean(group, "tokens") for group in done.values())),
+                tool_calls_median=statistics.median(mean(group, "tool_calls") for group in done.values()),
+                cost_usd_total=round(sum(row.get("cost_usd") or 0 for row in rows), 3),
+                file_hit_rate=round(statistics.fmean(mean(group, "file_hit") for group in done.values()), 3),
+                gave_up=sum(row["gave_up"] for row in rows),
+                aleph_first=sum(row.get("first_search") == "aleph" for row in rows),
+            )
+        if arm != baseline:
+            shared = sorted(set(done) & set(base))
+            entry["unpaired_tasks"] = sorted((set(done) | set(base)) - set(shared))
+            if len(shared) >= 2:
+                for measure in ("tokens", "tool_calls"):
+                    ratios = [max(mean(done[task], measure), 1) / max(mean(base[task], measure), 1) for task in shared]
+                    centre, low, high = bootstrap(ratios)
+                    entry[f"{measure}_ratio"] = {"paired_tasks": len(shared), "geometric_mean": round(centre, 3),
+                                                 "interval_95": [round(low, 3), round(high, 3)]}
+                entry["file_hits_against_baseline"] = [round(sum(mean(done[task], "file_hit") for task in shared), 2),
+                                                       round(sum(mean(base[task], "file_hit") for task in shared), 2)]
         out["arms"][arm] = entry
     return out
 

@@ -59,17 +59,18 @@ def test_a_file_is_a_gold_read_only_when_the_whole_path_matches():
 def test_the_report_pairs_arms_by_task_and_counts_hits():
     def row(task, arm, tokens, calls, hit):
         return {"task": task, "arm": arm, "ok": True, "tokens": tokens, "tool_calls": calls, "file_hit": hit,
-                "gave_up": False, "first_search": "aleph" if arm != "none" else "grep", "cost_usd": 0.1}
+                "gave_up": False, "first_search": "aleph" if arm != "none" else "grep", "cost_usd": 0.1, "model": "m"}
 
     records = [row("t1", "none", 1000, 10, True), row("t1", "L1", 500, 5, True),
                row("t2", "none", 2000, 8, True), row("t2", "L1", 1000, 4, False),
                row("t3", "none", 3000, 6, False),                      # no partner: not in the paired figures
-               {"task": "t4", "arm": "L1", "ok": False}]              # a failed session is left out
+               {"task": "t4", "arm": "L1", "ok": False, "model": "m"}]  # a failed session is left out
     found = ab.report(records, "none")
     arm = found["arms"]["L1"]
     assert arm["sessions"] == 2 and arm["tokens_ratio"]["paired_tasks"] == 2
     assert arm["tokens_ratio"]["geometric_mean"] == 0.5 and arm["tool_calls_ratio"]["geometric_mean"] == 0.5
     assert arm["file_hits_against_baseline"] == [1, 2]
+    assert arm["unpaired_tasks"] == ["t3"] and arm["failed_sessions"] == 1
     assert found["arms"]["none"]["sessions"] == 3 and "tokens_ratio" not in found["arms"]["none"]
 
 
@@ -81,3 +82,50 @@ def test_the_command_differs_between_arms_only_by_the_plugin_and_its_rung():
     assert json.loads(rung2[rung2.index("--settings") + 1]) == {"pluginConfigs": {"aleph-zero@inline": {"options": {"rung": "2"}}}}
     assert ab.ENGINE_TOOLS in rung2
     assert [a for a in plain if a not in rung2] == []          # everything the baseline is given, the arm is given too
+
+
+# ---- findings of the M4 review --------------------------------------------------------------------------
+
+def test_files_are_named_as_written_whatever_surrounds_them():
+    assert ab._named_files('{"files": [".github/workflows/ci.yml", "./src/a.py"]}') == [".github/workflows/ci.yml", "src/a.py"]
+    assert ab._named_files('{"files": ["/tmp/az-ab-1/repo/src/x.py"]}', root="/tmp/az-ab-1/repo") == ["src/x.py"]
+    assert ab._named_files('Done.\n{"files": ["a.py"], "note": {"why": "nested"}}') == ["a.py"]
+    assert ab._named_files('I looked at {x} and {"files": 3} and then\n{"files": ["b.py"]}') == ["b.py"]
+    assert ab._named_files("no json here") == []
+
+
+def _row(task, arm, tokens, calls, hit, model="m", ok=True):
+    return {"task": task, "arm": arm, "ok": ok, "tokens": tokens, "tool_calls": calls, "file_hit": hit, "gave_up": False,
+            "first_search": None, "cost_usd": 0.1, "model": model}
+
+
+def test_repeated_runs_of_a_task_are_all_used():
+    """Thirty tasks run twice is one of the designs the run may take: the second run must not replace the first."""
+    records = [_row("t1", "none", 1000, 10, True), _row("t1", "none", 3000, 10, True),     # mean 2000
+               _row("t1", "L1", 900, 5, True), _row("t1", "L1", 1100, 5, False),          # mean 1000
+               _row("t2", "none", 4000, 8, True), _row("t2", "L1", 2000, 4, True)]
+    found = ab.report(records, "none")
+    arm = found["arms"]["L1"]
+    assert arm["sessions"] == 3 and arm["tasks"] == 2
+    assert arm["tokens_ratio"]["paired_tasks"] == 2 and arm["tokens_ratio"]["geometric_mean"] == 0.5
+    assert arm["file_hit_rate"] == 0.75                      # t1: one of two; t2: one of one
+
+
+def test_the_report_says_which_tasks_have_no_partner_and_refuses_mixed_models():
+    import pytest
+
+    records = [_row("t1", "none", 1000, 10, True), _row("t1", "L1", 500, 5, True),
+               _row("t2", "none", 1000, 10, True), _row("t2", "L1", 0, 0, False, ok=False),
+               _row("t3", "none", 1000, 10, True), _row("t3", "L1", 500, 5, True)]
+    found = ab.report(records, "none")
+    assert found["arms"]["L1"]["unpaired_tasks"] == ["t2"] and found["arms"]["L1"]["failed_sessions"] == 1
+    with pytest.raises(ValueError, match="more than one model"):
+        ab.report([*records, _row("t9", "L1", 1, 1, True, model="other")], "none")
+
+
+def test_an_arm_can_leave_the_grep_pointer_out():
+    plain = json.loads(ab.command("L1", "m", 1.0, "q")[ab.command("L1", "m", 1.0, "q").index("--settings") + 1])
+    bare = ab.command("L1n", "m", 1.0, "q")
+    assert plain == {"pluginConfigs": {"aleph-zero@inline": {"options": {"rung": "1"}}}}
+    assert json.loads(bare[bare.index("--settings") + 1]) == {
+        "pluginConfigs": {"aleph-zero@inline": {"options": {"rung": "1", "grep_pointer": "off"}}}}
