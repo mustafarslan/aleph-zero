@@ -73,7 +73,7 @@ Graded with oxn's protocol on oxn's six corpora at its pinned commits. Confident
 | nest (TypeScript) | 9,158 | 100.0% | 80.0% | 56.7% | met |
 | httpx (Python) | 1,556 | 100.0% | 87.7% | not reported | precision met |
 | eslint (JavaScript) | 15,301 | 100.0% | 48.5% | not reported | precision met |
-| spring-petclinic (Java) | 369 | 100.0% | 90.2% | not reported | precision met |
+| spring-petclinic (Java) | 369 | 100.0% | 94.0% | not reported | precision met |
 
 C and C++ are not graded: no SCIP indexer for them is installed.
 
@@ -90,7 +90,7 @@ So an edge is **certain** only when it has one target and was not found by name 
 | nest | 100.0% | 0 at 3,327 | 78.9% | 64 |
 | httpx | 99.8% | 3 at 1,484 | 82.1% | 95 |
 | eslint | 100.0% | 0 at 6,604 | 46.9% | 309 |
-| spring-petclinic | 100.0% | 0 at 1,241 | 83.5% | 33 |
+| spring-petclinic | 100.0% | 0 at 1,241 | 87.3% | 33 |
 
 The stricter stamp also clears oxn's recall bars (76.4 against 64.1, 56.4 against 42.3, 78.9 against 56.7). The three on httpx are calls of a method named `set` that the oracle resolves to Python's builtin `set`; the one on ripgrep is a `use` inside a function that shadows a function of the same name.
 
@@ -105,9 +105,13 @@ Confident recall / certain recall.
 | nest | 80.0% / 78.9% | 75.7% / 69.2% | 79.2% / 78.0% | 63.3% / 49.8% |
 | httpx | 87.7% / 82.1% | 41.8% / 36.1% | 87.7% / 82.1% | 66.3% / 51.3% |
 | eslint | 48.5% / 46.9% | 48.1% / 46.5% | 48.5% / 46.9% | 48.8% / 45.0% |
-| spring-petclinic | 90.2% / 83.5% | 90.2% / 83.5% | 90.2% / 83.5% | 89.2% / 24.7% |
+| spring-petclinic | 94.0% / 87.3% | 94.0% / 87.3% | 94.0% / 87.3% | 89.4% / 24.9% |
 
 Without stated types Go is below oxn's bar (60.1 against 64.1): following the types of receivers and fields is what clears it. go-kit, eslint and petclinic are one package each, so the second column cannot move them.
+
+### An adversarial read of the certain stamp
+
+agy (a second model, asked for realistic sources where a certain edge is wrong) gave six. All six reproduced and are fixed, each with a test that failed first: Python's method resolution order through several bases, Go's shallowest embedding, a Java overload inherited past a same-named method (the number of arguments now narrows overloads, which took petclinic's confident recall from 90.2% to 94.0%), two star imports that bring the same name, a module that imports a name for itself and re-exports another of that name through a star, and two Rust types of one name in one crate. None of the six occurred in the graded corpora: the figures above did not move except Java's. The grade says what the corpora contain, not what the rules get wrong.
 
 ### On repositories the resolver was not developed against
 
