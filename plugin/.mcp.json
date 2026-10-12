@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aleph": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/serve.sh",
+      "args": []
+    }
+  }
+}

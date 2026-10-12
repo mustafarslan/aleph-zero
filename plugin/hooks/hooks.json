@@ -1,0 +1,4 @@
+{
+  "description": "Aleph Zero's steering: how Claude Code uses the search tools",
+  "modules": ["./register.js"]
+}
