@@ -147,12 +147,23 @@ class _Walk:
         value = node.child_by_field_name("value")
         if key is None or value is None:
             return node, scope
+        if not scope.members and self._passed_to_a_call(node):
+            return node, scope  # options and hooks of a call: `beforeEach` in every test file
         if value.type in self.profile.anonymous:
             self._function(node, value, _text(key), scope)
             return None
         if value.type in self.profile.object_kinds and scope.members:
             return value, _Scope((*scope.names, _text(key)), scope.parent, members=True)
         return node, scope
+
+    def _passed_to_a_call(self, pair: Node) -> bool:
+        """Whether the object this entry is in, or one it is nested in, is an argument of a call."""
+        profile = self.profile
+        node = pair.parent
+        while node is not None and (node.type in profile.object_kinds or node.type in profile.pair_kinds
+                                    or node.type in _VALUE_WRAPPERS):
+            node = node.parent
+        return node is not None and node.type in profile.argument_kinds
 
     def _value(self, node: Node, definition: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
         profile = self.profile

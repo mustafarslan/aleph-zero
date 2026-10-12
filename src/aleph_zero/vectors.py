@@ -36,6 +36,13 @@ _BLOCK = 16_384             # rows converted to float32 at a time: 16 MB of scra
 EMBEDDED = "c.kind != 'block'"
 
 
+def _inode(path: Path | None) -> int:
+    try:
+        return os.stat(path).st_ino if path is not None else 0
+    except OSError:
+        return 0
+
+
 class VectorStore:
     """The vectors of one kind (model, prefix version, width) for one repository."""
 
@@ -44,6 +51,12 @@ class VectorStore:
         self.kind = kind
         self.path = Path(directory) / f"vectors.{re.sub(r'[^A-Za-z0-9._-]+', '_', kind)}.f16"
         self._map: np.memmap | None = None
+        self._map_inode = 0                 # which file the mapping is of: the path can come to name another
+        # The index file this connection has open. If the path comes to name another file
+        # (a damaged index was set aside and rebuilt), this connection's row numbers belong
+        # to a database nobody else reads, and must not be written into the shared file.
+        self._index_file = Path(conn.filename) if conn.filename else None
+        self._index_inode = _inode(self._index_file)
         self._cache: tuple | None = None    # (key, chunk ids, rows) of the view last searched
         self._coverage: tuple | None = None  # (key, (with a vector, should have one))
         self._recover()
@@ -62,6 +75,8 @@ class VectorStore:
             return 0
         half = np.ascontiguousarray(matrix, dtype=np.float16)
         with transaction(self.conn):
+            if self.replaced():
+                return 0
             marks = ",".join("?" * len(chunk_ids))
             have = {row[0] for row in self.conn.execute(
                 f"SELECT chunk_id FROM chunk_vectors WHERE kind = ? AND chunk_id IN ({marks})", (self.kind, *chunk_ids))}
@@ -127,6 +142,10 @@ class VectorStore:
         found = self.conn.execute("SELECT writes FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
         return found[0][0] if found else 0
 
+    def replaced(self) -> bool:
+        """True when the index file this store's connection has open is no longer the one at its path."""
+        return bool(self._index_inode) and _inode(self._index_file) != self._index_inode
+
     def release_memory(self) -> None:
         """Forget the mapping and the remembered row lists; the next search makes them again."""
         self._map = None
@@ -177,16 +196,23 @@ class VectorStore:
         return self._cache[1], self._cache[2]
 
     def _mapped(self, needed_rows: int) -> np.memmap | None:
-        """The file, mapped for at least `needed_rows`. Mapped again when it has grown."""
-        if self._map is None or len(self._map) < needed_rows:
+        """The file, mapped for at least `needed_rows`. Mapped again when it has grown, and
+        when the path names another file than the one mapped: a vector file that was deleted
+        and made again stays readable through an old mapping, with the old vectors in it."""
+        try:
+            with open(self.path, "rb") as handle:
+                found = os.fstat(handle.fileno())
+                if self._map is not None and found.st_ino == self._map_inode and len(self._map) >= needed_rows:
+                    return self._map
+                self._map = None
+                on_disk = found.st_size // ROW_BYTES
+                if on_disk < needed_rows or on_disk == 0:
+                    return None
+                self._map = np.memmap(handle, dtype=np.float16, mode="r", shape=(on_disk, WIDTH))
+                self._map_inode = found.st_ino
+        except OSError:
             self._map = None
-            try:
-                on_disk = os.path.getsize(self.path) // ROW_BYTES
-            except OSError:
-                return None
-            if on_disk < needed_rows:
-                return None
-            self._map = np.memmap(self.path, dtype=np.float16, mode="r", shape=(on_disk, WIDTH))
+            return None
         return self._map
 
     def _recover(self) -> None:

@@ -88,6 +88,9 @@ def embed_pending(index: Index, store: VectorStore, client: EmbedClient, budget_
                 progress(embedded, len(wanted))
             if stored == 0 and len(rows) < len(wanted):
                 break  # nothing left that still exists
+            if stored == 0 and store.replaced():
+                reason = "the index was rebuilt by another session; this one reopens it on its next call"
+                break
             if time.monotonic() - started >= budget_seconds:
                 break
     have, total = store.coverage(index)

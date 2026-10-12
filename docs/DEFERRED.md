@@ -66,6 +66,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **The vector file never shrinks.** Rows of collected content are used again, so it stops growing, but after a very large branch is abandoned the file stays at its high-water mark (150 MB per 300,000 chunks). Deleting `vectors.*.f16` and running `aleph embed run` rebuilds it.
 - **A trigram index for text written without spaces** (Chinese, Japanese, Korean): no repository in use needs it.
 - **Plain values of object literals** (`limit: 10`) are not listed as symbols; functions in them are.
+- **Left as they are after the M3 review, with their cost:** vector rows are flushed with `fsync`, not macOS's stronger `F_FULLFSYNC`, so after a power failure (not a crash) a row could hold older bytes than the index says; a cache directory on a network home directory is not detected; a collection round killed half-way waits a day for the next; while a session's own background thread is embedding, each of its queries re-checks the whole view (about 2 ms on Django).
 
 ## 8. Carried to later milestones (recorded in the design)
 

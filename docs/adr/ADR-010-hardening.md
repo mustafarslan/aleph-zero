@@ -20,6 +20,13 @@ What does Aleph do when its assumptions do not hold: several sessions write one 
 
 When SQLite reports corruption or "not a database", on open or in the middle of a query, the file is renamed to `index.db.damaged-<time>-<pid>` (kept, with its log files) and a new index is started; the operation that met the damage runs once more. A session remembers the inode it opened: if the file at the path is a different one by now, another session has already replaced it, and this one only reopens. `status` says the index was rebuilt.
 
+Found by the review: a session that has the damaged file open may never read the damage, because its pages are in memory. It would go on indexing into the file that was set aside, where nobody else reads, and write vector rows numbered by that database into the file the new database uses. So:
+
+- every operation compares the inode of the index path with the one it opened (one `stat`) and reopens when they differ;
+- the vector files are set aside together with the database whose row numbers they follow, and a new database starts a new file;
+- a vector store refuses to write when its connection's index file is no longer the one at the path;
+- setting aside happens under a file lock, so the second of two sessions that saw the same damage cannot move the index the first has just made.
+
 ### Reading the index: one state, checked
 
 Found by the stress run. A session used to check that the index held its view, and then search, in separate statements. A collection by another session in between removed what had been found, and the search answered without those files and without saying so.
@@ -29,7 +36,7 @@ Found by the stress run. A session used to check that the index held its view, a
 - The index counts removals in a `meta` table. Content that was collected and indexed again by another session comes back under new chunk ids; a session whose count is behind rebuilds its list of chunks. Before this it kept the old ids and found nothing.
 - The same `data_version` makes the usual case cheaper: when the view is unchanged and no other session has written, the per-query check that joined the whole view against the index twice (2.7 ms on Django) is skipped (0.003 ms).
 
-SQLite reports `data_version` as of the start of a transaction, so it is read outside the transaction, before and after. A write that changes no byte (`UPDATE t SET x = x`) does not change it; that is fine, nothing changed.
+Inside a transaction `data_version` does not move with other sessions' commits (the transaction reads one state), so it is read outside the transaction, before and after. A write that changes no byte (`UPDATE t SET x = x`) does not change it; that is fine, nothing changed.
 
 ### What a view contains in unusual checkouts
 
@@ -59,6 +66,8 @@ A row whose chunk is collected goes on a free list, by a trigger so that no path
 
 The first design was compaction into a new file generation. agy showed three ways a reader could pair one generation's rows with another's bytes (mapping after the old file is unlinked; a kept mapping that is "long enough" after a shrink; a row list cached under a counter that happens to match) and proposed reuse in place.
 
+A mapping is of a file, not of a path: a search checks (one `fstat`) that the file at the path is still the one it has mapped, and maps again if not. Without that, a vector file deleted and made again (the way to shrink it) stayed readable through the old mapping, with the old vectors (found by the review).
+
 One case is accepted: if content of a session's live view is collected anyway (only possible with `aleph gc --days 0` or similar) and its row is reused within the same query, that query ranks one chunk by another chunk's vector. The chunk shown is still a chunk of the view.
 
 ### A chunk's identity does not depend on the chunker's version
@@ -71,11 +80,11 @@ Schema changes that keep the data are applied in place, one step at a time (4 to
 
 ### The memory check
 
-ADR-005 said each session reads its private memory after each call. Nothing did, and the reading cost 30 ms (it started the `footprint` tool). It is now one system call (`proc_pid_rusage`, the same figure), taken by the server after every answer has been sent. Over 130 MB (four sessions and the worker's 490 MB worst case inside 1,024 MB) the session lets go of what it can rebuild: connections to worktrees other than the one in use, SQLite's page cache, remembered trees and path words, the mapped vector file, parsers. It never refuses a call and never exits: a server that exits looks like a broken tool to the agent. `status` shows the figure, the limit and how often memory was released.
+ADR-005 said each session reads its private memory after each call. Nothing did, and the reading cost 30 ms (it started the `footprint` tool). It is now one system call (`proc_pid_rusage`, the same figure), taken by the server after every answer has been sent. Over 130 MB (four sessions and the worker's 490 MB worst case inside 1,024 MB) the session lets go of what it can rebuild: connections to worktrees other than the one in use, SQLite's page cache, remembered trees and path words, the mapped vector file, parsers. It never refuses a call and never exits: a server that exits looks like a broken tool to the agent. The server's background embedding thread has its own connections, which this check does not reach; it closes them after a minute without calls. `status` shows the figure, the limit and how often memory was released.
 
 ### Language items carried from M1b
 
-Methods of an object literal bound to a name are definitions (`api.get`), nested objects continue the name, and a function-valued key in an unnamed object is found by its key. Every target of a Python chained assignment is defined. C declarations behind an unknown macro and C++ destructors by `~Name` already worked and are pinned by tests.
+Methods of an object literal bound to a name are definitions (`api.get`), nested objects continue the name, and a function-valued key in an object that is exported or assigned (`export default { ... }`, `module.exports = { ... }`) is found by its key. Not in an object passed to a call: there the keys are options and hooks (`beforeEach` in every test file), as the review's comparison on Django's JavaScript showed. Every target of a Python chained assignment is defined. C declarations behind an unknown macro and C++ destructors by `~Name` already worked and are pinned by tests.
 
 ## The gate: thirty minutes, four sessions, three worktrees (measured 2026-10-12)
 
@@ -108,4 +117,5 @@ Searching a directory that is not a repository; what needs Linux to verify (file
 ## Views consulted
 
 - **Advisor:** build the stress harness first and use it to find faults; verify what exists with a test instead of rebuilding it; decide the non-repository directory and submodules as rulings; ask agy three named questions rather than for a review.
+- **Independent review of the branch (a fresh reviewer, most capable model):** found the stale mapping of a replaced vector file and the session left behind on a set-aside index (both reproduced, both fixed), the background thread's unbounded connections, the over-eager object-literal keys, and two weaknesses of the stress harness (its collector spared one worktree; the asking session was not counted). It checked the transaction logic of search against five interleavings and found it sound.
 - **agy (no boost):** against file generations for the vector file, for reuse in place (adopted); four stress invariants (adopted: content of a live view is never collected by another session, foreign keys, text-index rows equal chunks, the write-ahead log can be emptied at the end); agreed with leaving files outside a sparse checkout out and with linking submodules by hand, and named the cost of each; warned that a clone without trees breaks the listing (checked: it does not, with a checkout) and that an unreadable blob stays pending for ever (confirmed and fixed).

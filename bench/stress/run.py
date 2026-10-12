@@ -378,9 +378,14 @@ class Run:
         except Exception as exc:  # noqa: BLE001
             self.fail(f"{session.name}: {type(exc).__name__}: {exc}")
 
-    def collect(self, main: Path) -> None:
+    def collect(self, roots: list[Path]) -> None:
+        """A separate process collects, from each worktree in turn: a collector never takes
+        its own view's content, so one fixed worktree would be spared for the whole run."""
         age_days = 0 if self.args.harsh else COLLECT_AGE_SECONDS / 86400
+        turn = 0
         while not self.stop.wait(self.args.collect_every):
+            main = roots[turn % len(roots)]
+            turn += 1
             proc = subprocess.run([sys.executable, "-m", "aleph_zero.cli", "--cwd", str(main), "gc", "--days", repr(age_days)],
                                   capture_output=True, text=True, env=self.env)
             if proc.returncode != 0:
@@ -489,7 +494,7 @@ class Run:
         threads = [threading.Thread(target=self.drive, args=(session, tree, trees), daemon=True)
                    for session, tree in zip(sessions, trees)]
         threads.append(threading.Thread(target=self.watch, args=(asker, trees), daemon=True))
-        threads.append(threading.Thread(target=self.collect, args=(trees[0].root,), daemon=True))
+        threads.append(threading.Thread(target=self.collect, args=([tree.root for tree in trees],), daemon=True))
         threads.append(threading.Thread(target=self.measure, args=([*sessions, asker],), daemon=True))
         started = time.monotonic()
         for thread in threads:
@@ -512,6 +517,8 @@ class Run:
                 index = Path(status["index"])
                 lost += status["lost_to_collection"]
                 report.setdefault("vectors_by_worktree", {})[tree.name] = status["vectors"]
+            for tree in trees:  # the session that only asks holds a view of each worktree, mostly idle
+                lost += asker.call("status", cwd=str(tree.root))["lost_to_collection"]
             report["lost_to_collection"] = lost
             if lost and not self.args.harsh:
                 raise Failure(f"{lost} blobs were collected while a session's view was using them")

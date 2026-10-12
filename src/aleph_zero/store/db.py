@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import fcntl
 import hashlib
 import os
 import sys
@@ -143,24 +144,35 @@ def inode(path: Path) -> int:
 
 
 def set_aside(path: Path, opened: int) -> bool:
-    """Move a damaged index file out of the way, keeping it for a look. `opened` is the
-    inode this session had open: if the file at `path` is a different one by now, another
-    session has already rebuilt it and nothing is moved. Returns whether it moved."""
-    if opened and inode(path) != opened:
-        return False
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    target = path.with_name(f"{path.name}.damaged-{stamp}-{os.getpid()}")
-    try:
-        os.replace(path, target)
-    except FileNotFoundError:
-        return False
-    for extra in ("-wal", "-shm"):  # they belong to the damaged file and would be replayed into a new one
+    """Move a damaged index file out of the way, keeping it for a look, together with the
+    vector files whose rows it numbers. `opened` is the inode this session had open: if
+    the file at `path` is a different one by now, another session has already rebuilt it
+    and nothing is moved. Returns whether it moved. One session at a time: without the
+    lock, a second session could look before the first one's rename and move the new index."""
+    with open(path.parent / "set-aside.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            os.replace(str(path) + extra, str(target) + extra)
-        except FileNotFoundError:
-            pass
-    _notes[path] = f"rebuilt on {time.strftime('%Y-%m-%d %H:%M')}: the index file was damaged and is kept as {target.name}"
-    return True
+            if opened and inode(path) != opened:
+                return False
+            stamp = f"damaged-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            target = path.with_name(f"{path.name}.{stamp}")
+            try:
+                os.replace(path, target)
+            except FileNotFoundError:
+                return False
+            # The log files belong to the damaged file and would be replayed into a new one. The
+            # vector files hold rows by this database's numbering: a new database starts from row 0.
+            for extra in (Path(str(path) + "-wal"), Path(str(path) + "-shm"), *path.parent.glob("vectors.*.f16")):
+                try:
+                    os.replace(extra, extra.with_name(f"{extra.name}.{stamp}" if extra.suffix == ".f16"
+                                                      else f"{target.name}{extra.name[len(path.name):]}"))
+                except FileNotFoundError:
+                    pass
+            _notes[path] = (f"rebuilt on {time.strftime('%Y-%m-%d %H:%M')}: the index file was damaged and is kept "
+                            f"as {target.name}")
+            return True
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def index_path(cwd: Path) -> Path:

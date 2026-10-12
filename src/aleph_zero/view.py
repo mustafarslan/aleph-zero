@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -16,6 +17,7 @@ from . import filters, gitio
 
 _TREE_CACHE: dict[tuple[str, str], tuple[dict[str, str], tuple[str, ...]]] = {}
 _TREE_CACHE_SIZE = 8
+_CACHE_LOCK = threading.Lock()
 # Per worktree with a sparse checkout: what its files were filtered from, and the result.
 _SPARSE_CACHE: dict[Path, tuple[tuple, dict[str, str], int]] = {}
 
@@ -89,17 +91,22 @@ class View:
 
 def forget_trees() -> None:
     """Drop the remembered trees (a session over its memory share); they are read again when needed."""
-    _TREE_CACHE.clear()
-    _SPARSE_CACHE.clear()
+    with _CACHE_LOCK:
+        _TREE_CACHE.clear()
+        _SPARSE_CACHE.clear()
 
 
 def _tree(root: Path, common_dir: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
     key = (str(common_dir), tree)
-    if key not in _TREE_CACHE:
-        if len(_TREE_CACHE) >= _TREE_CACHE_SIZE:
-            _TREE_CACHE.pop(next(iter(_TREE_CACHE)))
-        _TREE_CACHE[key] = gitio.read_tree(root, tree)
-    return _TREE_CACHE[key]
+    with _CACHE_LOCK:  # the server's call thread and its embedding thread both come here
+        found = _TREE_CACHE.get(key)
+    if found is None:
+        found = gitio.read_tree(root, tree)
+        with _CACHE_LOCK:
+            while len(_TREE_CACHE) >= _TREE_CACHE_SIZE:
+                _TREE_CACHE.pop(next(iter(_TREE_CACHE)))
+            _TREE_CACHE[key] = found
+    return found
 
 
 def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:
@@ -126,7 +133,8 @@ def _checked_out(info: gitio.RepoInfo, files: dict[str, str]) -> tuple[dict[str,
     if sparse_file is None or not sparse_file.exists():
         return files, 0  # the usual case costs one stat
     key = (info.tree, _stamp(git_dir / "index"), _stamp(sparse_file))
-    cached = _SPARSE_CACHE.get(info.root)
+    with _CACHE_LOCK:
+        cached = _SPARSE_CACHE.get(info.root)
     if cached is not None and cached[0] == key:
         return dict(cached[1]), cached[2]
     skipped, directories = gitio.skip_worktree(info.root)
@@ -145,7 +153,8 @@ def _checked_out(info: gitio.RepoInfo, files: dict[str, str]) -> tuple[dict[str,
             return False
 
         kept = {path: oid for path, oid in files.items() if not outside(path)}
-    _SPARSE_CACHE[info.root] = (key, kept, len(files) - len(kept))
+    with _CACHE_LOCK:
+        _SPARSE_CACHE[info.root] = (key, kept, len(files) - len(kept))
     return dict(kept), len(files) - len(kept)
 
 

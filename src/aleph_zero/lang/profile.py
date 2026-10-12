@@ -94,6 +94,9 @@ class LanguageProfile:
     #: of a key is called by that key: `const api = { get() {}, post: () => {} }`.
     object_kinds: frozenset[str] = frozenset()
     pair_kinds: frozenset[str] = frozenset()
+    #: The argument list of a call. An object passed to a call is options or hooks, and its
+    #: keys are not names the program calls anything by: `module('x', { beforeEach() {} })`.
+    argument_kinds: frozenset[str] = frozenset()
     #: True where a name is reached by following `declarator` fields: C and C++.
     declarator_chain: bool = False
     #: Tokens that make a value a constant: `const`, `constexpr`, `readonly`.

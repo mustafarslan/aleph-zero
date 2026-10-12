@@ -355,3 +355,21 @@ STATIC_INLINE int widget_close(struct widget *w)
 """)
     assert one(defs, "widget_open").kind == "function" and one(defs, "widget_close").kind == "function"
     assert (one(defs, "widget_close").start_line, one(defs, "widget_close").end_line) == (3, 6)
+
+
+def test_functions_in_an_object_passed_to_a_call_are_not_listed_by_their_keys():
+    """Hooks of a test framework and option objects of calls: every test file would define
+    `beforeEach`. Objects that are bound, assigned or exported are another matter."""
+    defs = found("javascript", """
+QUnit.module('admin', {
+  beforeEach: function () { setup(); },
+  nested: { afterEach: () => teardown() },
+});
+app.use({ handler: (req) => req });
+module.exports = {
+  exported: function () { return 1; },
+};
+""")
+    names = {d.name for d in defs}
+    assert not {"beforeEach", "afterEach", "handler"} & names
+    assert "exported" in names

@@ -347,6 +347,15 @@ class Engine:
     def _index(self, view: View) -> Index:
         self._last = view.root
         index = self._indexes.get(view.root)
+        if index is not None:
+            path, opened = self._files[view.root]
+            if store_db.inode(path) != opened:
+                # Another session set a damaged index aside and built a new one. This session
+                # may never have read the damage (its pages were in memory): it would go on
+                # writing into the file that was set aside, where nobody else reads.
+                for root in [root for root, (file, _) in self._files.items() if file == path]:
+                    self._forget(root)
+                index = None
         if index is None:
             path = index_file(view.common_dir)
             index = self._indexes[view.root] = Index(open_db(path))

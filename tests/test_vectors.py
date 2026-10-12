@@ -295,3 +295,50 @@ def test_a_deleted_vector_file_starts_again_from_nothing(repo):
             one("SELECT count(*) FROM vector_free")) == (0, 0, 0)
     again.add(chunk_ids[:1], unit(43, 1))
     assert again.path.stat().st_size == vectors.ROW_BYTES
+
+
+# ---- findings of the M3 review ------------------------------------------------------------------------------
+
+def test_a_session_reads_the_vector_file_that_is_there_now_not_one_that_was_deleted(repo):
+    """The file is deleted and made again with other vectors (what the deferred list tells
+    the owner to do to shrink it). A session that had the old file mapped must not go on
+    ranking by bytes that are no longer on disk."""
+    index, store, chunk_ids = ready(repo)
+    old = unit(50, len(chunk_ids))
+    store.add(chunk_ids, old)
+    live_index = Index(open_db(index_path(repo.root)))
+    live_index.sync(build_view(repo.root))
+    live = VectorStore(live_index.conn, index_path(repo.root).parent, KIND)
+    assert live.search(live_index, old[3], limit=1)[0][0] == chunk_ids[3]      # the old file is mapped now
+    store.path.unlink()
+    rebuilt = VectorStore(index.conn, index_path(repo.root).parent, KIND)
+    new = unit(51, len(chunk_ids))
+    rebuilt.add(chunk_ids, new)
+    best = live.search(live_index, new[3], limit=1)[0]
+    assert best[0] == chunk_ids[3] and best[1] > 0.99
+    assert live.search(live_index, old[3], limit=1)[0][1] < 0.5              # the old vectors are gone
+
+
+def test_nothing_is_written_through_a_connection_to_an_index_that_was_set_aside(repo):
+    """The index file was replaced while this session had it open. Its row numbers belong to
+    the old database; written into the vector file of the new one they would overwrite
+    another chunk's vector."""
+    import os
+
+    from aleph_zero import embedder
+    from aleph_zero.store import db
+
+    index, store, chunk_ids = ready(repo)
+    path = index_path(repo.root)
+    assert db.set_aside(path, db.inode(path)) is True
+    fresh = Index(open_db(path))
+    fresh.sync(build_view(repo.root))
+    assert store.add(chunk_ids, unit(52, len(chunk_ids))) == 0
+    assert not store.path.exists() or os.path.getsize(store.path) == 0
+
+    class Client:
+        def embed(self, texts, kind):
+            return unit(53, len(texts))
+
+    report = embedder.embed_pending(index, store, Client(), budget_seconds=30)   # must come back, not spin
+    assert report.embedded == 0 and report.seconds < 5

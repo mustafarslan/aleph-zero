@@ -178,3 +178,61 @@ def test_an_index_of_schema_5_gets_the_free_list_it_lacks(repo):
     assert conn.pragma("user_version") == SCHEMA_VERSION
     assert conn.execute("SELECT row FROM vector_free WHERE kind = 'probe' ORDER BY row").fetchall() == [(0,), (1,), (2,)]
     assert Engine(repo.root).search("refresh token").pending == 0
+
+
+# ---- findings of the M3 review ---------------------------------------------------------------------------------
+
+def _wreck_header(index: Path) -> None:
+    with open(index, "r+b") as handle:
+        handle.write(b"not a database any more" * 5)
+
+
+def test_a_session_that_did_not_notice_the_rebuild_moves_to_the_new_index(repo):
+    """Session A has the index open and its pages in memory, so it never reads the damage.
+    Session B meets it, sets the file aside and builds a new one. A must not go on writing
+    into the file that was set aside."""
+    first = Engine(repo.root)
+    assert first.search("refresh token").hits
+    index = Path(first.status()["index"])
+    next(iter(first._indexes.values())).conn.pragma("wal_checkpoint", "TRUNCATE")
+    _wreck_header(index)
+    second = Engine(repo.root)
+    assert second.search("refresh token").hits                 # B rebuilds
+    rebuilt = index.stat().st_ino
+    repo.write("src/after_rebuild.py", "def written_after_rebuild():\n    return 1\n")
+    assert first.search("written_after_rebuild").hits          # A indexes the new file ...
+    assert index.stat().st_ino == rebuilt
+    third = Engine(repo.root)
+    index_of_third = next(iter(third._indexes.values()), None) or third._index(third._view(None))
+    index_of_third.sync(third._view(None), budget_seconds=0)   # ... and a third session finds it already there
+    assert index_of_third.conn.execute(
+        "SELECT count(*) FROM symbols WHERE name = 'written_after_rebuild'").fetchall() == [(1,)]
+
+
+def test_the_vector_file_is_set_aside_with_the_index_it_belongs_to(repo):
+    from aleph_zero.store import db, index_path
+
+    engine = Engine(repo.root)
+    engine.search("refresh token")
+    engine.close()
+    path = index_path(repo.root)
+    vectors_file = path.parent / "vectors.some-model_p1_256.f16"
+    vectors_file.write_bytes(b"\0" * 1024)
+    assert db.set_aside(path, db.inode(path)) is True
+    assert not vectors_file.exists()
+    kept = [p.name for p in path.parent.iterdir() if ".damaged-" in p.name]
+    assert any(name.startswith("vectors.some-model_p1_256.f16.damaged-") for name in kept)
+
+
+def test_only_one_of_two_sessions_sets_a_damaged_index_aside(repo):
+    """Both saw the same damaged file. The second must not move the index the first has just made."""
+    from aleph_zero.store import db, index_path, open_db
+
+    Engine(repo.root).search("refresh token")
+    path = index_path(repo.root)
+    seen = db.inode(path)
+    assert db.set_aside(path, seen) is True
+    open_db(path).close()                      # the first session's new index
+    new = db.inode(path)
+    assert db.set_aside(path, seen) is False   # the second session, late
+    assert db.inode(path) == new

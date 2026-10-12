@@ -111,11 +111,13 @@ class _Background:
 
     ROUND_SECONDS = 10     # one stretch of embedding before checking whether to go on
     RETRY_SECONDS = 60     # after the worker was unavailable or another session was embedding
+    IDLE_SECONDS = 60      # without a call, before the thread's own connections are closed
 
     def __init__(self, default_cwd, dense: bool | None) -> None:
         self._engine = Engine(default_cwd, dense=dense)
         self._wanted: queue.Queue = queue.Queue()
         self._stopping = threading.Event()
+        self.rounds = 0  # times the thread has finished with a worktree
         self._thread = threading.Thread(target=self._work, name="aleph-embed", daemon=True)
         self._thread.start()
 
@@ -130,7 +132,14 @@ class _Background:
 
     def _work(self) -> None:
         while not self._stopping.is_set():
-            cwd = self._wanted.get()
+            try:
+                cwd = self._wanted.get(timeout=self.IDLE_SECONDS)
+            except queue.Empty:
+                # No call for a while: keep no connection, page cache or mapped file meanwhile.
+                # This engine is out of reach of the session's memory check, and would
+                # otherwise hold one of each for every worktree ever asked about.
+                self._engine.close()
+                continue
             while not self._wanted.empty():  # only the latest matters
                 cwd = self._wanted.get()
             while not self._stopping.is_set():
@@ -145,6 +154,7 @@ class _Background:
                     break
                 if report.reason and self._stopping.wait(self.RETRY_SECONDS):
                     break
+            self.rounds += 1
 
 
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:

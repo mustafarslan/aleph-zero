@@ -68,3 +68,27 @@ def test_the_server_checks_its_memory_after_a_call(repo, monkeypatch):
         assert status["memory"]["releases"] >= 2 and status["memory"]["limit_mb"] == 1
     finally:
         client.close()
+
+
+def test_the_background_embedding_thread_lets_go_of_its_connections_when_it_has_nothing_to_do(repo, tmp_path):
+    """It has its own engine. Without this it keeps a connection, with its page cache, for
+    every worktree the session was ever asked about, where the memory check cannot reach."""
+    import time
+
+    from aleph_zero.server import _Background
+
+    other = tmp_path / "second-worktree"
+    repo.git("worktree", "add", "-q", str(other))
+    _Background.IDLE_SECONDS, usual = 0.2, _Background.IDLE_SECONDS
+    background = _Background(repo.root, dense=False)
+    _Background.IDLE_SECONDS = usual
+    background.IDLE_SECONDS = 0.2
+    try:
+        background.note(str(repo.root))
+        background.note(str(other))
+        deadline = time.time() + 10
+        while time.time() < deadline and (background.rounds < 1 or background._engine._indexes):
+            time.sleep(0.05)
+        assert background.rounds >= 1 and background._engine._indexes == {}
+    finally:
+        background.stop()
