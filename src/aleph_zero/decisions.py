@@ -26,12 +26,18 @@ DIRECTORIES = frozenset({"adr", "adrs", "decisions", "decision-records", "decisi
 MAX_BYTES = 400_000
 K1, B = 1.5, 0.75
 STEMS = False           # whether words are reduced to their stems before they are counted
+# How much a word counts by where it stands in a record (its title, its Decision section, anywhere), and how
+# much a word of a task's first line counts against the rest. All one: the ranking that was measured. Switches
+# for a ranker chosen on development data (ADR-003); nothing is chosen yet.
+FIELDS = (1.0, 1.0, 1.0)
+SUBJECT = 1.0
 RRF_K = 5               # small: with tens of records, first and second place must differ by more than 1/61 and 1/62
 NEAREST = 200           # chunks of the records asked of the vectors
 _NUMBERED = re.compile(r"(?:ADR[-_ ]?)?(\d+)[-_]", re.I)
 _TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 _VOWEL = re.compile(r"[aeiouy]")
 _HEADING = re.compile(r"^#\s+(?:(?:ADR[- ]?)?\d+\s*[.:\-–]\s*)?(.+?)\s*$", re.MULTILINE | re.I)
+_DECISION_SECTION = re.compile(r"^##+\s*Decision(?:s| Outcome)?\s*$\n(.*?)(?=^##+\s|\Z)", re.MULTILINE | re.DOTALL | re.I)
 _STATUS_SECTION = re.compile(r"^##\s*Status\s*$\n+(.+?)\s*$", re.MULTILINE | re.I)
 _STATUS_LINE = re.compile(r"^\**Status\**\s*:\s*\**\s*(.+?)\s*\**\s*$", re.MULTILINE | re.I)
 _FRONT = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -46,6 +52,7 @@ class Decision:
     status: str
     text: str           # what is ranked: title, tags, and the record as written
     applies_to: tuple[str, ...] = ()   # path globs its frontmatter says it governs; not ranked
+    decision: str = ""  # its Decision section, when it has one: what it rules, apart from why
 
 
 @dataclass(frozen=True)
@@ -93,7 +100,8 @@ def parse(path: str, number: int, content: str) -> Decision:
         number = int(re.sub(r"\D", "", fields["id"]))
     tags = fields.get("tags", "").strip("[]").replace(",", " ")
     scope = architecture.sequence(front.group(1), "applies-to") if front else ()
-    return Decision(path, number, title.strip(), status.strip(), f"{title}\n{tags}\n{body}", scope)
+    ruled = _DECISION_SECTION.search(body)
+    return Decision(path, number, title.strip(), status.strip(), f"{title}\n{tags}\n{body}", scope, ruled.group(1) if ruled else "")
 
 
 def tokenize(text: str, stems: bool = False) -> list[str]:
@@ -126,10 +134,18 @@ def stem(word: str) -> str:
 class Records:
     """The decision records of one view, ready to be ranked."""
 
-    def __init__(self, found: list[Decision], stems: bool | None = None, b: float | None = None) -> None:
+    def __init__(self, found: list[Decision], stems: bool | None = None, b: float | None = None,
+                 fields: tuple[float, float, float] | None = None, subject: float | None = None) -> None:
         self.decisions = sorted(found, key=lambda each: (each.number, each.path))
         self._stems, self._b = STEMS if stems is None else stems, B if b is None else b
+        self._subject = SUBJECT if subject is None else subject
+        in_title, in_decision, _ = FIELDS if fields is None else fields
         counted = [Counter(tokenize(each.text, self._stems)) for each in self.decisions]
+        if (in_title, in_decision) != (1.0, 1.0):       # a word of the title or of the Decision section counts for more
+            for terms, each in zip(counted, self.decisions):
+                for weight, part in ((in_title - 1.0, each.title), (in_decision - 1.0, each.decision)):
+                    for term, frequency in Counter(tokenize(part, self._stems)).items():
+                        terms[term] += weight * frequency
         self._lengths = [sum(terms.values()) for terms in counted]
         self._average = sum(self._lengths) / len(self._lengths) if self._lengths else 0.0
         self._postings: dict[str, dict[int, int]] = {}
@@ -147,11 +163,14 @@ class Records:
         Equal scores keep the records' own order, so the ranking is a function of the records and the task."""
         scores: dict[int, float] = {}
         size = len(self.decisions)
+        first_line = set(tokenize(task.strip().split("\n", 1)[0], self._stems)) if self._subject != 1.0 else ()
         for term in tokenize(task, self._stems):
             found = self._postings.get(term)
             if found is None:
                 continue
             weight = math.log(1 + (size - len(found) + 0.5) / (len(found) + 0.5))
+            if term in first_line:      # what the commit says it does, against how it explains itself
+                weight *= self._subject
             for at, frequency in found.items():
                 norm = K1 * (1 - self._b + self._b * (self._lengths[at] / self._average if self._average else 1.0))
                 scores[at] = scores.get(at, 0.0) + weight * frequency * (K1 + 1) / (frequency + norm)

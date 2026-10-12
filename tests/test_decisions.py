@@ -188,3 +188,33 @@ def test_an_apostrophe_in_a_name_does_not_swallow_the_comment_after_it():
     layers, contracts = architecture.read(text)
     assert [layer.patterns for layer in layers] == [("src/*",)] and [c.name for c in contracts] == ["don't-cycle"]
     assert architecture.read("layers:\n  api: ['it''s/*', \"a # b/*\"]  # two\n")[0][0].patterns == ("it''s/*", "a # b/*")   # a quoted # is not a comment
+
+
+FIELDED = {
+    "docs/adr/0001-a.md": "# 1. Events travel on a message bus\n\n## Context\n\nRetries, retries and retries were discussed; retries matter.\n\n"
+                          "## Decision\n\nServices publish events to the bus.\n",
+    "docs/adr/0002-b.md": "# 2. Retries are bounded\n\n## Context\n\nThe bus was mentioned once.\n\n## Decision\n\nA request is retried three times.\n",
+}
+
+
+def test_where_a_word_stands_in_a_record_can_be_made_to_count():
+    from aleph_zero import decisions
+
+    records = [decisions.parse(path, number, text) for number, (path, text) in enumerate(FIELDED.items(), 1)]
+    assert records[0].decision.strip() == "Services publish events to the bus." and "three times" in records[1].decision
+    plain = decisions.Records(records)
+    assert [hit.number for hit in plain.rank("retries")] == [1, 2]                   # as measured: the record that says it most
+    fielded = decisions.Records(records, fields=(3.0, 2.0, 1.0))
+    assert [hit.number for hit in fielded.rank("retries")] == [2, 1]                 # its title and its decision are about it
+    same = decisions.Records(records, fields=(1.0, 1.0, 1.0))
+    assert [(hit.number, hit.score) for hit in same.rank("retries bus events")] == [(hit.number, hit.score) for hit in plain.rank("retries bus events")]
+
+
+def test_the_first_line_of_a_task_can_be_made_to_count_more_than_the_rest():
+    from aleph_zero import decisions
+
+    records = [decisions.parse(path, number, text) for number, (path, text) in enumerate(FIELDED.items(), 1)]
+    task = "bounded requests\n\nServices publish events."
+    assert [hit.number for hit in decisions.Records(records).rank(task)] == [1, 2]              # the body's many words win
+    assert [hit.number for hit in decisions.Records(records, subject=4.0).rank(task)] == [2, 1]  # what the commit is about wins
+    assert (decisions.FIELDS, decisions.SUBJECT) == ((1.0, 1.0, 1.0), 1.0)                       # both are off unless asked for

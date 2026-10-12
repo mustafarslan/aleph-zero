@@ -140,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ranker", choices=("words", "fused5", "fused60", "stems", "length", "stems+length"),
                         help="Aleph's ranker for decisions (`Engine.decisions`): by words alone, fused with vectors at that k, "
                              "or one of Task 2b's candidates: words reduced to stems, b = 0.4, both")
+    parser.add_argument("--fields", help="with --ranker: how much a word counts in a record's title, its Decision section and "
+                                         "elsewhere, as T,D,R (1,1,1 is the ranking that was measured)")
+    parser.add_argument("--subject", type=float, help="with --ranker: how much a word of the task's first line counts against the rest")
+    parser.add_argument("--b", type=float, help="with --ranker: BM25's length normalisation (0.75 is the ranking that was measured)")
     parser.add_argument("--labels", default="labels-external.json", help="the pairs, a file in the workdir (default: oxn's 100)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
@@ -147,6 +151,12 @@ def main(argv: list[str] | None = None) -> int:
         decision_records.STEMS = True
     if args.ranker in ("length", "stems+length"):
         decision_records.B = 0.4
+    if args.fields:
+        decision_records.FIELDS = tuple(float(part) for part in args.fields.split(","))
+    if args.subject:
+        decision_records.SUBJECT = args.subject
+    if args.b:
+        decision_records.B = args.b
     labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []
     notes: dict[str, str] = {}
