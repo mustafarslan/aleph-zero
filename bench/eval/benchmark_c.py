@@ -86,7 +86,18 @@ ALPHAS = (0.2, 0.4, 0.6, 0.8)   # weight of the vector score in the convex combi
 MODES = ("lexical", "dense", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
 
 
-def instances(repos: set[str] | None) -> list[dict]:
+def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None) -> list[dict]:
+    """The questions: Loc-Bench's (Python), or those of another set for another language (`question_sets`)."""
+    if source != "locbench":
+        import question_sets
+
+        # `others`: the three together, a fix that is in two of them asked once (the first of this order is kept).
+        names = ("multi-swe", "multilingual", "polybench") if source == "others" else (source,)
+        found = [row for name in names for row in question_sets.load(name, CACHE.parent / "question-sets")]
+        rows, left = question_sets.select(found, per_repo, language)
+        for why, count in sorted(left.items()):
+            print(f"left out, {why}: {count}", file=sys.stderr)
+        return [row for row in rows if repos is None or row["repo"] in repos]
     import pyarrow.parquet as pq                    # only the commands that read the questions need these
     from huggingface_hub import hf_hub_download
 
@@ -463,6 +474,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--repos", help="comma-separated owner/name; default: every repository of Loc-Bench")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--set", default="locbench", choices=("locbench", "others", "multilingual", "polybench", "multi-swe"),
+                        help="where the questions are from: Loc-Bench (Python, the default), one set for other languages, or `others`: "
+                             "all three of them together (bench/eval/question_sets.py)")
+    parser.add_argument("--language", help="with another --set: only the questions of this language (cpp, c, go, rust, java, javascript, typescript)")
+    parser.add_argument("--per-repo", type=int, default=40, help="with another --set: at most this many questions of one repository in a language (default 40)")
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--temp-limit", type=float, default=95.0,
                         help="prepare: pause embedding while the chip is at or above this many degrees Celsius")
@@ -490,8 +506,15 @@ def main(argv: list[str] | None = None) -> int:
     workdir = args.workdir.resolve()
     if args.action in ("status", "pause", "resume", "stop"):
         return longrun.main([args.action, str(workdir)])
-    rows = instances(set(args.repos.split(",")) if args.repos else None)[: args.limit]
+    rows = instances(set(args.repos.split(",")) if args.repos else None, args.set, args.language, args.per_repo)[: args.limit]
     if args.action == "list":
+        if args.set != "locbench":
+            import question_sets
+
+            for language, found in question_sets.counts(rows).items():
+                print(f"{language:11} {found['questions']:5} questions in {found['repositories']:3} repositories"
+                      f"{'' if found['enough repositories'] else '  (too few repositories to read a verdict from)'}; "
+                      f"{found['name a path of their answer']} name a path of their answer")
         counts: dict[str, int] = {}
         for row in rows:
             counts[row["repo"]] = counts.get(row["repo"], 0) + 1
@@ -514,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
 
             search_module.MIN_POOL = args.min_pool
         settings = {"k": args.k, "min_pool": args.min_pool, "bm25": not args.no_bm25, "code_and_docs_only": args.code_and_docs_only,
-                    "alphas": ALPHAS, "forms": FORMS}
+                    "alphas": ALPHAS, "forms": FORMS}       # the set is not among them: a question is known by its instance and commit
         cache = None if args.no_cache else ResultCache(workdir / "run-cache", settings, code_fingerprint())
         run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k, cache)
     return 0

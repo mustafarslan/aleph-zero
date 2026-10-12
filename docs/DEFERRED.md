@@ -63,7 +63,23 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Order:** by the projects Aleph is activated on. Today that is Python (aleph-zero, oxn, private repository C, and 63% of aeon), then C++ (35% of aeon). The others wait until a project in that language is activated.
 - **Question sets found, not fetched:** SWE-bench Multilingual (`SWE-bench/SWE-bench_Multilingual` on Hugging Face: 300 questions, about 12 to 38 per language) and Multi-SWE-bench (`ByteDance-Seed/Multi-SWE-bench`: more repositories per language, among them fmt, nlohmann/json, simdjson, Catch2 and cpp-httplib for C++). Thirty-five questions per language cannot resolve 5 points, so both sets are needed per language.
 - **What it costs:** the benchmark harness needs an adapter for each set (the gold files are the files in the fix's patch); then, per language, fetching five to ten public repositories and some hours of GPU embedding.
-- **Status:** not started. C++ is next after the Python verdict, with the owner's go-ahead, since it is another GPU run.
+- **Status (2026-10-12): the questions are ready; no run has been made.** `bench/eval/question_sets.py` reads the three sets into the benchmark's shape, and `benchmark_c.py --set others --language LANG` asks them. What a question and its answer are was written down before any run (the module's docstring): the issue's text, never the pull request's; the source files the fix changed that were there before it, never its tests' patch; at most ten such files; the same fix in two sets asked once; at most 40 questions of one repository in a language; a language read only with four repositories or more. What that leaves, all three sets together:
+
+  | Language | Questions | Repositories |
+  |---|---|---|
+  | C++ | 108 | 5 (fmt 40, nlohmann/json 40, simdjson 16, Catch2 11, cpp-httplib 1) |
+  | C | 110 | 6 |
+  | Go | 110 | 8 |
+  | Rust | 180 | 13 |
+  | Java | 315 | 18 |
+  | JavaScript | 231 | 12 |
+  | TypeScript | 165 | 11 |
+
+  With about 110 questions the interval of a 5-point gate is roughly ±9 points: for C++, C and Go the public sets can show a large effect and cannot settle a small one. Java, JavaScript, TypeScript and Rust have enough to say more.
+- **To run C++ (yours to start: a GPU run, after the Python one has finished; five small repositories, 108 commits, probably under an hour):**
+
+      nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare bench/data/benchc-cpp --set others --language cpp --away > bench/data/benchc-cpp.prepare.log 2>&1 &
+      uv run --group bench python bench/eval/benchmark_c.py run bench/data/benchc-cpp --set others --language cpp --out bench/data/results/benchmark_c_cpp.json
 - **How to do it (2026-10-12).** [SWE-PolyBench](https://arxiv.org/abs/2504.08703) has 2,110 instances (Java 165, JavaScript 1,017, TypeScript 729, Python 199) and no C or C++; [Multi-SWE-bench](https://arxiv.org/abs/2504.02605) has 1,632 across Java, TypeScript, JavaScript, Go, Rust, C and C++. *agy:* Multi-SWE-bench for C++, C, Go and Rust, SWE-PolyBench for TypeScript, JavaScript and Java, 150 to 200 questions a language to read a 5-point gate; SWE-bench Multilingual (about 35 a language) is too small alone. *The advisor:* one adapter per set, gold files being the files of the fix's patch. *Mine:* as agy says, C++ first; the prepare and run of entry 1 serve unchanged, pause and heat guard included.
 
 ## 1c. Tuning runs that need the GPU for hours
