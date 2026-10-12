@@ -124,3 +124,12 @@ The header benchmark above put the path, the scope and the signature in front of
 So a chunk is embedded as its scope (the breadcrumb, such as `TokenStore.get` or `Guide > Install`), its signature and its text, with the document prefix. This is a deviation from what M0 measured. Its cost is one of the things Benchmark C reports; the path still takes part in ranking through the path generator.
 
 Vectors are stored with their kind (`embeddinggemma-2-q8/p1/256`: model, prefix version, width), one file per kind, so a change of model or prefix never mixes with older vectors.
+
+## Which chunks get a vector: code and documentation, not data files (M2, 2026-10-12)
+
+A file with no language profile (JSON, YAML, SQL fixtures, templates, configuration) is chunked by line window, kind `block`. Those chunks get no vector and are searched by their words only.
+
+- **Cost.** They were 58% of all text to embed in moto and 72% in sqlfluff, and many are long enough to fill a worker slot: those repositories embedded at 17 to 36 chunks per second against Django's 87.
+- **Quality.** On the 35-question Loc-Bench pilot (Django), leaving them out of the vector candidates raised recall@10 with vectors from 0.771 to 0.800 on the whole issue text and from 0.743 to 0.771 on the issue title, and vectors alone from 0.629 to 0.686. Thirty-five questions cannot prove a gain, but there is no sign of a loss, and the cost argument stands by itself.
+
+Coverage figures count only chunks that should have a vector.

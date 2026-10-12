@@ -26,6 +26,12 @@ from .store import transaction
 WIDTH = 256
 ROW_BYTES = WIDTH * 2       # float16
 _BLOCK = 16_384             # rows converted to float32 at a time: 16 MB of scratch, whatever the view's size
+# Which chunks get a vector: code and documentation. A 'block' is a window of a file with
+# no language profile (JSON, YAML, SQL fixtures, templates); such files are searched by
+# their words only. In two repositories measured they were 58% and 72% of all text to
+# embed, and on the Loc-Bench pilot leaving them out found more of the right files, not
+# fewer (ADR-001).
+EMBEDDED = "c.kind != 'block'"
 
 
 class VectorStore:
@@ -79,17 +85,20 @@ class VectorStore:
     # ---- reading ---------------------------------------------------------------------------
 
     def missing(self, index: Index, limit: int | None = None) -> list[int]:
-        """Chunks of the current view that have no vector of this kind, in chunk order."""
+        """Chunks of the current view that should have a vector of this kind and do not,
+        in chunk order."""
         return [row[0] for row in index.conn.execute(
-            "SELECT v.chunk_id FROM temp.view_chunks v LEFT JOIN chunk_vectors cv "
-            "ON cv.chunk_id = v.chunk_id AND cv.kind = ? WHERE cv.chunk_id IS NULL ORDER BY v.chunk_id LIMIT ?",
+            "SELECT v.chunk_id FROM temp.view_chunks v JOIN chunks c ON c.chunk_id = v.chunk_id "
+            "LEFT JOIN chunk_vectors cv ON cv.chunk_id = v.chunk_id AND cv.kind = ? "
+            f"WHERE cv.chunk_id IS NULL AND {EMBEDDED} ORDER BY v.chunk_id LIMIT ?",
             (self.kind, -1 if limit is None else limit))]
 
     def coverage(self, index: Index) -> tuple[int, int]:
-        """(chunks of the view with a vector, chunks of the view)."""
+        """(chunks of the view with a vector, chunks of the view that should have one)."""
         return index.conn.execute(
-            "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v LEFT JOIN chunk_vectors cv "
-            "ON cv.chunk_id = v.chunk_id AND cv.kind = ?", (self.kind,)).fetchall()[0]
+            "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v JOIN chunks c ON c.chunk_id = v.chunk_id "
+            f"LEFT JOIN chunk_vectors cv ON cv.chunk_id = v.chunk_id AND cv.kind = ? WHERE {EMBEDDED}",
+            (self.kind,)).fetchall()[0]
 
     def search(self, index: Index, query: np.ndarray, limit: int, scoped: bool = False) -> list[tuple[int, float]]:
         """(chunk id, cosine similarity) of the nearest chunks of the view, best first.
@@ -119,7 +128,8 @@ class VectorStore:
             table = "scope_chunks" if scoped else "view_chunks"
             pairs = index.conn.execute(
                 f"SELECT cv.chunk_id, cv.row FROM chunk_vectors cv JOIN temp.{table} v ON v.chunk_id = cv.chunk_id "
-                "WHERE cv.kind = ? ORDER BY cv.row", (self.kind,)).fetchall()
+                f"JOIN chunks c ON c.chunk_id = cv.chunk_id WHERE cv.kind = ? AND {EMBEDDED} ORDER BY cv.row",
+                (self.kind,)).fetchall()
             found = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
             self._cache = (key, found[:, 0], found[:, 1])
         return self._cache[1], self._cache[2]

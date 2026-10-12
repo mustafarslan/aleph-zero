@@ -200,9 +200,7 @@ class Engine:
     def _vector_status(self, index: Index, view: View) -> dict:
         from .embed.client import VECTOR_KIND
 
-        have, total = index.conn.execute(
-            "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v LEFT JOIN chunk_vectors cv "
-            "ON cv.chunk_id = v.chunk_id AND cv.kind = ?", (VECTOR_KIND,)).fetchall()[0]
+        have, total = self._store(index, view).coverage(index)
         return {"enabled": self.dense, "kind": VECTOR_KIND, "with_vector": have, "chunks": total}
 
     def _dense(self, index: Index, view: View, query: str):

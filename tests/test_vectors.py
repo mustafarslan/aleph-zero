@@ -139,3 +139,18 @@ def test_three_hundred_thousand_vectors_are_scanned_quickly(tmp_path):
     started = time.perf_counter()
     found = store.search(index, matrix[5], limit=10)
     assert time.perf_counter() - started < 0.03 and len(found) == 10 and found[0][1] > 0.99
+
+
+def test_files_with_no_language_get_no_vectors_and_are_not_counted_as_missing(repo):
+    repo.write("fixtures/data.json", "".join(f'{{"key_{i}": "value_{i}"}}\n' for i in range(120)))
+    repo.write("config/settings.cfg", "[section]\noption = bettongword\n")
+    index, store, chunk_ids = ready(repo)
+    kinds = dict(index.conn.execute(
+        "SELECT c.chunk_id, c.kind FROM chunks c JOIN temp.view_chunks v ON v.chunk_id = c.chunk_id"))
+    blocks = [chunk_id for chunk_id in chunk_ids if kinds[chunk_id] == "block"]
+    assert len(blocks) >= 4
+    wanted = store.missing(index)
+    assert wanted and not set(wanted) & set(blocks)          # data files are searched by their words only
+    assert store.coverage(index) == (0, len(chunk_ids) - len(blocks))
+    store.add(wanted, unit(21, len(wanted)))
+    assert store.missing(index) == [] and store.coverage(index) == (len(wanted), len(wanted))

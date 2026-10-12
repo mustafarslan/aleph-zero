@@ -210,7 +210,7 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
     return statistics.mean(differences), means[int(0.025 * rounds)], means[int(0.975 * rounds)]
 
 
-def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool) -> dict:
+def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False) -> dict:
     sock = worker.ensure()
     client = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=60)
     results = []
@@ -229,6 +229,16 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool) -> d
         if have < total:
             index.conn.close()
             continue  # not fully embedded: skipped rather than scored on partial vectors
+        # What vectors would propose if files with no language profile (JSON, YAML, SQL
+        # fixtures: kind 'block') had none. Simulated by leaving their chunks out.
+        left_out = {r[0] for r in index.conn.execute(
+            "SELECT v.chunk_id FROM temp.view_chunks v JOIN chunks c ON c.chunk_id = v.chunk_id WHERE c.kind = 'block'")
+        } if code_and_docs_only else set()
+
+        def vector_search(vector, limit, scoped=False):
+            found_chunks = store.search(index, vector, limit * 4 if left_out else limit, scoped)
+            return [pair for pair in found_chunks if pair[0] not in left_out][:limit]
+
         forms = question_forms(index, row["problem_statement"])
         try:
             vectors = dict(zip(forms, client.embed(list(forms.values()), kind="query")))
@@ -238,9 +248,9 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool) -> d
         for form, question in forms.items():
             vector = vectors[form]
             nearest = lambda limit, scoped, vector=vector: [  # noqa: E731
-                chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
+                chunk_id for chunk_id, _ in vector_search(vector, limit, scoped)]
             text_scores = lexical.search(index.conn, question, 200)
-            vector_scores = store.search(index, vector, 200)
+            vector_scores = vector_search(vector, 200)
             found[form] = {
                 "lexical": first_files([hit.path for hit in search(index, view, question, k=50)]),
                 "hybrid": first_files([hit.path for hit in search(index, view, question, k=50, dense=nearest)]),
@@ -288,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--no-bm25", action="store_true")
+    parser.add_argument("--code-and-docs-only", action="store_true",
+                        help="run: as if files without a language profile had no vectors")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     rows = instances(set(args.repos.split(",")) if args.repos else None)[: args.limit]
@@ -302,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "prepare":
         prepare(workdir, rows, args.max_chunks)
     else:
-        run(workdir, rows, args.out, not args.no_bm25)
+        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only)
     return 0
 
 
