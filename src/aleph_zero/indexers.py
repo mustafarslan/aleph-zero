@@ -4,9 +4,11 @@ Aleph never installs an indexer and never runs one for a query. `aleph scip run`
 one for a language whose peak memory was measured under the limit on a mid-size project
 (M9: scip-python 459 MB, scip-java with Maven 881 MB, scip-go 948 MB, rust-analyzer
 1,499 MB), watches the memory of everything it starts, and stops it all above the limit.
-JavaScript is import-only (scip-typescript took 2,295 MB on eslint) and so is TypeScript
-(not measured: the corpus's dependencies would not install): their index is made
-elsewhere and imported.
+JavaScript is not run by default (scip-typescript took 2,295 MB on eslint) and neither is
+TypeScript (not measured: the corpus's dependencies would not install): their index is made
+elsewhere and imported, or the owner names the memory the indexer may take
+(`ALEPH_SCIP_MEMORY_MB`) and it is run and watched like the others. A file the indexer
+writes at the root of the worktree (a `tsconfig.json` it inferred) is removed again.
 
 An indexer for a compiled language runs the project's own build. That is the project's
 code running on this machine: only ever on the owner's explicit request.
@@ -45,7 +47,8 @@ class Indexer:
     needs: str = ""                 # a file the project must have for the measured way of running it
     note: str = ""
     in_a_copy: bool = False         # the indexer runs the project's build: on a copy of the files, never in the worktree
-    why_not: str = ""               # for an import-only language: what the measurement said
+    why_not: str = ""               # for a language not run by default: what the measurement said
+    leaves: tuple[str, ...] = ()    # files the indexer may write at the root of the worktree: removed again if they were not there
 
 
 INDEXERS: dict[str, Indexer] = {
@@ -67,7 +70,7 @@ INDEXERS: dict[str, Indexer] = {
                           why_not="its memory has not been measured (the corpus's dependencies would not install)"),
     "javascript": Indexer("javascript", "scip-typescript", ("index", "--infer-tsconfig", "--output", "{out}"), False,
                           "npm install -g @sourcegraph/scip-typescript",
-                          why_not="it was measured at 2,295 MB on eslint, over the limit"),
+                          why_not="it was measured at 2,295 MB on eslint, over the limit", leaves=("tsconfig.json",)),
 }
 
 
@@ -208,9 +211,11 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
     indexer = INDEXERS.get(language)
     if indexer is None:
         raise CannotRun(f"no SCIP indexer is known for {language}")
-    if not indexer.on_demand:
-        raise CannotRun(f"{language} is import-only: {indexer.program} is not run here because {indexer.why_not}. "
-                        f"Run it yourself (or in CI) and keep the result with `aleph scip import`")
+    if not indexer.on_demand and limit is None and os.environ.get("ALEPH_SCIP_MEMORY_MB") is None:
+        raise CannotRun(f"{language} is import-only by default: {indexer.program} is not run here because {indexer.why_not}. "
+                        f"To run it anyway, say how much memory it may take, and it is stopped above that: "
+                        f"`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang {language}`. "
+                        f"Or run it elsewhere (CI) and keep the result with `aleph scip import`")
     if shutil.which(indexer.program) is None:
         raise CannotRun(f"{indexer.program} is not installed. Aleph does not install it; to get it: {indexer.how_to_get}")
     if indexer.needs and not (root / indexer.needs).is_file():
@@ -227,7 +232,13 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
                 if source.is_file() and not source.is_symlink():
                     (where / path).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, where / path)
-        found = watch(command, where, limit, TIME_LIMIT_SECONDS if time_limit is None else time_limit)
+        mine = {name for name in indexer.leaves if (where / name).exists()}
+        try:
+            found = watch(command, where, limit, TIME_LIMIT_SECONDS if time_limit is None else time_limit)
+        finally:
+            for name in indexer.leaves:
+                if name not in mine and (where / name).is_file():
+                    (where / name).unlink()
     if found["stopped"]:
         raise CannotRun(f"{indexer.program} was stopped: {found['stopped']} (peak {found['peak_mb']} MB, {found['seconds']} s). "
                         f"The limit is ALEPH_SCIP_MEMORY_MB; or make the index elsewhere and use `aleph scip import`")

@@ -117,3 +117,25 @@ def test_a_java_run_builds_in_a_copy_and_leaves_the_worktree_as_it_found_it(proj
     report = Engine(repo.root).scip_run("java")
     assert report["imported"]["documents"] == 4
     assert (repo.root / "target" / "kept.class").read_text() == "the owner's build output" and not (repo.root / "made-here.txt").exists()
+
+
+def test_an_import_only_language_runs_when_its_owner_names_the_memory_it_may_take(project, tmp_path, monkeypatch):
+    """oxn runs these indexers with no limit at all; Aleph runs them once a limit is named, and watches it."""
+    import dataclasses
+
+    repo, made = project
+    over = dataclasses.replace(
+        stand_in(tmp_path, f"import pathlib, shutil, sys\nmade = pathlib.Path('tsconfig.json')\nmade.exists() or made.write_text('{{}}')\n"
+                         f"shutil.copy({str(made)!r}, sys.argv[-1])\n"),
+        on_demand=False, why_not="it was measured at 2,295 MB on eslint, over the limit", leaves=("tsconfig.json",))
+    monkeypatch.setitem(indexers.INDEXERS, "python", over)
+    monkeypatch.delenv("ALEPH_SCIP_MEMORY_MB", raising=False)
+    with pytest.raises(indexers.CannotRun, match="ALEPH_SCIP_MEMORY_MB=.* aleph scip run"):
+        Engine(repo.root).scip_run("python")
+    monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", "3072")
+    report = Engine(repo.root).scip_run("python")
+    assert report["imported"]["documents"] == 4 and report["limit_mb"] == 3072
+    assert not (repo.root / "tsconfig.json").exists()        # what the indexer left in the worktree is taken away again
+    (repo.root / "tsconfig.json").write_text("{\"mine\": true}")
+    Engine(repo.root).scip_run("python")
+    assert (repo.root / "tsconfig.json").read_text() == "{\"mine\": true}"   # one that was the owner's is not
