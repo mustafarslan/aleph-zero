@@ -134,16 +134,20 @@ GRAPH_TOOL = {
 DECISIONS_TOOL = {
     "name": "decisions",
     "description": "The decision records (ADRs) of this repository that govern a task, best first: path, number, "
-                   "title, status. Give the task in plain words or as a commit message. Read the record before changing what it decides.",
-    "inputSchema": {"type": "object", "required": ["task"], "properties": {
-        "task": {"type": "string"},
+                   "title, status. Give the task in plain words or as a commit message, and the file being changed as "
+                   "`path`: the records that name that file come first, with the layer it is in and what that layer may "
+                   "depend on. Read the record before changing what it decides.",
+    "inputSchema": {"type": "object", "properties": {
+        "task": {"type": "string", "default": ""},
+        "path": {"type": "string"},
         "k": {"type": "integer", "minimum": 1, "maximum": 30, "default": 7},
         **_COMMON}},
 }
 FACTS_TOOL = {
     "name": "facts",
     "description": "What this repository states about its architecture: HTTP routes and where routers are mounted, data "
-                   "models and tables, environment names read, set or declared, background tasks, gRPC services. With no "
+                   "models and tables, environment names read, set or declared, background tasks and queues, gRPC services, "
+                   "the layers and contracts of an oxn.yaml. With no "
                    "kind: how many of each. With a kind, or part of a name (a path, a variable): each with its file and line. "
                    "A route's path is as written in its file; a mount's prefix is not added to it.",
     "inputSchema": {"type": "object", "properties": {
@@ -433,7 +437,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
             lines.append(f"note: {found.pending} files are not indexed yet; results may be incomplete")
         return "\n".join(lines)
     if name == "decisions":
-        found = engine.decisions(args["task"], k=args.get("k", 7), cwd=cwd)
+        found = engine.decisions(args.get("task", ""), k=args.get("k", 7), cwd=cwd, path=args.get("path"))
         return json.dumps(asdict(found)) if as_json else decisions.text(found)
     if name == "facts":
         found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,

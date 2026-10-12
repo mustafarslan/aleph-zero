@@ -12,7 +12,9 @@ Each kind is graded against what the repository itself supplies:
   it covers, so it says nothing about precision;
 - every other oracle is a search of the source that does not use the readers: route decorators,
   task decorators, `model` blocks, `create_table` calls, the names of the example environment
-  files, `os.Getenv` calls, `service` and `rpc` lines. They can show a miss or an invention, not
+  files, `os.Getenv` calls, `service` and `rpc` lines, `queue="…"` arguments and Redis list and
+  channel calls given a literal name (these two by file and name: the argument may sit on a later
+  line than the decorator the fact is reported at). They can show a miss or an invention, not
   much more, and are reported as counts, by file and line where both sides have one;
 - precision: `--sample` facts of a kind drawn at random (seed 20261012) are written out with the
   source lines they point at, to be read by a person. That reading is not independent of the
@@ -44,6 +46,8 @@ CREATE_TABLE = re.compile(r"\bop\.create_table\(")
 EXAMPLE_FILE = re.compile(r"(^|\.)env\.(example|sample|template|dist)$")
 EXAMPLE_NAME = re.compile(r"^\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]{2,})\s*=")
 GO_ENV = re.compile(r"\bos\.(?:Getenv|LookupEnv)\(\s*\"")
+QUEUE_ARGUMENT = re.compile(r"\bqueue\s*=\s*[\"']([\w.:/*-]+)[\"']")
+QUEUE_CALL = re.compile(r"\.(?:lpush|rpush|blpop|brpop|publish|subscribe|psubscribe|xadd)\(\s*[\"']([\w.:/*-]+)[\"']")
 PROTO_SERVICE = re.compile(r"^\s*service\s+(\w+)")
 PROTO_RPC = re.compile(r"^\s*rpc\s+(\w+)")
 
@@ -80,11 +84,17 @@ def extracted(engine: Engine) -> dict[str, list[dict]]:
 def searched(root: Path, files: list[str]) -> dict:
     """What a search of the source finds, without the readers."""
     out = {"route_decorators": [], "task_decorators": [], "prisma_models": [], "create_table": [],
-           "example_names": {}, "go_env": [], "proto_services": [], "proto_rpcs": []}
+           "example_names": {}, "go_env": [], "proto_services": [], "proto_rpcs": [], "queues": []}
     for path in files:
         name = path.rsplit("/", 1)[-1].lower()
-        wanted = name.endswith((".py", ".prisma", ".go", ".proto")) or EXAMPLE_FILE.search(name)
+        wanted = name.endswith((".py", ".prisma", ".go", ".proto", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")) or EXAMPLE_FILE.search(name)
         for number, line in enumerate(lines_of(root, path) if wanted else [], 1):
+            if name.endswith((".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")):
+                out["queues"] += [[path, named] for named in QUEUE_CALL.findall(line)]
+                if name.endswith(".py"):
+                    out["queues"] += [[path, named] for named in QUEUE_ARGUMENT.findall(line)]
+                else:
+                    continue
             if name.endswith(".py"):
                 if ROUTE_DECORATOR.match(line):
                     out["route_decorators"].append([path, number])
@@ -178,6 +188,11 @@ def grade(root: Path, openapi: str | None, size: int) -> tuple[dict, dict]:
         compared = against(ours, theirs)
         detail[key] = {name: compared.pop(name) for name in ("searched_only", "extracted_only")}
         counts[key] = compared
+
+    ours = Counter((fact["path"], fact["name"]) for fact in facts.get("queue", []))
+    theirs = Counter(map(tuple, found["queues"]))
+    counts["queues"] = {"searched": sum(theirs.values()), "extracted": sum(ours.values()), "both": sum((ours & theirs).values())}
+    detail["queues"] = {"searched_only": sorted(map(list, (theirs - ours).elements())), "extracted_only": sorted(map(list, (ours - theirs).elements()))}
 
     environment = facts.get("env", [])
     read = {fact["name"] for fact in environment if fact["detail"] != "declared"}

@@ -25,16 +25,19 @@ from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
+from .. import architecture
 from . import query
 from .profile import LanguageProfile
 
 
 @dataclass(frozen=True)
 class Fact:
-    kind: str       # 'route', 'mount', 'model', 'table', 'env', 'task', 'service', 'rpc'
-    name: str       # route: 'GET /v1/users/{id}'; mount: the prefix; env: 'DATABASE_URL'; model, table, task, service: its name; rpc: 'Service.Method'
+    kind: str       # 'route', 'mount', 'model', 'table', 'env', 'task', 'queue', 'service', 'rpc', 'layer', 'contract'
+    name: str       # route: 'GET /v1/users/{id}'; mount: the prefix; env: 'DATABASE_URL'; rpc: 'Service.Method'; the others: its name
     line: int       # 1-based
-    detail: str = ""  # route: the framework; mount: what is mounted, as written; env: 'read', 'set', 'declared', 'settings field'; model: where its table is said
+    # route: the framework; mount: what is mounted, as written; env: 'read', 'set', 'declared', 'settings field';
+    # model: where its table is said; queue: the call that names it; layer: its paths; contract: its kind and order
+    detail: str = ""
 
 
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
@@ -46,6 +49,10 @@ _GO_ROUTES = {"HandleFunc": "ANY", "Handle": "ANY", "Get": "GET", "Post": "POST"
 _SPRING = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE", "PatchMapping": "PATCH",
            "RequestMapping": "ANY"}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A Redis list, channel or stream named where work is handed over. `xreadgroup` names its stream late: not read.
+_QUEUE_CALLS = frozenset({"lpush", "rpush", "blpop", "brpop", "publish", "subscribe", "psubscribe", "xadd"})
+_QUEUE_NAME = re.compile(r"^[\w.:/*-]+$")
+_DETAIL_LIMIT = 400
 _GO_MOUNTS = frozenset({"Mount", "Route", "Group", "PathPrefix"})
 _ENVIRONMENT = ("process.env", "import.meta.env")
 _WRITTEN_LIMIT = 80
@@ -86,7 +93,13 @@ def text_facts(path: str, text: str) -> list[Fact]:
     environment file, a protocol-buffers service definition."""
     name = path.rsplit("/", 1)[-1].lower()
     out: list[Fact] = []
-    if name.endswith(".prisma"):
+    if path == architecture.FILE:
+        layers, contracts = architecture.read(text)
+        out += [Fact("layer", layer.name, layer.line, ", ".join(layer.patterns)[:_DETAIL_LIMIT]) for layer in layers]
+        out += [Fact("contract", contract.name, contract.line,
+                     (contract.kind + (": " + " > ".join(contract.order) if contract.order else ""))[:_DETAIL_LIMIT])
+                for contract in contracts]
+    elif name.endswith(".prisma"):
         out += [Fact("model", match.group(1), text.count("\n", 0, match.start()) + 1, "prisma")
                 for match in re.finditer(r"^model\s+(\w+)\s*\{", text, re.MULTILINE)]
     elif is_environment_example(name):
@@ -114,7 +127,7 @@ def is_environment_example(name: str) -> bool:
 def states_facts(path: str) -> bool:
     """Whether a file that is not source code is one `text_facts` reads."""
     name = path.rsplit("/", 1)[-1].lower()
-    return name.endswith((".prisma", ".proto")) or is_environment_example(name)
+    return path == architecture.FILE or name.endswith((".prisma", ".proto")) or is_environment_example(name)
 
 
 # ---- helpers ---------------------------------------------------------------------------------------
@@ -184,6 +197,8 @@ def _ecma(node: Node, state: dict) -> list[Fact]:
         holder, called = function.child_by_field_name("object"), _text(function.child_by_field_name("property"))
         method = _METHODS.get(called)
         given = [argument for argument in arguments.named_children if argument.type != "comment"]
+        if called in _QUEUE_CALLS:
+            return _queue(node, called, _literal(given[0]) if given else None)
         if holder is None or holder.type != "identifier" or _text(holder) in _CLIENTS or len(given) < 2:
             return []
         path = _literal(given[0])
@@ -203,6 +218,10 @@ def _ecma(node: Node, state: dict) -> list[Fact]:
         name = _literal(node.child_by_field_name("index")) or ""
     detail = "set" if _assigned(node, ("assignment_expression",)) else "read"
     return [Fact("env", name, _line(node), detail)] if _ENV_NAME.match(name) else []
+
+
+def _queue(node: Node, called: str, name: str | None) -> list[Fact]:
+    return [Fact("queue", name, _line(node), called)] if name and _QUEUE_NAME.match(name) else []
 
 
 def _environment(node: Node) -> str:
@@ -253,6 +272,8 @@ def _python(node: Node, state: dict) -> list[Fact]:
             return [Fact("env", first, _line(node), "read")]
         if function in ("os.environ.setdefault", "environ.setdefault", "os.putenv") and first and _ENV_NAME.match(first):
             return [Fact("env", first, _line(node), "set")]
+        if "." in function and function.rsplit(".", 1)[-1] in _QUEUE_CALLS:
+            return _queue(node, function.rsplit(".", 1)[-1], first)
         if function.endswith((".include_router", ".register_blueprint")):
             prefix = _keyword(node, "prefix") or _keyword(node, "url_prefix")
             arguments = node.child_by_field_name("arguments")
@@ -299,7 +320,8 @@ def _python_decorator(node: Node, state: dict) -> list[Fact]:
     defined = node.parent.child_by_field_name("definition") if node.parent is not None else None
     if re.search(r"(\.task\b|\bshared_task\b)", text.split("(", 1)[0]):
         name = (_keyword(written, "name") if written.type == "call" else None) or _text(defined.child_by_field_name("name") if defined else None)
-        return [Fact("task", name, _line(node), "celery")] if name else []
+        queue = _keyword(written, "queue") if written.type == "call" else None
+        return ([Fact("task", name, _line(node), "celery")] if name else []) + _queue(node, "celery", queue)
     if written.type != "call":
         return []
     function = written.child_by_field_name("function")

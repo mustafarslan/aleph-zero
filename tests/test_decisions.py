@@ -75,3 +75,51 @@ def test_a_file_named_as_a_decision_is_one_wherever_it_lies(repo):
     repo.write("docs/0007-release-notes.md", "# 7. Release notes\n\nNot a decision: numbered, but neither named ADR nor in a directory of decisions.\n")
     found = [(hit.path, hit.number, hit.title, hit.status) for hit in Engine(repo.root).decisions("", k=10).decisions]
     assert found == [("docs/adr-004-blue-green-migration.md", 4, "Blue-green migration", "accepted")]
+
+
+ADR_WITH_SCOPE = ('---\nid: ADR-0003\ntitle: Hooks enforce, the server informs\nstatus: accepted\n'
+                  'tags: [hooks]\napplies-to: ["src/app/cli.py", "src/app/rules/*"]\n---\n\n# ADR-0003\n\nHooks enforce.\n')
+ADR_BLOCK_SCOPE = '---\nid: ADR-0004\ntitle: Metrics are computed once\nstatus: proposed\napplies-to:\n  - "src/app/metrics/*"\n---\n\nOnce.\n'
+LAYERS = ('layers:\n  surfaces: ["src/app/cli.py"]\n  analysis: ["src/app/metrics/*", "src/app/rules/*"]\n  foundation: ["src/app/config.py"]\n'
+          'contracts:\n  - name: outside-in\n    kind: layered\n    order: [surfaces, analysis, foundation]\n')
+
+
+def test_which_records_govern_a_file_and_which_layer_it_is_in(repo):
+    from aleph_zero import decisions
+    from aleph_zero.engine import Engine
+
+    repo.write("docs/adr/0003-hooks-enforce.md", ADR_WITH_SCOPE)
+    repo.write("docs/adr/0004-metrics-once.md", ADR_BLOCK_SCOPE)
+    repo.write("docs/adr/0005-no-scope.md", "# 5. Nothing in particular\n\n## Status\n\nAccepted\n")
+    repo.write("oxn.yaml", LAYERS)
+    repo.write("src/app/rules/size.py", "LIMIT = 1\n")
+    engine = Engine(repo.root)
+    answer = engine.decisions("", path="src/app/rules/size.py")
+    assert [(hit.number, hit.status) for hit in answer.governing] == [(3, "accepted")]
+    assert answer.place == ["layer analysis (contract outside-in): may depend on foundation; not on surfaces"]
+    assert decisions.text(answer).split("\n")[:3] == [
+        "src/app/rules/size.py is governed by:",
+        "docs/adr/0003-hooks-enforce.md  ADR 3  Hooks enforce, the server informs  [accepted]",
+        "layer analysis (contract outside-in): may depend on foundation; not on surfaces"]
+    assert [hit.number for hit in engine.decisions("", path=str(repo.root / "src/app/metrics/x.py")).governing] == [4]
+    nowhere = engine.decisions("hooks", path="README.md")
+    assert nowhere.governing == [] and nowhere.place == ["in no layer of oxn.yaml"]
+    assert decisions.text(nowhere).startswith("README.md: no decision record names it in its applies-to\nin no layer of oxn.yaml\n\ndocs/adr/0003")
+    assert engine.decisions("hooks").place == [] and "governed" not in decisions.text(engine.decisions("hooks"))
+
+
+def test_a_record_s_scope_is_not_ranked(repo):
+    from aleph_zero import decisions
+
+    with_scope = decisions.parse("docs/adr/0003-x.md", 3, ADR_WITH_SCOPE)
+    assert with_scope.applies_to == ("src/app/cli.py", "src/app/rules/*") and "src/app/cli.py" not in with_scope.text
+
+
+def test_a_file_two_layers_name_is_in_the_first_as_oxn_has_it():
+    from aleph_zero import architecture
+
+    layers, contracts = architecture.read(
+        "layers:\n  orchestration: [\"src/graph/indexer.py\"]\n  graph: [\"src/graph/*\"]\n"
+        "contracts:\n  - name: c\n    kind: layered\n    order: [orchestration, graph]\n")
+    assert architecture.place("src/graph/indexer.py", layers, contracts) == ["layer orchestration (contract c): may depend on graph"]
+    assert architecture.place("src/graph/store.py", layers, contracts) == ["layer graph (contract c): may depend on no other layer; not on orchestration"]

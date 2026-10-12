@@ -18,7 +18,9 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from . import architecture
 
 DIRECTORIES = frozenset({"adr", "adrs", "decisions", "decision-records", "decision_records", "architecture-decisions"})
 MAX_BYTES = 400_000
@@ -41,6 +43,7 @@ class Decision:
     title: str
     status: str
     text: str           # what is ranked: title, tags, and the record as written
+    applies_to: tuple[str, ...] = ()   # path globs its frontmatter says it governs; not ranked
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,9 @@ class Answer:
     known: int = 0              # decision records in the view
     vectors: str = ""           # "used", or why vectors took no part; "" when they are switched off
     elapsed_ms: int = 0
+    path: str = ""              # the file that was asked about, when one was
+    governing: list[DecisionHit] = field(default_factory=list)   # the records whose `applies-to` covers it
+    place: list[str] = field(default_factory=list)               # the layer(s) of an oxn.yaml it is in, and what they may depend on
 
 
 def is_record(path: str) -> int | None:
@@ -84,7 +90,8 @@ def parse(path: str, number: int, content: str) -> Decision:
     if fields.get("id") and re.search(r"\d", fields["id"]):
         number = int(re.sub(r"\D", "", fields["id"]))
     tags = fields.get("tags", "").strip("[]").replace(",", " ")
-    return Decision(path, number, title.strip(), status.strip(), f"{title}\n{tags}\n{body}")
+    scope = architecture.sequence(front.group(1), "applies-to") if front else ()
+    return Decision(path, number, title.strip(), status.strip(), f"{title}\n{tags}\n{body}", scope)
 
 
 def tokenize(text: str) -> list[str]:
@@ -104,6 +111,11 @@ class Records:
         for at, terms in enumerate(counted):
             for term, frequency in terms.items():
                 self._postings.setdefault(term, {})[at] = frequency
+
+    def governing(self, path: str) -> list[DecisionHit]:
+        """The records whose `applies-to` covers a path, in their own order."""
+        return [DecisionHit(each.path, each.number, each.title, each.status, 0.0, ("applies-to",))
+                for each in self.decisions if architecture.covers(each.applies_to, path)]
 
     def by_words(self, task: str) -> list[tuple[int, float]]:
         """(position in `decisions`, BM25 score) of the records that share a word with the task, best first.
@@ -149,12 +161,20 @@ class Records:
 
 def text(answer: Answer) -> str:
     """The answer for a reader: one line per decision. Path, number, title, status."""
+    listed = lambda hit: f"{hit.path}  ADR {hit.number}  {hit.title}" + (f"  [{hit.status}]" if hit.status else "")  # noqa: E731
+    about: list[str] = []
+    if answer.path:
+        about = ([f"{answer.path} is governed by:", *map(listed, answer.governing)] if answer.governing
+                 else [f"{answer.path}: no decision record names it in its applies-to"]) + answer.place
+        if not answer.task.strip():
+            return "\n".join(about)
+        about.append("")
     if not answer.known:
-        return ("no decision records in this worktree (numbered Markdown files in a directory such as docs/adr: "
-                "`0012-use-an-event-bus.md`)")
+        return "\n".join(about + ["no decision records in this worktree (numbered Markdown files in a directory such as docs/adr: "
+                                  "`0012-use-an-event-bus.md`)"])
     if not answer.decisions:
-        return f"none of the {answer.known} decision records shares a word with the task"
-    lines = [f"{hit.path}  ADR {hit.number}  {hit.title}" + (f"  [{hit.status}]" if hit.status else "") for hit in answer.decisions]
+        return "\n".join(about + [f"none of the {answer.known} decision records shares a word with the task"])
+    lines = about + [listed(hit) for hit in answer.decisions]
     if answer.vectors not in ("", "used"):
         lines.append(f"note: ranked by words alone ({answer.vectors})")
     return "\n".join(lines)

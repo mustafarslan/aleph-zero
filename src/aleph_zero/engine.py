@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import archfacts, callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
+from . import archfacts, architecture, callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -101,7 +101,7 @@ class Engine:
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
-        self._records: dict[Path, tuple[str, decisions.Records]] = {}   # per worktree: its decision records, read once per view
+        self._records: dict[Path, tuple] = {}   # per worktree: its decision records and what its oxn.yaml states, read once per view
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
         self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
@@ -296,27 +296,35 @@ class Engine:
         return definitions, callers, callees, unanswered, truncated or more
 
     @_rebuilding
-    def decisions(self, task: str, k: int = 7, cwd: Path | str | None = None, rrf_k: int | None = None) -> decisions.Answer:
+    def decisions(self, task: str, k: int = 7, cwd: Path | str | None = None, rrf_k: int | None = None,
+                  path: Path | str | None = None) -> decisions.Answer:
         """The decision records that govern a task (a sentence, a commit message), best first: whole
         records ranked by every word of the task, fused with vectors where the worktree has them.
-        An empty task lists the records. `rrf_k=0` ranks by words alone."""
+        An empty task lists the records. `rrf_k=0` ranks by words alone. With a `path`, also the
+        records whose `applies-to` covers that file, and the layer of an `oxn.yaml` it is in."""
         started = time.monotonic()
         view = self._view(cwd)
         cached = self._records.get(view.root)
         if cached is None or cached[0] != view.fingerprint:
             found = []
             with gitio.Readers() as reader:
-                for path in view.files:
-                    number = decisions.is_record(path)
-                    data = view.read(path, reader, decisions.MAX_BYTES) if number is not None else None
+                for each in view.files:
+                    number = decisions.is_record(each)
+                    data = view.read(each, reader, decisions.MAX_BYTES) if number is not None else None
                     if isinstance(data, bytes):
-                        found.append(decisions.parse(path, number, data.decode("utf-8", "replace")))
-            cached = (view.fingerprint, decisions.Records(found))
+                        found.append(decisions.parse(each, number, data.decode("utf-8", "replace")))
+                declared = view.read(architecture.FILE, reader, architecture.MAX_BYTES) if architecture.FILE in view.files else None
+            stated = architecture.read(declared.decode("utf-8", "replace")) if isinstance(declared, bytes) else ([], [])
+            cached = (view.fingerprint, decisions.Records(found), stated)
             self._records[view.root] = cached
         records = cached[1]
         by_vectors, note = ([], "") if rrf_k == 0 or not task.strip() or not records.decisions else self._nearest_records(view, task, records)
         hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k)
-        return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
+        if path is None or not str(path).strip():
+            return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
+        asked = _within(view.root, path)
+        return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started), asked,
+                                records.governing(asked), architecture.place(asked, *cached[2]))
 
     @_rebuilding
     def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
@@ -722,6 +730,17 @@ _LOCATION = re.compile(r"(.+?):(\d+)(?:-(\d+))?\Z")
 def _limits(timeout_ms: int | None) -> tuple[float, float | None]:
     started = time.monotonic()
     return started, (None if timeout_ms is None else started + max(timeout_ms, 1) / 1000)
+
+
+def _within(root: Path, path: Path | str) -> str:
+    """A path as the view names it: relative to the worktree, with forward slashes."""
+    given = Path(path)
+    if given.is_absolute():
+        try:
+            given = given.resolve().relative_to(root.resolve())
+        except ValueError:
+            pass
+    return given.as_posix().removeprefix("./")
 
 
 def _elapsed(started: float) -> int:

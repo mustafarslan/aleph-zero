@@ -79,7 +79,7 @@ def _facts(args) -> int:
 
 
 def _decisions(args) -> int:
-    found = Engine(args.cwd).decisions(" ".join(args.task), k=args.k)
+    found = Engine(args.cwd).decisions(" ".join(args.task), k=args.k, path=args.path)
     print(json.dumps(asdict(found), indent=2) if args.json else decisions.text(found))
     return 0
 
@@ -286,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
 
     governing = commands.add_parser("decisions", help="the decision records (ADRs) that govern a task; with no task, all of them")
     governing.add_argument("task", nargs="*", help="what is being done, in plain words or as a commit message")
+    governing.add_argument("--for", dest="path", metavar="PATH", help="a file: the records whose applies-to covers it, and its layer in oxn.yaml")
     governing.add_argument("-k", type=int, default=7)
     governing.add_argument("--json", action="store_true")
     governing.set_defaults(run=_decisions)

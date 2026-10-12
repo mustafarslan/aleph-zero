@@ -221,3 +221,75 @@ def test_where_a_router_is_mounted_is_a_fact_of_its_own():
     assert found("a.py", python) == [("mount", "/workspace", 1, "workspace.router"), ("mount", "/admin", 3, "admin")]
     assert found("a.go", "package a\nfunc f(r chi.Router) {\n\tr.Mount(\"/v1\", api())\n\tr.Route(\"/jobs\", func(r chi.Router) {})\n}\n") == [
         ("mount", "/v1", 3, "api()"), ("mount", "/jobs", 4, "")]
+
+
+def test_a_blob_that_is_collected_takes_its_facts_with_it(repo):
+    from aleph_zero.indexer import collect_garbage
+    from aleph_zero.store import index_path, open_db
+
+    engine = project(repo)
+    assert engine.facts().counts["route"] == 5
+    conn = open_db(index_path(repo.root))
+    (oid,), = conn.execute("SELECT blob_oid FROM arch_facts WHERE family = 'javascript'").fetchall()
+    (repo.root / "server/endpoints.js").unlink()
+    assert engine.facts().counts["route"] == 2
+    collect_garbage(conn, max_age_days=0, now=2**40)
+    assert conn.execute("SELECT count(*) FROM arch_facts WHERE blob_oid = ?", (oid,)).fetchall() == [(0,)]
+
+
+def test_broken_source_and_windows_line_ends_still_give_what_can_be_read(repo):
+    repo.write("a.py", "import os\r\n\r\nKEY = os.getenv(\"A_KEY\")\r\n\r\n@app.get(\"/a\")\r\ndef a(: ...\r\n")
+    repo.write("b.js", "app.get(\"/b\", handler);\nfunction (((( {\n")
+    engine = Engine(repo.root)
+    assert [(f.name, f.path, f.line) for f in engine.facts("env").facts] == [("A_KEY", "a.py", 3)]
+    assert [(f.name, f.line) for f in engine.facts("route").facts] == [("GET /a", 5), ("GET /b", 1)]
+
+
+def test_queues_named_where_work_is_handed_over():
+    python = (
+        "@celery_app.task(name=\"audio.transcribe\", queue=\"audio\")\n"
+        "def transcribe(): ...\n"
+        "def worker(r):\n"
+        "    _, job = r.blpop(\"audio_jobs\")\n"
+        "    r.publish(channel_name, job)\n"
+    )
+    assert found("a.py", python) == [("task", "audio.transcribe", 1, "celery"), ("queue", "audio", 1, "celery"),
+                                     ("queue", "audio_jobs", 4, "blpop")]
+    assert found("a.ts", "await redis.lpush('audio_jobs', JSON.stringify(job));\nstream.subscribe((value) => use(value));\nbus.publish(\"orders.created\", order);\n") == [
+        ("queue", "audio_jobs", 1, "lpush"), ("queue", "orders.created", 3, "publish")]
+
+
+OXN_YAML = '''# what may depend on what
+retry_budget: 3
+layers:
+  surfaces: ["src/app/cli.py", "src/app/server.py"]   # outermost
+  analysis: ["src/app/metrics/*",
+             "src/app/rules/*"]
+  foundation:
+    - "src/app/config.py"
+    - src/app/render.py
+  tests: ["tests/*"]
+contracts:
+  - name: outside-in
+    kind: layered
+    order: [surfaces, analysis, foundation]
+  - name: no-cycles
+    kind: acyclic
+exclude:
+  - "vendor/*"
+'''
+
+
+def test_layers_and_contracts_of_an_oxn_yaml_are_facts():
+    assert found("oxn.yaml", OXN_YAML) == [
+        ("layer", "surfaces", 4, "src/app/cli.py, src/app/server.py"),
+        ("layer", "analysis", 5, "src/app/metrics/*, src/app/rules/*"),
+        ("layer", "foundation", 7, "src/app/config.py, src/app/render.py"),
+        ("layer", "tests", 10, "tests/*"),
+        ("contract", "outside-in", 12, "layered: surfaces > analysis > foundation"),
+        ("contract", "no-cycles", 15, "acyclic"),
+    ]
+    block = "contracts:\n- name: a\n  kind: layered\n  order:\n  - x\n  - y\n- name: b\n  kind: layered\n  order: [y, z]\n"
+    assert found("oxn.yaml", block) == [("contract", "a", 2, "layered: x > y"), ("contract", "b", 7, "layered: y > z")]
+    assert found("oxn.yaml", "layers: {a: [b]}\n: : :\n\t- x\n") == []          # a form the reader does not know states nothing
+    assert found("config/other.yaml", OXN_YAML) == []
