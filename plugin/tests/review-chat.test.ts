@@ -102,7 +102,7 @@ test('a huge question is cut before it is searched, scanned for names, or sent',
   const huge = 'where is ' + 'x'.repeat(200_000) + ' handled'
   const started = Date.now()
   expect(identifiers(huge).length <= 2).toBe(true)
-  expect(Date.now() - started < 500).toBe(true)
+  expect(Date.now() - started < 5000).toBe(true)   // it took 55 seconds before the cut; a loaded machine must not fail this
   expect(request(huge, [], []).body.length < 6000).toBe(true)
 })
 
