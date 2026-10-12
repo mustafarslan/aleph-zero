@@ -34,6 +34,26 @@ def check(cwd: Path) -> list[Row]:
     if state_reason(info.common_dir):
         rows.append(Row("note", "index location", f"the index is kept in the cache directory: {state_reason(info.common_dir)}"))
     rows.append(_untracked_cache(info.root))
+    rows.extend(_checkout(cwd))
+    return rows
+
+
+def _checkout(cwd: Path) -> list[Row]:
+    """What of the repository is not searched, and why."""
+    from .view import read_worktree
+
+    try:
+        worktree = read_worktree(cwd)
+    except gitio.GitError as exc:
+        return [Row("FAIL", "worktree", f"the worktree cannot be read: {exc}")]
+    rows = []
+    if worktree.outside_checkout:
+        rows.append(Row("note", "sparse checkout", f"sparse checkout: {worktree.outside_checkout} tracked files are "
+                        "outside it and are not searched"))
+    if worktree.submodules:
+        listed = ", ".join(worktree.submodules[:5]) + (" ..." if len(worktree.submodules) > 5 else "")
+        rows.append(Row("note", "submodules", f"submodules are not searched ({listed}); link one as a source "
+                        f"with `aleph source add {worktree.submodules[0]}`"))
     return rows
 
 

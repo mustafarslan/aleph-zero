@@ -85,7 +85,7 @@ def test_removing_a_source_removes_its_hits_and_a_missing_path_source_is_reporte
     sources.add(repo.root, str(docs_repo.root), name="docs")
     docs_repo.root.rename(tmp_path / "moved-away")
     assert paths(engine.search("wombat_rotator")) == []   # search keeps working without it
-    assert "not a git repository" in engine.status()["sources"][0]["last_error"]
+    assert "does not exist" in engine.status()["sources"][0]["last_error"]
 
 
 def test_identical_content_in_the_repository_and_a_source_is_stored_once(repo, docs_repo):

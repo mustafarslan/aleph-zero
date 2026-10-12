@@ -20,6 +20,10 @@ class GitError(RuntimeError):
     """A git command failed, or the directory is not inside a repository."""
 
 
+class NotARepository(GitError):
+    """The directory is not inside a git repository. Aleph searches what git tracks."""
+
+
 class GitTimeout(GitError):
     """Work on the repository ran past the caller's deadline."""
 
@@ -73,6 +77,7 @@ class RepoInfo:
     object_format: str    # 'sha1' or 'sha256'
     common_dir: Path      # shared by every worktree of the repository
     tree: str | None      # HEAD's tree, or None before the first commit
+    git_dir: Path | None = None  # this worktree's own git directory (its index, its sparse-checkout file)
 
 
 def repo_info(cwd: Path) -> RepoInfo:
@@ -80,12 +85,18 @@ def repo_info(cwd: Path) -> RepoInfo:
     Four separate calls cost about 17 ms; a query pays this every time."""
     proc = _run(
         ["git", "-C", str(cwd), "rev-parse", "--show-toplevel", "--show-object-format",
-         "--path-format=absolute", "--git-common-dir", "--verify", "--quiet", "HEAD^{tree}"])
+         "--path-format=absolute", "--git-common-dir", "--git-dir", "--verify", "--quiet", "HEAD^{tree}"])
     lines = proc.stdout.decode().splitlines()
-    if len(lines) < 3:  # with no commits yet git prints three lines and exits 1
+    if len(lines) < 4:  # with no commits yet git prints four lines and exits 1
         detail = proc.stderr.decode(errors="replace").strip()[:300]
-        raise GitError(f"not a git repository: {cwd}: {detail}")
-    return RepoInfo(Path(lines[0]), lines[1], Path(lines[2]), lines[3] if len(lines) > 3 else None)
+        if not Path(cwd).is_dir():
+            raise NotARepository(f"{cwd} does not exist or is not a directory")
+        if "not a git repository" in detail:
+            raise NotARepository(
+                f"{cwd} is not inside a git repository. Aleph searches what git tracks: run `git init` there "
+                f"(and commit or just add files), or start it inside a repository.")
+        raise GitError(f"git could not describe the repository at {cwd}: {detail}")
+    return RepoInfo(Path(lines[0]), lines[1], Path(lines[2]), lines[4] if len(lines) > 4 else None, Path(lines[3]))
 
 
 def toplevel(cwd: Path) -> Path:
@@ -110,9 +121,11 @@ def head_tree(cwd: Path) -> str | None:
     return proc.stdout.decode().strip() or None
 
 
-def ls_tree(cwd: Path, tree: str) -> dict[str, str]:
-    """path -> blob id for every regular file in a tree. Symlinks and submodules are left out."""
+def read_tree(cwd: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
+    """A tree's regular files as path -> blob id, and the paths of its submodules.
+    Symlinks are left out."""
     files: dict[str, str] = {}
+    links: list[str] = []
     for entry in git(cwd, "ls-tree", "-r", "-z", "--full-tree", tree).split(b"\0"):
         if not entry:
             continue
@@ -120,7 +133,31 @@ def ls_tree(cwd: Path, tree: str) -> dict[str, str]:
         mode, kind, oid = meta.split(b" ")
         if kind == b"blob" and mode in _REGULAR_MODES:
             files[path.decode("utf-8", "surrogateescape")] = oid.decode()
-    return files
+        elif kind == b"commit":
+            links.append(path.decode("utf-8", "surrogateescape"))
+    return files, tuple(links)
+
+
+def ls_tree(cwd: Path, tree: str) -> dict[str, str]:
+    """path -> blob id for every regular file in a tree. Symlinks and submodules are left out."""
+    return read_tree(cwd, tree)[0]
+
+
+def skip_worktree(cwd: Path) -> tuple[frozenset[str], tuple[str, ...]]:
+    """What git tracks but has not checked out here (a sparse checkout): the files, and,
+    where git's index keeps whole directories collapsed, those directories with a trailing
+    slash. Only asked in a worktree that has a sparse-checkout file."""
+    files: set[str] = set()
+    directories: list[str] = []
+    for entry in git(cwd, "ls-files", "-t", "-z", "--sparse").split(b"\0"):
+        if entry[:2] != b"S ":
+            continue
+        path = entry[2:].decode("utf-8", "surrogateescape")
+        if path.endswith("/"):
+            directories.append(path)
+        else:
+            files.add(path)
+    return frozenset(files), tuple(directories)
 
 
 def status(cwd: Path) -> list[str]:

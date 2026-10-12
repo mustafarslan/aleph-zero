@@ -162,15 +162,17 @@ def test_a_dirty_file_edited_after_the_view_was_built_is_not_stored_under_the_ol
     assert [hit.path for hit in search(index, fresh, "aardvark")] == [path]
 
 
-def test_a_blob_missing_from_the_object_store_stays_pending(repo):
-    # A partial clone has tree entries whose blobs were never fetched.
+def test_a_blob_missing_from_the_object_store_is_counted_apart_and_never_recorded(repo):
+    # A partial clone has tree entries whose blobs were never fetched. Such a blob is not
+    # "pending": nothing this session does will make it readable, so no answer waits for it.
     index = _index(repo)
     real = build_view(repo.root)
     ghost = View(real.root, real.common_dir, real.object_format, real.tree,
                  {**real.files, "ghost.py": "0" * 40}, real.dirty)
     first = index.sync(ghost)
-    assert (first.indexed, first.skipped, first.pending) == (3, 0, 1)
-    assert index.sync(ghost).pending == 1
+    assert (first.indexed, first.skipped, first.pending, first.unreadable) == (3, 0, 0, 1)
+    again = index.sync(ghost)
+    assert (again.pending, again.unreadable) == (0, 1)
     assert index.conn.execute("SELECT count(*) FROM blobs WHERE kind LIKE 'skip:%'").fetchall() == [(0,)]
 
 

@@ -14,8 +14,10 @@ from pathlib import Path
 
 from . import filters, gitio
 
-_TREE_CACHE: dict[tuple[str, str], dict[str, str]] = {}
+_TREE_CACHE: dict[tuple[str, str], tuple[dict[str, str], tuple[str, ...]]] = {}
 _TREE_CACHE_SIZE = 8
+# Per worktree with a sparse checkout: what its files were filtered from, and the result.
+_SPARSE_CACHE: dict[Path, tuple[tuple, dict[str, str], int]] = {}
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class View:
     dirty: frozenset[str]
     mounts: tuple[Mount, ...] = ()
     mounted: frozenset[str] = frozenset()  # the paths of `files` that come from a linked source
+    outside_checkout: int = 0              # tracked files a sparse checkout leaves out; they are not searched
+    submodules: tuple[str, ...] = ()       # paths of submodules; their content is not searched
 
     @cached_property
     def fingerprint(self) -> str:
@@ -83,13 +87,60 @@ class View:
         return readers.reader(root).read(self.files[path], max_bytes)
 
 
-def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:
+def _tree(root: Path, common_dir: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
     key = (str(common_dir), tree)
     if key not in _TREE_CACHE:
         if len(_TREE_CACHE) >= _TREE_CACHE_SIZE:
             _TREE_CACHE.pop(next(iter(_TREE_CACHE)))
-        _TREE_CACHE[key] = gitio.ls_tree(root, tree)
+        _TREE_CACHE[key] = gitio.read_tree(root, tree)
     return _TREE_CACHE[key]
+
+
+def _tree_files(root: Path, common_dir: Path, tree: str) -> dict[str, str]:
+    return _tree(root, common_dir, tree)[0]
+
+
+def _stamp(path: Path) -> tuple[int, int]:
+    try:
+        found = path.stat()
+        return found.st_mtime_ns, found.st_size
+    except OSError:
+        return 0, 0
+
+
+def _checked_out(info: gitio.RepoInfo, files: dict[str, str]) -> tuple[dict[str, str], int]:
+    """`files` without what a sparse checkout leaves out, and how many that is.
+
+    A sparse checkout is the user's statement of what they work on. What is outside it is
+    not on disk, cannot be opened by the agent, and in a partial clone is not even in the
+    object store. Git's index says which files those are; it is asked again only when the
+    index or the sparse-checkout file has changed."""
+    git_dir = info.git_dir
+    sparse_file = git_dir / "info" / "sparse-checkout" if git_dir is not None else None
+    if sparse_file is None or not sparse_file.exists():
+        return files, 0  # the usual case costs one stat
+    key = (info.tree, _stamp(git_dir / "index"), _stamp(sparse_file))
+    cached = _SPARSE_CACHE.get(info.root)
+    if cached is not None and cached[0] == key:
+        return dict(cached[1]), cached[2]
+    skipped, directories = gitio.skip_worktree(info.root)
+    kept = files
+    if skipped or directories:
+        prefixes = frozenset(directories)
+
+        def outside(path: str) -> bool:
+            if path in skipped:
+                return True
+            end = path.find("/")
+            while prefixes and end != -1:
+                if path[:end + 1] in prefixes:
+                    return True
+                end = path.find("/", end + 1)
+            return False
+
+        kept = {path: oid for path, oid in files.items() if not outside(path)}
+    _SPARSE_CACHE[info.root] = (key, kept, len(files) - len(kept))
+    return dict(kept), len(files) - len(kept)
 
 
 def _spelled_as_on_disk(root: Path, path: str, listings: dict[Path, frozenset[str]]) -> bool:
@@ -121,12 +172,27 @@ def _dirty_blob(root: Path, path: str, fmt: str, listings: dict[Path, frozenset[
         return None
 
 
-def worktree_files(cwd: Path) -> tuple[gitio.RepoInfo, dict[str, str], frozenset[str]]:
-    """One worktree as it is now: its repository facts, path -> blob id, and the paths
-    whose content was taken from the working copy."""
+@dataclass(frozen=True)
+class Worktree:
+    """One worktree as it is now."""
+    info: gitio.RepoInfo
+    files: dict[str, str]          # path -> blob id
+    dirty: frozenset[str]          # the paths whose content was taken from the working copy
+    outside_checkout: int = 0
+    submodules: tuple[str, ...] = ()
+
+
+def read_worktree(cwd: Path) -> Worktree:
     info = gitio.repo_info(cwd)
     root, fmt, tree = info.root, info.object_format, info.tree
-    files = dict(_tree_files(root, info.common_dir, tree)) if tree else {}
+    submodules: tuple[str, ...] = ()
+    files: dict[str, str] = {}
+    outside = 0
+    if tree:
+        tracked, submodules = _tree(root, info.common_dir, tree)
+        files, outside = _checked_out(info, tracked)
+        if files is tracked:
+            files = dict(tracked)
     dirty: set[str] = set()
     listings: dict[Path, frozenset[str]] = {}
     for number, path in enumerate(gitio.status(root)):
@@ -138,7 +204,14 @@ def worktree_files(cwd: Path) -> tuple[gitio.RepoInfo, dict[str, str], frozenset
         else:
             files[path] = oid
             dirty.add(path)
-    return info, files, frozenset(dirty)
+    return Worktree(info, files, frozenset(dirty), outside, submodules)
+
+
+def worktree_files(cwd: Path) -> tuple[gitio.RepoInfo, dict[str, str], frozenset[str]]:
+    """One worktree as it is now: its repository facts, path -> blob id, and the paths
+    whose content was taken from the working copy."""
+    found = read_worktree(cwd)
+    return found.info, found.files, found.dirty
 
 
 def tree_files(root: Path, tree: str) -> dict[str, str]:
@@ -149,7 +222,8 @@ def tree_files(root: Path, tree: str) -> dict[str, str]:
 def build_view(cwd: Path) -> View:
     from . import sources  # sources builds its mounts with the helpers above
 
-    info, files, dirty = worktree_files(cwd)
+    worktree = read_worktree(cwd)
+    info, files, dirty = worktree.info, worktree.files, worktree.dirty
     mounts = tuple(sources.mounts(info.common_dir))
     mounted: set[str] = set()
     if mounts:
@@ -164,4 +238,5 @@ def build_view(cwd: Path) -> View:
                 if inside in mount.dirty:
                     dirty.add(path)
         dirty = frozenset(dirty)
-    return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts, frozenset(mounted))
+    return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts, frozenset(mounted),
+                worktree.outside_checkout, worktree.submodules)

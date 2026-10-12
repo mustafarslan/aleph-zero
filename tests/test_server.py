@@ -142,7 +142,7 @@ def test_a_tool_that_fails_says_so_in_its_result_not_as_a_protocol_error(client,
     missing = client.call("outline", path="src/nope.py")["result"]
     assert missing["isError"] is True and "not a file in this worktree" in missing["content"][0]["text"]
     outside = client.call("search", query="x", cwd=str(tmp_path))["result"]
-    assert outside["isError"] is True and "not a git repository" in outside["content"][0]["text"]
+    assert outside["isError"] is True and "not inside a git repository" in outside["content"][0]["text"]
     bad = client.call("search", query="x", kind="everything")["result"]
     assert bad["isError"] is True and "kind" in bad["content"][0]["text"]
     no_query = client.call("search")["result"]

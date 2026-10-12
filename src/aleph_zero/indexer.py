@@ -71,8 +71,9 @@ def _removed_content(conn: apsw.Connection) -> None:
 class SyncReport:
     indexed: int    # blobs chunked and stored by this call
     skipped: int    # blobs recorded as not indexable (binary, too large, ...)
-    pending: int    # blobs in the view still not indexed: out of time, or not readable right now
+    pending: int    # blobs in the view still not indexed: out of time, or a working-copy file that changed under us
     seconds: float
+    unreadable: int = 0  # blobs git does not have (a partial clone, a damaged store): not waited for
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class Index:
         self._pending = 0
         self._missing: frozenset[Key] = frozenset()  # unindexed blobs of the view at the last sync
         self._deferred: dict[Key, float] = {}  # blob git does not have -> when we last asked
+        self._unreadable: frozenset[Key] = frozenset()  # those of them still missing after the last sync
         self._paths: dict[Key, list[str]] = {}
         self._path_words: tuple[dict[str, list[str]], dict[str, list[str]]] | None = None
         self._path_names: frozenset[str] = frozenset()
@@ -121,10 +123,11 @@ class Index:
         changed = view.fingerprint != self._fingerprint
         # Read before looking: a commit by another session after this point is seen as a change next time.
         version = self.conn.pragma("data_version")
-        if not changed and version == self._version and not self._missing:
+        if (not changed and version == self._version and self._missing == self._unreadable
+                and all(asked > started - RETRY_SECONDS for asked in self._deferred.values())):
             # The same view, nothing pending, and no other session has written: the index is as it was.
             self._touch()
-            return SyncReport(0, 0, 0, time.monotonic() - started)
+            return SyncReport(0, 0, 0, time.monotonic() - started, len(self._unreadable))
         self.full_checks += 1
         if changed:
             self._fingerprint = None  # until the tables below match the view again
@@ -182,11 +185,20 @@ class Index:
             self._collections = removals
         self._missing = frozenset(missing) - stored
         self._indexed = self._keys - self._missing if self._missing else self._keys  # no copy on the usual path
+        # What git could not supply is not waited for: it is asked for again in a minute,
+        # and counted apart, so answers are not marked incomplete for ever.
+        self._unreadable = self._missing.intersection(self._deferred)
+        left -= len(self._unreadable)
         self._pending = left
         self._touch(now=True)
         self._fingerprint = view.fingerprint
         self._version = version
-        return SyncReport(indexed, skipped, left, time.monotonic() - started)
+        return SyncReport(indexed, skipped, left, time.monotonic() - started, len(self._unreadable))
+
+    @property
+    def unreadable(self) -> int:
+        """Blobs of the view that git does not have."""
+        return len(self._unreadable)
 
     @contextmanager
     def reading(self):

@@ -207,6 +207,11 @@ class Engine:
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "index_note": index_note(view.common_dir),
             "lost_to_collection": index.lost_to_collection,
+            "unreadable": index.unreadable,
+            "outside_checkout": view.outside_checkout,
+            "submodules": list(view.submodules),
+            **({"submodules_note": "submodules are not searched; link one as a source with "
+                                   f"`aleph source add {view.submodules[0]}`"} if view.submodules else {}),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
             "sources": linked, **({"sources_error": problem} if problem else {}),
