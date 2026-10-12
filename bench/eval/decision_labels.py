@@ -16,7 +16,8 @@ development sets, and written down on 2026-10-12 before any ranker was measured 
   directly in one of the directories given, with the number and title the engine reads from it; a file
   named as a template is not one;
 - the commit must change at least one file outside those directories: a typo fixed in a record cites
-  it and is not work it governs;
+  it and is not work it governs. A directory in which the commit changes a record counts as one of
+  them (records have moved; added after the first count and a look at a sample, before any score);
 - commits by a bot, and dependency bumps (`build(deps`, `Bump x from a to b`), are left out: their
   messages carry changelogs that name records.
 
@@ -75,6 +76,13 @@ def records_in(root: Path, sha: str, adr_dirs: str) -> tuple[dict[str, int], dic
     return paths, titled
 
 
+def _works(changed: list[str], inside: tuple[str, ...]) -> bool:
+    """Whether a commit changes anything that is not a record or beside one. Records have moved in these
+    repositories: a record edited where the records used to be is still a record edited."""
+    beside = inside + tuple(path.rsplit("/", 1)[0] + "/" for path in changed if "/" in path and decisions.is_record(path) is not None)
+    return any(path and not path.startswith(beside) for path in changed)
+
+
 def pairs_in(root: Path, sha: str, adr_dirs: str, left_out: dict[str, int] | None = None) -> tuple[list[dict], dict[str, int]]:
     """The pairs, and the records they were drawn against. `left_out` counts what the rule excluded, by reason."""
     paths, known = records_in(root, sha, adr_dirs)
@@ -102,7 +110,7 @@ def pairs_in(root: Path, sha: str, adr_dirs: str, left_out: dict[str, int] | Non
             leave("a bot or a dependency bump")
         elif len(text := words(NOISE.sub(" ", CITATION.sub(" ", f"{subject}\n{body}")).strip())) < 3:
             leave("fewer than three words left")
-        elif not any(path and not path.startswith(inside) for path in git(root, "show", "--name-only", "--format=", commit).split("\n")):
+        elif not _works(git(root, "show", "--name-only", "--format=", commit).split("\n"), inside):
             leave("only the records changed")
         else:
             repeated = max(len(words(known[number]) & text) / max(1, len(words(known[number]))) for number in gold)

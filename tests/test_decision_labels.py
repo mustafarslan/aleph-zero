@@ -56,3 +56,11 @@ def test_what_was_left_out_and_why_is_counted(history):
     left = {}
     assert labels.pairs_in(history, head, "docs/adr", left)[0] == []
     assert left == {"only the records changed": 1, "a bot or a dependency bump": 1}
+
+
+def test_a_record_written_where_the_records_used_to_be_is_not_work_it_governs(history):
+    _commit(history, "Flesh out ADR 1 with the retries and the ordering spelled out in full", {
+        "docs/architecture/adr-001-use-queues.md": "# ADR 001: Use queues\n", "docs/architecture/img/queues.png": "png"})
+    head = subprocess.run(["git", "-C", str(history), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    left = {}
+    assert labels.pairs_in(history, head, "docs/adr", left)[0] == [] and left == {"only the records changed": 1}
