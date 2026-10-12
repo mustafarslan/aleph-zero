@@ -416,3 +416,29 @@ def test_with_two_records_a_hair_s_difference_in_nearness_weighs_as_much_as_ever
     near = {"docs/adr/0001-x.md": 0.51, "docs/adr/0002-x.md": 0.50}
     assert [(hit.number, hit.score) for hit in two.rank("queue per kind of work", nearness=near, a=0.5)] == [(1, 0.5), (2, 0.5)]
     assert [hit.number for hit in two.rank("queue per kind of work")] == [2]
+
+
+def test_a_question_with_a_time_limit_does_not_wait_longer_than_that_for_the_records_vectors(repo, fake_worker, monkeypatch):
+    """`decisions` takes `timeout_ms` like the other tools. What it bounds is the one thing that can take long: making
+    the vectors of a view's records at the first question. The answer is then by words, and says so."""
+    from aleph_zero import server
+    from aleph_zero.embed.client import EmbedPool, Unavailable
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    allowed = []
+    real = EmbedPool.__init__
+
+    def watched(self, socket_path, capacity=2048, connections=8, timeout=120.0):
+        allowed.append(timeout)
+        real(self, socket_path, capacity, connections, timeout)
+
+    monkeypatch.setattr(EmbedPool, "__init__", watched)
+    embed = EmbedPool.embed
+    monkeypatch.setattr(EmbedPool, "embed", lambda self, texts, kind: (_ for _ in ()).throw(Unavailable("it did not answer in time")))
+    answer = engine.decisions("publish the order events on the bus", timeout_ms=40)
+    assert allowed and max(allowed) <= 0.040 and "in time" in answer.vectors
+    monkeypatch.setattr(EmbedPool, "embed", embed)
+    assert engine.decisions("publish the order events on the bus").vectors == "used"     # the caller's own short limit is no failure of the worker
+    assert all(hit.sources == ("words",) for hit in answer.decisions) and answer.decisions[0].number == 12
+    assert "timeout_ms" in server.DECISIONS_TOOL["inputSchema"]["properties"]
+    assert cli.main(["--cwd", str(repo.root), "decisions", "--timeout-ms", "40", "event", "bus"]) == 0

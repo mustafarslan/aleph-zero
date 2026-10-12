@@ -303,11 +303,12 @@ class Engine:
 
     @_rebuilding
     def decisions(self, task: str, k: int = 7, cwd: Path | str | None = None, rrf_k: int | None = None,
-                  path: Path | str | None = None) -> decisions.Answer:
+                  path: Path | str | None = None, timeout_ms: int | None = None) -> decisions.Answer:
         """The decision records that govern a task (a sentence, a commit message), best first: whole
         records ranked by every word of the task, and by each record's own vector when an embedding
         worker is running (`decisions.FUSION`). An empty task lists the records. `rrf_k=0` ranks by
-        words alone. With a `path`, also the
+        words alone. `timeout_ms` bounds what can take long, the making of the records' vectors at the
+        first question: past it the answer is by words and says so. With a `path`, also the
         records whose `applies-to` covers that file, and the layer of an `oxn.yaml` it is in."""
         started = time.monotonic()
         view = self._view(cwd)
@@ -329,7 +330,7 @@ class Engine:
         by_vectors, nearness, note = [], None, ""
         if rrf_k != 0 and task.strip() and records.decisions:
             if decisions.FUSION == "convex" and rrf_k is None:      # a `rrf_k` given asks for the fusion by rank, by name
-                nearness, note = self._record_nearness(view, task, records)
+                nearness, note = self._record_nearness(view, task, records, None if timeout_ms is None else timeout_ms / 1000)
             else:
                 by_vectors, note = self._nearest_records(view, task, records)
         hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k, nearness)
@@ -378,7 +379,8 @@ class Engine:
         return archfacts.Answer(kind, like, listed, counts, pending, left[0], late or left[0] > 0 and until is not None,
                                 _elapsed(started), truncated)
 
-    def _record_nearness(self, view: View, task: str, records: decisions.Records) -> tuple[dict[str, float] | None, str]:
+    def _record_nearness(self, view: View, task: str, records: decisions.Records,
+                         within: float | None = None) -> tuple[dict[str, float] | None, str]:
         """The cosine of the task with every record's own vector, by path, and how vectors took part. None when
         they cannot: switched off by hand, no worker running (a query never starts one), or it did not answer in
         time. All records or none: a ranking over some of them would be scaled wrongly. A record's vector is
@@ -413,7 +415,7 @@ class Engine:
             kept.update(conn.execute(f"SELECT text_hash, vector FROM record_vectors WHERE kind = ? AND text_hash IN ({','.join('?' * len(some))})",
                                      (VECTOR_KIND, *some)))
         missing = [at for at, key in enumerate(hashes) if key not in kept]
-        deadline = time.monotonic() + RECORD_EMBED_SECONDS
+        deadline = time.monotonic() + (RECORD_EMBED_SECONDS if within is None else min(RECORD_EMBED_SECONDS, within))
         try:
             for start in range(0, len(missing), RECORD_BATCH):
                 part, left = missing[start:start + RECORD_BATCH], deadline - time.monotonic()
@@ -431,7 +433,9 @@ class Engine:
                 self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
             query = self._embedder.embed([task[:decisions.CUT]], kind="query")[0]
         except Unavailable as exc:
-            if missing:     # the records' vectors, not one query that found the worker asleep: do not ask at every question
+            # The records' vectors, not one query that found the worker asleep: do not ask at every question. Not so
+            # when the caller's own limit was shorter than the usual one: that is its wish, not the worker's failure.
+            if missing and (within is None or within >= RECORD_EMBED_SECONDS):
                 self._records_failed[view.root] = (time.monotonic(), str(exc))
             return None, str(exc)
         self._records_failed.pop(view.root, None)

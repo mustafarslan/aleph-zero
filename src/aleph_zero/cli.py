@@ -79,7 +79,7 @@ def _facts(args) -> int:
 
 
 def _decisions(args) -> int:
-    found = Engine(args.cwd).decisions(" ".join(args.task), k=args.k, path=args.path)
+    found = Engine(args.cwd).decisions(" ".join(args.task), k=args.k, path=args.path, timeout_ms=args.timeout_ms)
     print(json.dumps(asdict(found), indent=2) if args.json else decisions.text(found))
     return 0
 
@@ -297,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     governing.add_argument("task", nargs="*", help="what is being done, in plain words or as a commit message")
     governing.add_argument("--for", dest="path", metavar="PATH", help="a file: the records whose applies-to covers it, and its layer in oxn.yaml")
     governing.add_argument("-k", type=int, default=7)
+    governing.add_argument("--timeout-ms", type=int, help="do not wait longer than this for the records' vectors; the answer is then by words")
     governing.add_argument("--json", action="store_true")
     governing.set_defaults(run=_decisions)
 

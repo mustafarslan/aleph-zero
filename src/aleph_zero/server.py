@@ -157,7 +157,7 @@ DECISIONS_TOOL = {
         "task": {"type": "string", "default": ""},
         "path": {"type": "string"},
         "k": {"type": "integer", "minimum": 1, "maximum": 30, "default": 7},
-        **_COMMON}},
+        **_TIMEOUT, **_COMMON}},
 }
 FACTS_TOOL = {
     "name": "facts",
@@ -476,7 +476,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
             lines.append(f"note: {found.pending} files are not indexed yet; results may be incomplete")
         return "\n".join(lines)
     if name == "decisions":
-        found = engine.decisions(args.get("task", ""), k=args.get("k", 7), cwd=cwd, path=args.get("path"))
+        found = engine.decisions(args.get("task", ""), k=args.get("k", 7), cwd=cwd, path=args.get("path"), timeout_ms=args.get("timeout_ms"))
         return json.dumps(asdict(found)) if as_json else decisions.text(found)
     if name == "facts":
         found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,
