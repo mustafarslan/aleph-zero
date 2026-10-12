@@ -670,3 +670,22 @@ def test_a_method_given_to_a_built_in_type_is_not_certainly_what_its_own_call_re
         found, certain = certainty(rust, "src/lib.rs", "chunk_by", nth)
         assert len(found) == 1 and found[0].endswith(".chunk_by") and certain is False, nth
     assert certainty(rust, "src/lib.rs", "step") == (["Mine.step"], True)               # a type of these files: as before
+
+
+def test_an_import_made_inside_another_function_does_not_make_a_rust_function_doubtful():
+    """`use crate::other::f;` inside one function binds `f` there and nowhere else: a call of the file's own `f` from
+    another function is that function, and certain. (Named by agy's read of the rule for imports of the same name.)"""
+    rust = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod other;\nmod run;\n",
+            "src/other.rs": "pub fn f() {}\n",
+            "src/run.rs": "fn f() {}\n\nfn helper() {\n    use crate::other::f;\n    f();\n}\n\nfn go() {\n    f();\n}\n"}
+    assert certainty(rust, "src/run.rs", "f", nth=1) == (["f"], True)                  # in `go`: the file's own
+    graph, sites = build(rust, FEATURES)
+    assert [edge(graph, sites, "src/run.rs", "f", nth).targets[0].path for nth in (0, 1)] == ["src/other.rs", "src/run.rs"]
+    assert edge(graph, sites, "src/run.rs", "f", 0).certain                            # in `helper`: what it imported there, which hides the file's own
+    assert [tuple(binding.inside) for binding in graph._of("src/run.rs").bindings if binding.local == "f"] == [(3, 6)]
+    outside = dict(rust, **{"src/run.rs": "fn f() {}\n\nfn helper() {\n    use libc::f;\n    f();\n}\n"})
+    assert certainty(outside, "src/run.rs", "f") is None                               # hidden by an import from outside these files: no answer here
+    top = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod other;\nmod run;\n", "src/other.rs": "pub fn f() {}\n",
+           "src/run.rs": "#[cfg(unix)]\nuse crate::other::f;\n\n#[cfg(not(unix))]\nfn f() {}\n\nfn go() {\n    f();\n}\n"}
+    found, certain = certainty(top, "src/run.rs", "f")
+    assert sorted(found) == ["f", "f"] and certain is False                            # at the file's own level: still one of two

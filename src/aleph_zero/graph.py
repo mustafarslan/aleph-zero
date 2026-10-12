@@ -470,7 +470,7 @@ class Graph:
         here = self._lexical(path, facts, call)
         if here:
             found = self._edge(path, here, "scope")
-            return self._rust_or_its_import(path, name, found) if facts.family == "rust" else found
+            return self._rust_or_its_import(path, name, found, call.line) if facts.family == "rust" else found
         bound = self._bound[path].get(name)
         if bound:
             reached, imported = False, []
@@ -558,7 +558,7 @@ class Graph:
                 return self._edge(path, found, "package")
         return self._by_name(path, facts, call, members=True, rule="name, on an unbound name")
 
-    def _rust_or_its_import(self, path: str, name: str, found: Edge | None) -> Edge | None:
+    def _rust_or_its_import(self, path: str, name: str, found: Edge | None, line: int) -> Edge | None:
         """A Rust function that the same file also imports under its name. A module holds a function and an
         import of one name only where `#[cfg]`s exclude each other (a fallback beside `pub use self::unix::f`),
         and which of them holds is the platform's to say: both are offered. An import that leaves these files
@@ -569,6 +569,18 @@ class Graph:
             return found
         others, leaves = [], False
         for binding in bound:
+            if binding.inside:
+                # A `use` inside a function binds the name there and nowhere else. Where the call stands in that
+                # function the import hides the file's own function; anywhere else it is not in sight.
+                if not binding.inside[0] <= line <= binding.inside[1]:
+                    continue
+                targets, modules, placed = self._stands_for(path, binding)
+                hidden_by = [target for target in targets if target.kind in ("function", "method")]
+                if hidden_by:
+                    return self._edge(path, hidden_by, "import")
+                if not (targets or modules or placed):
+                    return None     # hidden by something from outside these files
+                continue
             targets, modules, placed = self._stands_for(path, binding)
             # Only another function shares a function's name by condition: macros and types are named apart.
             others += [target for target in targets if target.kind in ("function", "method") and target not in found.targets]

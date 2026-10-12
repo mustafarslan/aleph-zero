@@ -32,6 +32,7 @@ class Binding:
     kind: str = "import"  # 'import'; 'reexport': taken from a module only to be published (`export { x } from`,
     #                       `export * from`); 'export': the file publishes its own `name` as `local`;
     #                       'module': Rust's `mod x;`; 'package': the package the file says it belongs to (in `local`)
+    inside: tuple[int, int] | tuple = ()  # Rust: the first and last line of the function a `use` stands in: it binds the name there only
 
 
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
@@ -63,11 +64,13 @@ def _bindings(family: str, statements: list[Node]) -> list[Binding]:
     for node in statements if read is not None else ():     # wherever they stand: imports hide in functions too
         found = list(read(node))
         if found and family == "rust":
-            depth, above = 0, node.parent
+            depth, inside, above = 0, (), node.parent
             while above is not None:
                 depth += above.type == "mod_item"
+                if not inside and above.type == "function_item":        # the nearest function around it
+                    inside = (above.start_point[0] + 1, above.end_point[0] + 1)
                 above = above.parent
-            found = [Binding(b.local, b.source, b.name, depth, b.kind) for b in found]
+            found = [Binding(b.local, b.source, b.name, depth, b.kind, inside) for b in found]
         out.extend(found)
     return out
 

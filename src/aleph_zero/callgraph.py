@@ -34,7 +34,7 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 5           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 6           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for
@@ -161,7 +161,7 @@ def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes] | N
         return None
     # The last list is where each definition starts and ends, in the symbols' order: the index's symbols
     # table keeps only where one starts, and an answer taken from a compiler index must fall inside one.
-    shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed,
+    shape = [[[b.local, b.source, b.name, b.level, b.kind, *([list(b.inside)] if b.inside else [])] for b in bound], built_on, typed,
              [[d.start_line, d.end_line] for d in found]]
     # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
     kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity, c.column16, c.column32,
