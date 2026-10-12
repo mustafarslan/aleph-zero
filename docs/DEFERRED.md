@@ -80,7 +80,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Why it waits:** nothing is committed in the Aeon repository without the owner's go-ahead.
 - **This is what blocks the next milestone.** M0 to M5 are merged (2026-10-12). M6, the memory layer, is next, and ADR-006 lists three changes Aeon needs before Aleph's first write: heavy dependencies moved into optional extras (a plain install must not download PyTorch), the write-ahead log replayed before the search index is rebuilt, and event ids kept across a replay. With your go-ahead they are made on a branch off `v4` in the Aeon checkout; M6 also needs its own short design first (ADR-006 says so), which I can draft for you to read without touching Aeon.
 - **Aleph's side is built** (M6a, 2026-10-12): the catalogue, recall with staleness, the adapter (tested against the extension the M0 probe built out of tree, without touching the Aeon checkout), the `recall` and `remember` tools, `aleph memory`, and the side chat's writes. What waits for you is the three Aeon changes and the design's five decisions; until then memory works, by words and recency, and by meaning where `ALEPH_AEON_LIB` points at a build.
-- **After M6:** M7 to M10 (code graph, knowledge graph, SCIP, public release) each ship only if the A/B measurement improves, so they wait for entry 0.
+- **After M6:** M7 to M10 (code graph, knowledge graph, SCIP, public release) each *ship* only if the A/B measurement improves (entry 0). M7 is being built ahead of that gate: its tools stay on demand and nothing is added to search until the measurement says it pays.
 
 ## 6. An upper bound on tree-sitter in oxn
 
