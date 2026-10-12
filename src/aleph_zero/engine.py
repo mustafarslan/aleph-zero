@@ -300,8 +300,9 @@ class Engine:
     def decisions(self, task: str, k: int = 7, cwd: Path | str | None = None, rrf_k: int | None = None,
                   path: Path | str | None = None) -> decisions.Answer:
         """The decision records that govern a task (a sentence, a commit message), best first: whole
-        records ranked by every word of the task, fused with vectors where the worktree has them.
-        An empty task lists the records. `rrf_k=0` ranks by words alone. With a `path`, also the
+        records ranked by every word of the task, and by each record's own vector when an embedding
+        worker is running (`decisions.FUSION`). An empty task lists the records. `rrf_k=0` ranks by
+        words alone. With a `path`, also the
         records whose `applies-to` covers that file, and the layer of an `oxn.yaml` it is in."""
         started = time.monotonic()
         view = self._view(cwd)

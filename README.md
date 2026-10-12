@@ -183,7 +183,9 @@ Go's net/http and gRPC were measured on real repositories; the other readers are
 tests only (ADR-003).
 
 `aleph decisions` ranks decision records (numbered Markdown files in a directory such as
-`docs/adr`) as whole documents for a task, and answers in a few hundred tokens. With
+`docs/adr`) as whole documents for a task, and answers in a few hundred tokens. When the
+embedding worker is running, each record's own vector is added to the words (a record no
+word of the task names can then still be found); without it the ranking is by words. With
 `--for`, it lists the records whose `applies-to` frontmatter covers a file and, when the
 repository has an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer the
 file is in and what that layer may depend on. Aleph reads these; it enforces nothing.

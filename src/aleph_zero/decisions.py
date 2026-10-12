@@ -33,11 +33,12 @@ FIELDS = (1.0, 1.0, 1.0)
 SUBJECT = 1.0
 RRF_K = 5               # small: with tens of records, first and second place must differ by more than 1/61 and 1/62
 NEAREST = 200           # chunks of the records asked of the vectors
-# How vectors take part. "rrf": the records in the order of their nearest chunk, fused by rank (measured: no better
-# than words). "convex": one vector per record, its cosine with the task and the BM25 score each scaled to 0..1 over
-# the records and added, `A` for the words; chosen on development pairs with each repository held out
-# (bench/eval/decisions_tune.py: +10 points of precision at 3 there). Off until it has run on oxn's pairs.
-FUSION = "rrf"
+# How vectors take part. "convex": one vector per record; its cosine with the task and the BM25 score are each
+# scaled to 0..1 over the records and added, `A` for the words. Chosen on 89 development pairs with each repository
+# held out (precision at 3 from 0.685 to 0.787; bench/eval/decisions_tune.py) and then run once on oxn's 100 pairs:
+# 0.580 / 0.840 / 0.717 against 0.610 / 0.820 / 0.726 by words (ADR-003). "rrf": the records in the order of their
+# nearest chunk, fused by rank; measured earlier, no better than words; kept for the benchmark's arms.
+FUSION = "convex"
 A = 0.5
 CUT = 5000              # characters of a record, and of a task, that are embedded
 _NUMBERED = re.compile(r"(?:ADR[-_ ]?)?(\d+)[-_]", re.I)

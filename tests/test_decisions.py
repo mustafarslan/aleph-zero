@@ -244,7 +244,7 @@ def test_words_and_nearness_are_scaled_and_added_and_a_record_no_word_names_can_
     assert [hit.number for hit in records.rank(task, nearness=near, a=0.3)] == [3, 1, 2]       # nearness counts for more
     assert [hit.number for hit in records.rank(task, nearness={path: 0.4 for path in near}, a=0.5)] == [1, 2, 3]   # equal: the records' own order
     assert [hit.number for hit in records.rank(task, nearness=near, a=0.5, k=1)] == [1]
-    assert (decisions.FUSION, decisions.A, decisions.CUT) == ("rrf", 0.5, 5000)       # off until it has run on oxn's pairs
+    assert (decisions.FUSION, decisions.A, decisions.CUT) == ("convex", 0.5, 5000)    # as chosen on development pairs and run once on oxn's
 
 
 def test_what_is_embedded_for_a_record_is_its_title_its_decision_and_then_its_text():
@@ -257,13 +257,12 @@ def test_what_is_embedded_for_a_record_is_its_title_its_decision_and_then_its_te
     assert len(decisions.record_text(long)) == decisions.CUT
 
 
-def test_with_the_fusion_switched_on_the_engine_ranks_by_words_and_record_vectors(repo, fake_worker, monkeypatch):
+def test_the_engine_ranks_decisions_by_words_and_record_vectors_when_a_worker_runs(repo, fake_worker, monkeypatch):
     from aleph_zero import decisions
     from aleph_zero.embed import worker
     from aleph_zero.embed.client import EmbedClient
 
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
-    monkeypatch.setattr(decisions, "FUSION", "convex")
     engine = project(repo)
     task = "publish the order events on the bus"
     answer = engine.decisions(task)
@@ -291,7 +290,6 @@ def test_without_a_worker_or_switched_off_by_hand_the_fused_ranker_is_words_alon
     from aleph_zero import decisions
     from aleph_zero.embed import worker
 
-    monkeypatch.setattr(decisions, "FUSION", "convex")
     monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
     project(repo)
     answer = Engine(repo.root).decisions("publish the order events on the bus")
