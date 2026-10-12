@@ -1,7 +1,10 @@
 """Long-term memory: what was asked, answered and noted about a repository in earlier sessions.
 
-The catalogue is a table in the index (`memories`): it is the authority for what exists,
-what it cites and what was forgotten. Beside it sits a store of vectors for recall by
+The catalogue is a small database of its own, `memory/memories.db` in the repository's
+state directory. Not the index: the index is a cache of what git holds and is thrown away
+and rebuilt when it is damaged or its shape changes, and a memory cannot be rebuilt from
+anything. The catalogue is the authority for what exists, what it cites and what was
+forgotten. Beside it sits a store of vectors for recall by
 meaning: Aeon's Trace store when Aeon is installed (ADR-006), nothing otherwise, in which
 case memories are recalled by their words and by recency. Nothing here fails because the
 vector store is missing, broken or out of step: the catalogue alone always answers.
@@ -14,9 +17,9 @@ from __future__ import annotations
 
 import fcntl
 import gc
+import importlib.util
 import os
 import secrets
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,12 +29,66 @@ import apsw
 
 from . import lexical
 from .store import transaction
+from .store.db import _retry_while_busy
 from .view import View
 
 KINDS = ("chat", "note")
 OVER_ASK = 20        # Aeon's search has no filter: ask for this many times what is wanted
 WORD_POOL = 2000     # the newest memories looked at for a match by words
 _K = 60              # reciprocal rank fusion, as in search
+
+
+_CATALOGUE = """
+CREATE TABLE IF NOT EXISTS memories (
+    memory_id  TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,          -- 'chat' (a side-chat question and answer), 'note' (inserted into the conversation)
+    session    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,       -- unix seconds
+    text       TEXT NOT NULL,          -- emptied when the memory is forgotten
+    terms      TEXT NOT NULL DEFAULT '',   -- its words as search reads them, so recall does not tokenise every text again
+    deleted    INTEGER NOT NULL DEFAULT 0,
+    embedded   INTEGER NOT NULL DEFAULT 0  -- whether the vector store holds a vector for it
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS memories_by_time ON memories(deleted, created_at DESC);
+-- The code a memory speaks of: path and content at the time.
+CREATE TABLE IF NOT EXISTS memory_cites (
+    memory_id  TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    blob_oid   TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line   INTEGER NOT NULL,
+    PRIMARY KEY (memory_id, path, start_line)
+) WITHOUT ROWID;
+"""
+
+
+def catalogue_file(state: Path) -> Path:
+    return state / "memory" / "memories.db"
+
+
+def open_catalogue(state: Path, create: bool = True) -> apsw.Connection | None:
+    """The catalogue of the repository whose state directory is `state`. With `create`
+    false, None when no memory was ever kept there (reading must not leave a directory
+    behind). Unlike the index, this file is never set aside or rebuilt: what it holds
+    exists nowhere else."""
+    path = catalogue_file(state)
+    if not path.exists():
+        if not create:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+    conn = apsw.Connection(str(path))
+    conn.set_busy_timeout(5000)
+    _retry_while_busy(lambda: conn.pragma("journal_mode", "wal"))
+    conn.pragma("synchronous", "normal")
+    conn.pragma("foreign_keys", True)
+    conn.pragma("secure_delete", True)  # a forgotten text is overwritten, not just unlinked
+
+    def create_schema() -> None:
+        with transaction(conn):
+            conn.execute(_CATALOGUE)
+
+    _retry_while_busy(create_schema)
+    return conn
 
 
 class VectorStore(Protocol):
@@ -78,9 +135,10 @@ class Memory:
             raise ValueError("an empty memory")
         memory_id = secrets.token_hex(12)
         when = int(time.time()) if now is None else int(now)
+        terms = " ".join(sorted(set(lexical.query_terms(text))))
         with transaction(self.conn):
-            self.conn.execute("INSERT INTO memories(memory_id, kind, session, created_at, text) VALUES (?, ?, ?, ?, ?)",
-                              (memory_id, kind, session, when, text))
+            self.conn.execute("INSERT INTO memories(memory_id, kind, session, created_at, text, terms) VALUES (?, ?, ?, ?, ?, ?)",
+                              (memory_id, kind, session, when, text, terms))
             self.conn.executemany(
                 "INSERT OR IGNORE INTO memory_cites(memory_id, path, blob_oid, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
                 ((memory_id, cite.path, cite.blob_oid, cite.start_line, cite.end_line) for cite in cites or ()))
@@ -99,16 +157,26 @@ class Memory:
         rankings: list[list[str]] = []
         if vector is not None and self.store is not None:
             try:
-                rankings.append(self.store.nearest(vector, max(k * OVER_ASK, 50)))
+                # Each id once: a store that replayed its log may hold an event twice.
+                rankings.append(list(dict.fromkeys(self.store.nearest(vector, max(k * OVER_ASK, 50)))))
             except Exception:  # noqa: BLE001 - recall goes on by words
                 pass
         rows = self.conn.execute(
-            "SELECT memory_id, kind, session, created_at, text FROM memories WHERE deleted = 0 "
+            "SELECT memory_id, kind, session, created_at, text, terms FROM memories WHERE deleted = 0 "
             "ORDER BY created_at DESC, memory_id LIMIT ?", (WORD_POOL,)).fetchall()
         live = {row[0]: row for row in rows}
+        # What the store proposes is looked up by itself: a memory older than the newest
+        # WORD_POOL is out of reach of a match by words, not of a match by meaning.
+        proposed = [memory_id for ranking in rankings for memory_id in ranking if memory_id not in live]
+        for start in range(0, len(proposed), 500):
+            part = proposed[start:start + 500]
+            for row in self.conn.execute(
+                    "SELECT memory_id, kind, session, created_at, text, terms FROM memories "
+                    f"WHERE deleted = 0 AND memory_id IN ({','.join('?' * len(part))})", part):
+                live[row[0]] = row
         wanted = set(lexical.query_terms(query))
         if wanted:
-            overlap = {row[0]: len(wanted & set(lexical.query_terms(row[4]))) for row in rows}
+            overlap = {row[0]: len(wanted & set(row[5].split())) for row in rows}
             rankings.append([memory_id for memory_id, count in sorted(overlap.items(), key=lambda item: -item[1]) if count])
         scores: dict[str, float] = {}
         for ranking in rankings:
@@ -117,8 +185,7 @@ class Memory:
                 if memory_id in live:  # unknown to the catalogue, or forgotten: not a memory
                     position += 1
                     scores[memory_id] = scores.get(memory_id, 0.0) + 1.0 / (_K + position)
-        newest = {row[0]: position for position, row in enumerate(rows)}
-        chosen = sorted(scores, key=lambda memory_id: (-scores[memory_id], newest[memory_id]))[:k]
+        chosen = sorted(scores, key=lambda memory_id: (-scores[memory_id], -live[memory_id][3], memory_id))[:k]
         if not chosen and not wanted and vector is None:
             chosen = [row[0] for row in rows[:k]]  # nothing was asked: the newest
         return [self._recalled(live[memory_id], view) for memory_id in chosen]
@@ -135,17 +202,28 @@ class Memory:
         """Remove a memory's text and never recall it again. The vector store may keep its
         event until it can delete one (ADR-006); the catalogue is what recall obeys."""
         with transaction(self.conn):
-            self.conn.execute("UPDATE memories SET deleted = 1, text = '' WHERE memory_id = ? AND deleted = 0", (memory_id,))
+            self.conn.execute("UPDATE memories SET deleted = 1, text = '', terms = '' WHERE memory_id = ? AND deleted = 0", (memory_id,))
             changed = self.conn.changes()
             self.conn.execute("DELETE FROM memory_cites WHERE memory_id = ?", (memory_id,))
+        self._scrub()
         return bool(changed)
 
     def forget_all(self) -> int:
         with transaction(self.conn):
-            self.conn.execute("UPDATE memories SET deleted = 1, text = '' WHERE deleted = 0")
+            self.conn.execute("UPDATE memories SET deleted = 1, text = '', terms = '' WHERE deleted = 0")
             changed = self.conn.changes()
             self.conn.execute("DELETE FROM memory_cites")
+        self._scrub()
         return changed
+
+    def _scrub(self) -> None:
+        """After a forget: empty the write-ahead log, where the old page with the text would
+        otherwise stay until some later checkpoint. Best effort: another session reading at
+        this moment postpones it to the next one."""
+        try:
+            self.conn.pragma("wal_checkpoint", "TRUNCATE")
+        except apsw.Error:
+            pass
 
     def list(self, limit: int = 50) -> list[dict]:
         return [{"memory_id": row[0], "kind": row[1], "session": row[2], "created_at": row[3], "text": row[4]}
@@ -161,23 +239,34 @@ class Memory:
 
 # ---- Aeon ------------------------------------------------------------------------------------------
 
+_loaded: dict[str, object] = {}
+
+
 def _aeon_core():
     """Aeon's extension module, or None. Found in the directory `ALEPH_AEON_LIB` names (a
-    build of Aeon's core), else as the installed package. Aleph never builds or installs it."""
+    build of Aeon's core: a file `core.cpython-*.so`), else as the installed package.
+    Aleph never builds or installs it. The extension is loaded from its own file under a
+    name of its own: nothing is put on the import path, and an unrelated module that
+    happens to be called `core` is never taken for it."""
     directory = os.environ.get("ALEPH_AEON_LIB")
     if directory:
-        if not list(Path(directory).glob("core.*")):
-            return None
-        if directory not in sys.path:
-            sys.path.insert(0, directory)
-        try:
-            import core  # the extension alone: the package around it imports far more
-            return core if hasattr(core, "TraceManager") else None
-        except ImportError:
-            return None
+        if directory not in _loaded:
+            found = None
+            for candidate in sorted(Path(directory).glob("core.cpython-*.so")) + sorted(Path(directory).glob("core.*.pyd")):
+                try:
+                    spec = importlib.util.spec_from_file_location("core", candidate)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                except Exception:  # noqa: BLE001 - built for another Python, or not Aeon at all
+                    continue
+                if hasattr(module, "TraceManager"):
+                    found = module
+                    break
+            _loaded[directory] = found
+        return _loaded[directory]
     try:
         from aeon_py import core as packaged
-        return packaged
+        return packaged if hasattr(packaged, "TraceManager") else None
     except Exception:  # noqa: BLE001 - not installed, or installed without its heavy dependencies
         return None
 
@@ -188,9 +277,7 @@ def open_store(state: Path) -> "AeonStore | None":
     core = _aeon_core()
     if core is None:
         return None
-    directory = state / "memory"
-    directory.mkdir(parents=True, exist_ok=True)
-    return AeonStore(core, directory / "trace")
+    return AeonStore(core, state / "memory" / "trace")
 
 
 def _dimension(trace) -> int:
@@ -213,7 +300,10 @@ class AeonStore:
         self.core = core
         self.path = path
 
-    def _with(self, operation):
+    def _with(self, operation, create: bool = False):
+        if not create and not self.path.parent.is_dir():
+            return None  # nothing was ever stored: reading must not leave a directory behind
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(f"{self.path}.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
@@ -230,7 +320,7 @@ class AeonStore:
         values = [float(value) for value in vector]
         # Session ids are cut to 35 bytes inside Aeon and then mismatch; 32 are kept here.
         self._with(lambda trace: trace.append_event(session[:32], 1, f"{memory_id}\n{text}", embedding=values,
-                                                    event_time=int(when) * 1_000_000) and None)
+                                                    event_time=int(when) * 1_000_000) and None, create=True)
 
     def nearest(self, vector, limit: int) -> list[str]:
         values = [float(value) for value in vector]
@@ -240,7 +330,7 @@ class AeonStore:
                 return []  # Aeon would answer nothing, silently, for a vector of another size
             return [event["text"].split("\n", 1)[0] for event in trace.semantic_search(values, limit)]
 
-        return self._with(search)
+        return self._with(search) or []
 
     def ids(self) -> set[str]:
         """The memory ids of every event that has a vector: what the catalogue is checked against."""
@@ -252,4 +342,4 @@ class AeonStore:
             probe[0] = 1.0
             return {event["text"].split("\n", 1)[0] for event in trace.semantic_search(probe, max(trace.size(), 1))}
 
-        return self._with(read)
+        return self._with(read) or set()

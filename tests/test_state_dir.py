@@ -152,7 +152,7 @@ def test_an_index_of_the_previous_schema_is_upgraded_in_place(repo):
     conn.pragma("user_version", 4)
     conn.close()
     conn = open_db(path)
-    assert conn.pragma("user_version") == SCHEMA_VERSION == 7
+    assert conn.pragma("user_version") == SCHEMA_VERSION == 6
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == blobs
     assert conn.execute("SELECT next_row, writes FROM vector_files WHERE kind = 'probe'").fetchall() == [(7, 0)]
     assert conn.execute("SELECT count(*) FROM meta").fetchall() == [(0,)] or True

@@ -330,9 +330,9 @@ export function register(on, options) {
           // Drafts the note into the prompt box. Nothing reaches Claude until the user sends it.
           const filled = await $.prompt.fill({ text: note(last.answer, last.cited), mode: 'insert' })
           chat.note = filled && filled.isFilled === false ? 'The prompt box could not be filled.' : 'Drafted into the prompt box; edit or send it.'
+          $.ui.invalidate('ui.render')  // the note shows at once; remembering may take a moment
           await count($, 'inserted')
           await keep($, 'note', last.answer, last.cited)
-          $.ui.invalidate('ui.render')
         },
       }))
     }
@@ -344,6 +344,8 @@ export function register(on, options) {
         ...turns,
         ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
         ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
+        // Said in the pane itself: this is the user's conversation being kept on disk.
+        Text({ dimColor: true, children: ['Answers and inserted notes are remembered for later sessions: `aleph memory list`, `aleph memory forget`.'] }),
         Input({
           // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
           // and a field drawn empty would wipe a half-typed question.

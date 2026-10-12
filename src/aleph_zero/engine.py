@@ -100,6 +100,7 @@ class Engine:
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
+        self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
         self._shown: set[tuple] = set()
         self._stop = threading.Event()
 
@@ -115,6 +116,12 @@ class Engine:
         """Close every index connection. The engine can be used again; it reopens what it needs."""
         for root in list(self._indexes):
             self._forget(root)
+        for conn in self._catalogues.values():
+            try:
+                conn.close()
+            except apsw.Error:
+                pass
+        self._catalogues.clear()
 
     def relieve(self) -> dict | None:
         """Read this process's private memory; over the session's share, let go of what can
@@ -262,14 +269,27 @@ class Engine:
             "main_language": next(iter(shares), None),
             "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
-            "memory": self._memory(),
-        } | {"memory": {**self._memory(), **self._memories(index, view).counts(),
-                         "store": "aeon" if memory.open_store(state_dir(view.common_dir)) is not None else "none"}}
+            "memory": {**self._memory(), **self._memory_counts(view)},
+        }
 
     # ---- long-term memory -----------------------------------------------------------------------
 
-    def _memories(self, index: Index, view: View) -> memory.Memory:
-        return memory.Memory(index.conn, memory.open_store(state_dir(view.common_dir)))
+    def _memories(self, view: View, create: bool = True) -> memory.Memory | None:
+        """The repository's memories: a database of their own beside the index, which a
+        rebuild of the index never touches. With `create` false, None when none was ever kept."""
+        state = state_dir(view.common_dir)
+        conn = self._catalogues.get(state)
+        if conn is None:
+            conn = memory.open_catalogue(state, create=create)
+            if conn is None:
+                return None
+            self._catalogues[state] = conn
+        return memory.Memory(conn, memory.open_store(state))
+
+    def _memory_counts(self, view: View) -> dict:
+        memories = self._memories(view, create=False)
+        counts = memories.counts() if memories is not None else {"memories": 0, "with_vector": 0}
+        return {**counts, "store": "aeon" if memory.open_store(state_dir(view.common_dir)) is not None else "none"}
 
     def _vector(self, text: str, kind: str, seconds: float):
         """The vector of a text from the embedding worker, or None when the worker is not
@@ -289,39 +309,43 @@ class Engine:
         except Exception:  # noqa: BLE001 - memory works without vectors
             return None
 
-    @_rebuilding
     def remember(self, kind: str, text: str, cites: list[str] | None = None, session: str = "",
                  cwd: Path | str | None = None) -> dict:
         """Keep a memory of this repository. `cites` are `path:start-end` locations; those
-        that are files of the worktree now are stored with the content they point at."""
-        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        that are files of the worktree now are stored with the content they point at.
+        Waits no longer for a vector than a query does: the caller is the server's one
+        call thread, and a search must not queue behind a memory."""
+        view = self._view(cwd)
         found = []
         for written in cites or ():
             match = _LOCATION.match(written.strip())
             if match and match.group(1) in view.files:
                 start = int(match.group(2))
-                found.append(memory.Cite(match.group(1), view.files[match.group(1)], start, int(match.group(3) or start)))
-        kept = self._memories(index, view).remember(kind, text, session=session or "unnamed",
-                                                    vector=self._vector(text[:4000], "document", 2.0), cites=found)
+                end = int(match.group(3) or start)
+                if end >= start:
+                    found.append(memory.Cite(match.group(1), view.files[match.group(1)], start, end))
+        kept = self._memories(view).remember(kind, text, session=session or "unnamed",
+                                             vector=self._vector(text[:4000], "document", QUERY_EMBED_SECONDS), cites=found)
         return {"memory_id": kept, "cites": len(found)}
 
-    @_rebuilding
     def recall(self, query: str, k: int = 5, cwd: Path | str | None = None) -> list[memory.Recalled]:
         """Memories of this repository that fit the query, each with whether what it cites has changed."""
-        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
-        return self._memories(index, view).recall(query, vector=self._vector(query, "query", QUERY_EMBED_SECONDS), k=k, view=view)
+        view = self._view(cwd)
+        memories = self._memories(view, create=False)
+        if memories is None:
+            return []
+        return memories.recall(query, vector=self._vector(query, "query", QUERY_EMBED_SECONDS), k=k, view=view)
 
-    @_rebuilding
     def forget(self, memory_id: str | None = None, cwd: Path | str | None = None) -> int:
         """Forget one memory, or all of them with None. Returns how many were forgotten."""
-        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
-        memories = self._memories(index, view)
+        memories = self._memories(self._view(cwd), create=False)
+        if memories is None:
+            return 0
         return memories.forget_all() if memory_id is None else int(memories.forget(memory_id))
 
-    @_rebuilding
     def memories(self, limit: int = 50, cwd: Path | str | None = None) -> list[dict]:
-        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
-        return self._memories(index, view).list(limit)
+        memories = self._memories(self._view(cwd), create=False)
+        return memories.list(limit) if memories is not None else []
 
     # ---- text for an agent, with the session's memory ----------------------------------------
 

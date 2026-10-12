@@ -14,7 +14,7 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 6
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -212,12 +212,7 @@ def _upgrade_5(conn: apsw.Connection) -> None:
 
 # Versions that are brought up to date where they are, one step at a time. Anything older
 # is a cache of a different shape and is rebuilt; these hold vectors that took GPU time.
-def _upgrade_6(conn: apsw.Connection) -> None:
-    """Schema 6 to 7: the tables of the memory layer."""
-    conn.execute(_SCHEMA.read_text())  # every statement is IF NOT EXISTS: this adds what is new
-
-
-_UPGRADES = {4: _upgrade_4, 5: _upgrade_5, 6: _upgrade_6}
+_UPGRADES = {4: _upgrade_4, 5: _upgrade_5}
 
 
 def upgradable() -> frozenset[int]:

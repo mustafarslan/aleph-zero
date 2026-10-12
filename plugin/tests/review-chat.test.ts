@@ -183,3 +183,10 @@ test('a question that got no answer is not remembered', async ($, on) => {
   await ui.input({ key: 'question', text: QUESTION })
   expect(seen.engine.filter((call: any) => JSON.stringify(call).includes('"remember"')).length).toBe(0)
 })
+
+test('the pane says that answers are kept, and how to see and remove them', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ type: 'Text', text: /remembered for later sessions.*aleph memory/ })).toBeDefined()
+})

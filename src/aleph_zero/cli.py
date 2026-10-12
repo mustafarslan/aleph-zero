@@ -165,8 +165,8 @@ def _memory(args) -> int:
 
             print(recalled_text(found, " ".join(args.query)))
         return 0
-    if not args.all and not args.memory_id:
-        print("aleph: name the memory to forget (its id is in `aleph memory list`), or pass --all", file=sys.stderr)
+    if bool(args.all) == bool(args.memory_id):
+        print("aleph: name one memory to forget (its id is in `aleph memory list`), or pass --all by itself", file=sys.stderr)
         return 2
     forgotten = engine.forget(None if args.all else args.memory_id)
     print(f"forgot {forgotten}")
@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     recalling.add_argument("query", nargs="+")
     recalling.add_argument("-k", type=int, default=5)
     recalling.add_argument("--json", action="store_true")
-    forgetting = memories.add_parser("forget", help="remove a memory's text for good; --all for every one")
+    forgetting = memories.add_parser("forget", help="remove a memory from Aleph's catalogue so it is never recalled again; --all for every one. With Aeon as the vector store, a copy of the text stays in Aeon's file (ADR-006)")
     forgetting.add_argument("memory_id", nargs="?")
     forgetting.add_argument("--all", action="store_true")
     remembered.set_defaults(run=_memory)
