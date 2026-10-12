@@ -94,6 +94,8 @@ All of these are starting values, to be re-examined with the M2 benchmark.
 | All edited files in the first ten | 0.714 | 0.514 |
 | Mean reciprocal rank of the first edited file | 0.578 | 0.258 |
 
+These figures were taken while asking Aleph for 50 results and reading the first ten files among them, which is deeper than an agent reads. Re-measured on 2026-10-12 asking for ten results, with the code as it stands after M2 and vectors off (`--k 10`, the default now): 0.743 in the first ten, 0.743 in the first five, 0.571 in first place, mean reciprocal rank 0.652. The comparison holds at the depth the product is used at.
+
 M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at ten and 33 points ahead in first place, without any embedding model. Thirty-five questions from one Python repository are a small sample: a difference of one question is 3 points.
 
 **Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.

@@ -130,6 +130,6 @@ Vectors are stored with their kind (`embeddinggemma-2-q8/p1/256`: model, prefix 
 A file with no language profile (JSON, YAML, SQL fixtures, templates, configuration) is chunked by line window, kind `block`. Those chunks get no vector and are searched by their words only.
 
 - **Cost.** They were 58% of all text to embed in moto and 72% in sqlfluff, and many are long enough to fill a worker slot: those repositories embedded at 17 to 36 chunks per second against Django's 87.
-- **Quality.** On the 35-question Loc-Bench pilot (Django), leaving them out of the vector candidates raised recall@10 with vectors from 0.771 to 0.800 on the whole issue text and from 0.743 to 0.771 on the issue title, and vectors alone from 0.629 to 0.686. Thirty-five questions cannot prove a gain, but there is no sign of a loss, and the cost argument stands by itself.
+- **Quality.** On the 35-question Loc-Bench pilot (Django), leaving them out of the vector candidates raised recall@10 with vectors from 0.771 to 0.800 on the whole issue text and from 0.743 to 0.771 on the issue title, and vectors alone from 0.629 to 0.686. Thirty-five questions cannot prove a gain, and they are part of the set the verdict was later read on, so this is not independent evidence. The decision rests on the cost.
 
 Coverage figures count only chunks that should have a vector.

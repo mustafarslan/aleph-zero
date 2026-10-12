@@ -59,9 +59,9 @@ def first_files(paths: list[str], count: int = 10) -> list[str]:
     return list(dict.fromkeys(paths))[:count]
 
 
-def aleph_files(engine: Engine, clone: Path, question: str) -> tuple[list[str], float]:
+def aleph_files(engine: Engine, clone: Path, question: str, k: int = 10) -> tuple[list[str], float]:
     started = time.perf_counter()
-    answer = engine.search(question, k=50, cwd=clone)
+    answer = engine.search(question, k=k, cwd=clone)
     return first_files([hit.path for hit in answer.hits]), time.perf_counter() - started
 
 
@@ -107,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--no-baseline", action="store_true")
+    parser.add_argument("--k", type=int, default=10,
+                        help="results asked of Aleph per question; ten is what an agent asks for, and more "
+                             "lets Aleph fill the ten files from deeper in its ranking than an agent sees")
     args = parser.parse_args(argv)
     clone = args.clone.resolve()
     rows = instances(args.repo)[: args.limit]
@@ -118,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         engine.search("warm up", cwd=clone, k=1)  # index this commit before timing the question
         while engine.status(cwd=clone)["pending"]:
             engine.search("warm up", cwd=clone, k=1)
-        ours, seconds = aleph_files(engine, clone, question)
+        ours, seconds = aleph_files(engine, clone, question, args.k)
         theirs = [] if args.no_baseline else baseline_files(clone, question)
         entry = {"instance": row["instance_id"], "gold": row["gold"], "aleph": score(row["gold"], ours),
                  "baseline": score(row["gold"], theirs), "aleph_ms": round(seconds * 1000, 1),
