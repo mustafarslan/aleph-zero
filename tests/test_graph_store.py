@@ -225,6 +225,7 @@ def test_callees_list_a_function_defined_inside_and_rows_of_the_version_before_a
     found = engine.references("outer", direction="callees").callees
     assert [(r.target, r.target_line, r.level, r.certain) for r in found] == [("outer.keep", 2, "L0", True)]
     assert engine.references("keep").definitions == []           # a target, not a definition anyone can ask for
+    assert "src/app/nested.py:4  keep()  ->  src/app/nested.py:2  outer.keep" in callgraph.text(engine.references("outer", direction="callees"))
     conn = open_db(index_path(repo.root))
     assert conn.execute("SELECT DISTINCT version FROM graph_facts").fetchall() == [(callgraph.GRAPH_VERSION,)]
     conn.execute("UPDATE graph_facts SET version = ?", (callgraph.GRAPH_VERSION - 1,))      # as an index of the build before

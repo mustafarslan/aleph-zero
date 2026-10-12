@@ -106,8 +106,8 @@ where it goes: the same file, an import followed to the file that declares the n
 class the call sits in or one it is built on, a parameter or field whose type is stated.
 A call on a value whose type nothing states is listed apart, as one of the definitions
 that share the name. A call into a library is not listed at all. A call to a function
-defined inside the calling function is listed as certain; such a function is not itself
-found by `aleph symbol`.
+defined inside the calling function is listed, as certain unless the name is given another
+value somewhere or defined twice; such a function is not itself found by `aleph symbol`.
 
 The first question about a worktree reads every file's calls and imports (a few seconds
 on a large repository); later ones take milliseconds. Searching never pays for this.

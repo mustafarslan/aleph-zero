@@ -267,3 +267,33 @@ def test_inner_functions_in_the_other_languages_and_names_that_may_be_assigned_a
         ("step", 4, "inner", ((3, 3),)), ("f", 5, "local", ())]
     assert inner("rust", "fn outer(f: fn()) {\n    fn helper(x: u32) -> u32 { x }\n    let twice = |x: u32| x * 2;\n    helper(1); twice(2); f();\n}\n") == [
         ("helper", 4, "inner", ((2, 2),)), ("twice", 4, "inner", ((3, 3),)), ("f", 4, "local", ())]
+
+
+def test_a_method_of_a_class_defined_in_a_function_is_not_that_function_s_inner_function():
+    python = ("def shout(): ...\n"
+              "def outer():\n"
+              "    class C:\n"
+              "        def shout(self):\n"
+              "            return 1\n"
+              "        def twice(self):\n"
+              "            return shout()\n"
+              "    return shout()\n")
+    assert inner("python", python) == []            # neither call starts at a local name: both are the file's `shout`
+    rust = "fn h() {}\nfn outer() {\n    struct S;\n    impl S {\n        fn h(&self) {}\n    }\n    mod m { pub fn h() {} }\n    h();\n}\n"
+    assert inner("rust", rust) == []
+
+
+def test_what_else_can_give_the_name_another_value_takes_the_certainty_away():
+    assert inner("python", "def outer():\n    def h():\n        return 1\n    from m import h\n    return h()\n") == [("h", 5, "local", ())]
+    assert inner("python", ("def outer():\n    try:\n        from m import h\n    except ImportError:\n        def h():\n            return 1\n"
+                            "    return h()\n")) == [("h", 7, "local", ())]
+    assert inner("python", ("def outer():\n    def h(): ...\n    def rebind():\n        nonlocal h\n        h = print\n    rebind()\n    h()\n"
+                            )) == [("rebind", 6, "inner", ((3, 5),)), ("h", 7, "inner-var", ((2, 2),))]
+    assert inner("python", "def outer():\n    def h(): ...\n    del h\n    h()\n") == [("h", 4, "inner-var", ((2, 2),))]
+    assert inner("javascript", ("function outer(obj, arr) {\n  let h = () => 1;\n  let g = () => 2;\n  ({h} = obj);\n  [[g]] = arr;\n  h(); g();\n"
+                                "  function k() {}\n  k.cache = {};\n  k();\n}\n")) == [
+        ("h", 6, "inner-var", ((2, 2),)), ("g", 6, "inner-var", ((3, 3),)), ("k", 9, "inner", ((7, 7),))]     # a property of it is not it
+    assert inner("go", ("package a\nfunc outer(g func()) {\n\tf := func() {}\n\tf = g\n\tf()\n\tvar h = func() {}\n\th()\n}\n")) == [
+        ("f", 5, "inner-var", ((3, 3),)), ("h", 7, "inner", ((6, 6),))]
+    assert inner("rust", "fn outer(other: fn(u32) -> u32) {\n    let mut f = |x: u32| x;\n    f = other;\n    f(1);\n}\n") == [
+        ("f", 4, "inner-var", ((2, 2),))]

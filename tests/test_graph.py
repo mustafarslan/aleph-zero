@@ -578,3 +578,14 @@ def test_an_inner_function_under_a_name_assigned_again_or_defined_twice_is_not_c
     graph, sites = build({"a.py": twice})
     both = edge(graph, sites, "a.py", "step")
     assert [t.start_line for t in both.targets] == [3, 5] and not both.certain
+
+
+def test_a_plain_call_beside_a_local_class_with_a_method_of_that_name_is_the_file_s_function():
+    source = ("def shout(): ...\n"
+              "def outer():\n"
+              "    class C:\n"
+              "        def shout(self):\n"
+              "            return 1\n"
+              "    return shout()\n")
+    found = edge(*build({"a.py": source}), "a.py", "shout")
+    assert summary(found) == ("L0", "syntactic", [("a.py", "shout")]) and found.targets[0].start_line == 1

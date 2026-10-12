@@ -96,13 +96,19 @@ _PATTERNS = frozenset({
     "formal_parameter", "spread_parameter", "variable_declarator", "inferred_parameters",
     "optional_parameter_declaration", "init_declarator", "pointer_declarator", "reference_declarator", "array_declarator",
 })
-_PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4, "assigns": 5}
+_PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4, "assigns": 5, "imports": 6}
+# What holds members: a function declared in one of these inside a function is a method (or a module's
+# function), reached through its owner and never by a plain call from the function around.
+_TYPE_BODIES = frozenset({"class_definition", "class_declaration", "class", "impl_item", "trait_item", "mod_item"})
+_FUNCTION_IMPORTS = {"python": frozenset({"import_statement", "import_from_statement"})}
 # A function declared inside a function, and what a local name is bound to when it is bound to a function.
 _FUNCTION_DECLARATIONS = frozenset({"function_definition", "function_declaration", "generator_function_declaration", "function_item"})
 _FUNCTION_VALUES = frozenset({"arrow_function", "function_expression", "generator_function", "lambda", "func_literal", "closure_expression"})
-# Per language: what gives an existing name another value without binding it anew. (In Python an assignment binds.)
+# Per language: what gives an existing name another value without binding it anew. In Python an assignment
+# binds, but under `nonlocal` or `global` it binds somewhere else than where it is written, and `del` unbinds.
 _JS_ASSIGNS = frozenset({"assignment_expression", "augmented_assignment_expression"})
 _ASSIGNS: dict[str, frozenset[str]] = {
+    "python": frozenset({"nonlocal_statement", "global_statement", "delete_statement"}),
     "typescript": _JS_ASSIGNS, "tsx": _JS_ASSIGNS, "javascript": _JS_ASSIGNS,
     "go": frozenset({"assignment_statement"}), "rust": frozenset({"assignment_expression", "compound_assignment_expr"}),
 }
@@ -156,13 +162,15 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
     functions: dict[int, dict[str, dict[int, tuple[int, int]]]] = {}   # scope -> name -> where bound -> the function's lines
     assigned: set[str] = set()          # names given another value somewhere in the file
+    imported: dict[int, set[str]] = {}  # scope -> names an import inside that function binds
     seen: list[tuple[Node, Node | None, str, int, tuple[int, ...]]] = []
     # Only the nodes that matter are visited, found by the parser's query engine: scopes, what binds or
     # types a local name, and calls. In source order, an outer node first, so a scope is open before what
     # it holds is met; one node can play several parts, taken in the order of _PARTS.
     parts = query.by_role(family, tree, {"named": _NAMED_OUTSIDE, "scope": scopes, "binds": binders,
                                          "typed": _TYPED.get(family, frozenset()), "call": sites,
-                                         "assigns": _ASSIGNS.get(family, frozenset()), "generic": TYPE_PARAMETERS})
+                                         "assigns": _ASSIGNS.get(family, frozenset()),
+                                         "imports": _FUNCTION_IMPORTS.get(family, frozenset()), "generic": TYPE_PARAMETERS})
     generic = type_parameter_names(parts.pop("generic", []))
     events = sorted(((node.start_byte, -node.end_byte, _PARTS[part], node) for part, nodes in parts.items() for node in nodes),
                     key=lambda event: event[:3])
@@ -172,7 +180,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             open_scopes.pop()
         if part == 0:           # a declaration whose own name belongs to the scope around it
             name = node.child_by_field_name("name")
-            if open_scopes and name is not None:
+            if open_scopes and name is not None and not _is_member(node):
                 bound[open_scopes[-1][1]].setdefault(_text(name), set()).add(name.start_byte)
                 if node.type in _FUNCTION_DECLARATIONS:
                     functions[open_scopes[-1][1]].setdefault(_text(name), {})[name.start_byte] = (node.start_point[0] + 1, node.end_point[0] + 1)
@@ -200,8 +208,18 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
                     known.setdefault(name, []).append(kind)
         elif part == 5:
             left = node.child_by_field_name("left")
-            assigned.update(_text(each) for each in ([left] if left is not None else []) + (left.named_children if left is not None else [])
-                            if each.type == "identifier")
+            # `f = g` and `a, f = g()`; not `f.cache = {}`, which gives a property of it a value and leaves it what it is.
+            written = [left] if left is not None else \
+                [each for child in node.named_children for each in (child, *child.named_children)]    # nonlocal a, b; del a
+            assigned.update(_text(each) for each in written if each.type == "identifier")
+            if left is not None and left.type in _PATTERNS:      # a, f = g(); ({f} = obj); [[f]] = list
+                assigned.update(name for name, _ in _bound_names(left, family))
+        elif part == 6:
+            if open_scopes:
+                for named in node.children_by_field_name("name"):
+                    alias = named.child_by_field_name("alias")
+                    parts = [child for child in (alias or named).named_children if child.type == "identifier"] or [alias or named]
+                    imported.setdefault(open_scopes[-1][1], set()).add(_text(parts[0] if node.type == "import_statement" else parts[-1]))
         else:
             callee = node.child_by_field_name(sites[node.type])
             if callee is None:
@@ -224,7 +242,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             # bound as a parameter, or to something else as well, is whatever it is at run time.
             scope = next(scope for scope in reversed(chain) if first in bound[scope])
             made = functions.get(scope, {}).get(first)
-            if made and bound[scope][first] <= made.keys():
+            if made and bound[scope][first] <= made.keys() and first not in imported.get(scope, ()):
                 head, lines = ("inner-var" if first in assigned else "inner"), tuple(sorted(made.values()))
         before = data[name.start_byte - name.start_point[1]:name.start_byte]
         wide = (-1, -1) if before.isascii() else _columns(before)
@@ -234,6 +252,16 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     return out
 
 
+def _is_member(node: Node) -> bool:
+    """Whether a declaration sits in the body of a class, an `impl`, a trait or a module."""
+    parent = node.parent
+    if parent is not None and parent.type == "decorated_definition":
+        parent = parent.parent
+    if parent is not None and parent.type in ("block", "declaration_list", "class_body"):
+        parent = parent.parent
+    return parent is not None and parent.type in _TYPE_BODIES
+
+
 def _function_bindings(node: Node) -> list[tuple[str, int, tuple[int, int]]]:
     """(name, where the name stands, the lines of the function) for each name this node binds to a function
     written there: `const f = () => …`, `f = lambda: …`, `f := func() {…}`, `let f = |x| …`."""
@@ -241,8 +269,8 @@ def _function_bindings(node: Node) -> list[tuple[str, int, tuple[int, int]]]:
     values = node.child_by_field_name("value") or node.child_by_field_name("right")
     if names is None or values is None:
         return []
-    pairs = zip(names.named_children, values.named_children) if names.type == "expression_list" and values.type == "expression_list" \
-        else [(names, values)]
+    pairs = zip(names.named_children if names.type == "expression_list" else [names],
+                values.named_children if values.type == "expression_list" else [values])
     return [(_text(name), name.start_byte, (name.start_point[0] + 1, value.end_point[0] + 1))
             for name, value in pairs if name.type == "identifier" and value.type in _FUNCTION_VALUES]
 
