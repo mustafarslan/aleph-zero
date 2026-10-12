@@ -110,16 +110,15 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **A held-out corpus for Go and Rust.** The resolver was developed against the six corpora it is graded on. Python and TypeScript were also graded on repositories it had never seen (ADR-003). For Go and Rust no such corpus is on this machine; making one needs the network (clone a repository, run its SCIP indexer).
 - **C and C++.** The readers exist; nothing grades them (no SCIP indexer for them is installed).
 
-## 10. What M8 needs from you before it can start
+## 10. M8: which repositories (answered 2026-10-12)
 
-- **What:** M8, the architectural knowledge graph, starts "with frameworks in the owner's repos": extractors for routes, ORM models and migrations, environment reads, broker topics. Which repositories, and which frameworks in them (Django, FastAPI, Spring, NestJS, something else)? One or two repositories to name is enough to begin.
-- **Why it waits:** I do not look through your repositories to find out. M9 (SCIP import) is being built meanwhile, since it needs nothing from you.
-- **What does not wait:** the part of M8 that has a bar of its own, retrieval of decisions (ADR text) against oxn's 100 labelled pairs, can be built without the answer.
+- **Asked:** which of your repositories and frameworks the knowledge graph should start with.
+- **Your answer:** aeon, private repository D, private repository B or private repository A, my choice.
+- **Chosen: private repository A, with private repository B second.** private repository A has what the extractors are for, in two framework families: an Express server with Prisma, a FastAPI service with Alembic, Celery and Redis, a React front end that calls the server's routes; about 339 routes, 13 models, 5 migrations, over a thousand environment reads, two decision documents. private repository B (Go, gRPC, 19 routes) checks that the extractors are not shaped by one repository. aeon has routes and migrations but little else; private repository D is research code with no such structure. All four have your own account as origin.
 
-## 11. Compiler indexes (M9): what waits for you
+## 11. Compiler indexes (M9): what is left for you
 
-- **Finishing the memory measurement.** Go, Rust, TypeScript and JavaScript could not be measured: on a fresh copy of each corpus, the dependencies could not be installed offline. One permission is needed: the network, once, to install the four corpora's dependencies into scratch copies (`npm ci`, `cargo fetch`, `go mod download`). Until then `aleph scip run` runs Python and Java (Maven) only and the rest are import-only.
-- **The limit for an indexer run** is 2,048 MB (twice the standing budget), registered before the measurement. Python peaked at 459 MB and Java at 896 MB. `ALEPH_SCIP_MEMORY_MB` changes it.
-- **How strict the trust rule should be.** ADR-004's rule is exact and strict: on httpx, one uncommitted edit to a central file sends 52 of 60 files back to the resolver. If compiler-grade answers matter to you while editing, the options are to re-run the indexer (3.6 s for httpx) or to relax the rule and accept that an edge may be stale; I kept the rule.
+- **TypeScript is not measured.** nest's dependencies do not install (`npm ci` ends in a dependency-resolution error, with or without the network), and I tried no other flags. Another TypeScript repository whose dependencies install would settle it: name one, or allow `--legacy-peer-deps` for nest.
+- **JavaScript is import-only by the limit.** scip-typescript took 2,295 MB on eslint against the 2,048 MB registered beforehand. `ALEPH_SCIP_MEMORY_MB` raises it for a run; I did not move the limit after seeing the figure.
+- **The trust rule is decided** (you asked agy and the advisor): it stays as strict as ADR-004 wrote it, with a hint how to refresh. agy also wanted a weaker stamp for out-of-date answers; measured on Flask it would add 4 calls in 100, so it is not built. ADR-004 has the three views and the figures.
 - **Like M7, off for the agent** unless `ALEPH_GRAPH=1`.
-

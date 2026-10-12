@@ -39,38 +39,54 @@ SCIP ingestion is built before the name resolver's acceptance gate, because the 
 
 ### The measurement
 
-The protocol and the limit were written into the plan before the first run. Each installed indexer ran once on its corpus of oxn's six, on a fresh copy, offline, after the project's own offline install of its dependencies. The metric is the highest summed resident memory, sampled every 100 ms, of the indexer and everything it started: an upper bound, since shared pages count once per process.
+The protocol and the limit were written into the plan before the first run; three additions were written before the runs they concern. Each installed indexer ran once on its corpus of oxn's six, on a fresh copy. The metric is the highest summed resident memory, sampled every 100 ms, of the indexer and everything it started: an upper bound, since shared pages count once per process.
 
 **The limit: 2,048 MB.** ADR-005 budgets 1,024 MB for what is always there. An indexer run is requested by the owner, runs alone and ends: it may take twice that at its peak. It is one setting (`ALEPH_SCIP_MEMORY_MB`).
 
 | Language | Indexer | Corpus | Peak | Time | Index | Verdict |
 |---|---|---|---|---|---|---|
-| python | scip-python 0.6.6 | python-httpx | 459 MB, 2 processes | 3.6 s | 2.8 MB | on request |
-| java | scip-java 0.12.3 | java-spring-petclinic | 896 MB, 4 processes | 5.5 s | 0.8 MB | on request |
-| go | scip-go 0.2.7 | go-kit | not measured | | | import-only until measured |
-| typescript | scip-typescript 0.4.0 | typescript-nest | not measured | | | import-only until measured |
-| javascript | scip-typescript 0.4.0 | javascript-eslint | not measured | | | import-only until measured |
-| rust | rust-analyzer 0.0.0 (65ac641199 2026-10-04) | rust-ripgrep | not measured | | | import-only until measured |
+| Python | scip-python 0.6.6 | httpx | 459 MB, 2 processes | 3.6 s | 2.8 MB | on request |
+| Java | scip-java 0.12.3, Maven | spring-petclinic | 881 MB, 4 processes | 4.9 s | 0.8 MB | on request |
+| Go | scip-go 0.2.7 | go-kit | 948 MB, 18 processes | 6.8 s | 3.2 MB | on request |
+| Rust | rust-analyzer (2026-10-04) | ripgrep | 1,499 MB, 44 processes | 7.3 s | 8.3 MB | on request |
+| JavaScript | scip-typescript 0.4.0 | eslint | 2,295 MB | 19 s | 55.6 MB | import-only: over the limit |
+| TypeScript | scip-typescript 0.4.0 | nest | not measured | | | import-only until measured |
 
-- **Four of six could not be measured here.** On a fresh copy their dependencies could not be installed without the network: Go lacked a module in the local cache, Rust a crate, and npm ended with a dependency-resolution error for both nest and eslint (whether the network would have changed that was not tried). An indexer run without its project's dependencies resolves nothing outside the project, so it was not run: a smaller figure from a degenerate run would say nothing. They are import-only until measured; finishing the measurement needs the network once, which is the owner's call (DEFERRED).
-- The Java figure is with Maven's local repository already filled, offline. oxn's 361 s was a cold build.
-- One corpus per language is thin. What keeps a larger project inside the limit is not this table but the guard below.
+How these came about, in order:
+
+- **First run, offline.** Python and Java (896 MB with `mvn clean verify`) ran. The other four could not: on a fresh copy their dependencies could not be installed without the network, and an indexer run without its project's dependencies resolves nothing outside the project, so it was not run.
+- **Second run, after the owner allowed the network for installing dependencies.** Dependencies were installed with the network (not measured: `aleph scip run` never installs), then the indexer ran offline. Go, Rust and JavaScript were measured. nest's `npm ci` ends in a dependency-resolution error with or without the network; no other flags were tried, so TypeScript is not measured.
+- **Java was measured twice** because the command changed after review (below): 896 MB with `clean verify`, 881 MB with `clean test-compile`, which is what is used.
+- The figures move from run to run: later runs on the same corpora gave 497 and 487 MB for Python, 912 MB for Java, and 315 MB for Go once Go's build cache was warm against 948 MB cold. All under the limit; the table is the registered run.
+- The limit was not revisited after eslint came in 12% over it. One corpus per language is thin either way: what keeps a project inside the limit is the guard, not this table.
 
 ### What was built
 
-- **`aleph scip import FILE`** keeps, for each document, the blob it was made from, the documents it depends on, and its references to definitions inside the tree: one compressed row per document (eslint's 54 MB index, 105,394 references: 0.6 MB; as one row per reference it would have been 7.6 MB before indexes). The stamp is the answer to "what was this made from": `HEAD` by default, `--tree REV`, or `--worktree` for an index made on the worktree as it is. A document whose path is not in that tree, or leaves the repository, is left out and counted.
-- **The trust rule, as decided above.** A graph question believes a document only if the file's blob and the blob of every document it depends on, directly or through others, are the view's. The walk stops at 2,000 files and then does not believe. Otherwise the resolver answers and the answer carries the reason.
-- **A believed document also knows what is outside.** A call the compiler places in a library gets no answer, where the resolver could only offer a method of the same name.
-- **`aleph scip run`** runs the indexer for a language measured under the limit, in a session of its own, offline, sampling the memory of every process it starts; above the limit, or after 30 minutes, the process group and any descendant that left it are killed. The result is kept only if no file of the view changed meanwhile. Aleph installs nothing: `aleph doctor` lists what is present. For Java this runs the project's own build: that is the project's code running, which is why it is never done except on request.
+- **`aleph scip import FILE`** keeps, for each document, the blob it was made from, the documents it depends on with the blobs they had, and its references to definitions inside the tree: one compressed row per document (eslint's 54 MB index, 105,394 references: 0.6 MB; as one row per reference, 7.6 MB before indexes). What the index was made from must be known: `HEAD` when the worktree is clean, else `--tree REV` or `--worktree` must be said, because an index of an uncommitted edit stamped with HEAD would be believed the day the edit is undone. An index over 200 MB is refused: it is read whole, at about five times its size in memory.
+- **The trust rule, as decided above.** A document is believed only if the file's blob and the blob of every document it depends on, directly or through others, are the view's. Each dependency is checked against the blob it had in the document's own import, so a later import of part of the tree cannot vouch for an earlier one. The walk stops at 2,000 files and then does not believe. Otherwise the resolver answers and the answer carries the reason and how to get exact answers back.
+- **Joining the index to Aleph's call sites.** The index gives a line and a column; indexers count columns in UTF-16 units or bytes, Aleph in bytes, so a call records its column in each unit. The index's target must be a definition Aleph records that holds the line the index names and bears its name (for a constructor: the type or its constructor method); a target Aleph does not record, such as a class inside a function, is not replaced by a namesake and the resolver answers instead.
+- **What a believed document says is outside** (a symbol of a package the index defines nothing of) gets no answer. A symbol of the index's own package with no document, as in an index of one package of several, is left to the resolver.
+- **`aleph scip run`** runs the indexer for a language measured under the limit, in a session of its own, offline. Every 100 ms it lists the processes: the indexer's group, its descendants, and any process once seen among them that has since been left by its parent. Their memory is summed; above the limit, after 30 minutes, or when the processes cannot be listed, all of them are killed. A process started and abandoned between two looks is never seen: that window is a tenth of a second. The result is kept only if no file of the view changed meanwhile.
+- **Builds run in a copy.** scip-java (Maven: `clean test-compile`, no packaging, no integration tests) and rust-analyzer (cargo, with the project's build scripts) run on a copy of the view's files, so nothing they clean or write touches the worktree. This is the project's code running on the machine, which is why it is never done except on request. Aleph installs nothing: `aleph doctor` lists what is present.
 
-### The rule at work
+### The rule at work, and whether to soften it
 
-On httpx with oxn's index imported (60 documents), 2,044 stored calls are answered from the index, 2,005 get no answer (libraries, or nothing known), 42 fall to the resolver where the index says nothing. After a comment is appended to `httpx/_models.py`, not committed: 52 of the 60 files are no longer believed, the file itself and 51 that depend on it directly or through others, and 2,298 calls are answered by the resolver with the reason.
+On httpx with oxn's index imported (60 documents): 2,044 stored calls are answered from the index, each checked to be the definition the index names; 1,989 get no answer (a library, or nothing known); 10 point at something Aleph does not record; 48 fall to the resolver where the index says nothing. After a comment is appended to `httpx/_models.py`, not committed: 52 of the 60 files are no longer believed, the file itself and 51 that depend on it, and 2,298 calls are answered by the resolver with the reason.
 
-That is the rule doing what it says, and it is strict: in a package this connected, one edit to a central file sends 87% of the files back to the resolver until a new index is made. It was not relaxed. The first section of this record argues why an edge believed on its two endpoints alone can be wrong; whether a cheaper rule is worth that risk is a decision for when the feature is used.
+That is strict: one edit to a central file sends 87% of the files back to the resolver. The owner asked agy and the advisor to decide whether to keep it.
+
+- **agy:** keep the rule for what is called exact, and add a second, weaker stamp for a reference whose two files are unchanged ("compiler index, out of date"), plus the hint to re-index.
+- **The advisor:** keep the rule; do not weaken what "exact" means; do not build the second stamp before measuring what it would add. Its case against believing an edge on its endpoints: `obj.run()` where `run` is declared on a base class and a class between the two gains an override; neither the calling file nor the files it refers to change.
+- **The measurement** (registered before it ran: build the second stamp if it adds at least 10% of the downgraded calls rightly and under 2% of what it shows differs from a fresh index). On Flask, an index made 10, 50 and 200 commits before HEAD, against a fresh one: of 689 calls in files that had not changed but were no longer believed, the resolver answers 137 certainly, and the stale index would add 28 more rightly (4.1%) and none wrongly. Most of the rest are calls into libraries, where no index has an answer.
+
+**Decided: the rule stays, with the hint, and no second stamp.** It would add four calls in a hundred. Re-making the index is the cure, and it costs seconds where Aleph may run the indexer.
+
+### What the review of this milestone found
+
+An independent reviewer reproduced, and the fix pass closed with a failing test first for each: a call joined to the wrong occurrence after non-ASCII text on its line; a namesake taken for a target Aleph does not record; a later partial import vouching for an earlier document; the guard blind to a child whose parent had left, and silent when `ps` failed; an index of part of a tree calling the rest a library; constructors never answered from the index; `mvn clean verify` run in the owner's worktree; a size cap five times what a session may hold. The first two are why "answered from the index" above is now checked against the index, not counted by its stamp.
 
 ### Answered and still open
 
-- *Peak memory of each indexer on a mid-size project, and the limit:* answered for Python and Java; the limit is 2,048 MB; four languages wait for dependencies.
-- *Whether Java and Rust are import-only in practice:* Java with Maven is not, once the local repository holds the dependencies (5 s, 896 MB). Gradle was not measured and is import-only. Rust is not measured.
-- Not handled: a file added after the index was made that changes what an import resolves to (the rule checks the files the index knew). Two indexers covering one path: the newer import wins.
+- *Peak memory of each indexer on a mid-size project, and the limit:* five of six answered; TypeScript waits for a corpus whose dependencies install.
+- *Whether Java and Rust are import-only in practice:* neither, once the machine holds their dependencies (Maven's local repository, cargo's registry). Gradle was not measured and is import-only.
+- Not handled: a file added after the index was made that changes what an import resolves to (the rule checks the files the index knew). Two indexers covering one path: the newer import wins. A symbol defined in two documents (TypeScript declaration merging) depends on the first only. scip-java fetches its compiler plugin on first use, so its first run on a machine is not offline.

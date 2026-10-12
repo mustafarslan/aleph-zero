@@ -114,23 +114,25 @@ for the server: whether it helps an agent has not been measured yet.
 
 ### Exact answers from a compiler's index
 
-    uv run aleph scip import index.scip             # an index made elsewhere (CI, by hand), made from HEAD
+    uv run aleph scip import index.scip             # an index made elsewhere (CI, by hand), from HEAD
     uv run aleph scip import index.scip --tree v1.4 # ... or from another revision
     uv run aleph scip import index.scip --worktree  # ... or from the worktree as it is now
     uv run aleph scip run --lang python             # or let Aleph run the indexer here
     uv run aleph scip list
 
 A [SCIP](https://github.com/sourcegraph/scip) index is what a compiler knows about the
-code. Once one is imported, `callers` and `callees` answer from it, marked
-`(compiler index)`: also the calls on values whose type nothing in the source states.
+code. Once one is imported, `callers` and `callees` answer from it where it has an answer,
+marked `(compiler index)`: also for calls on values whose type nothing in the source
+states. With uncommitted changes, say what the index was made from (`--tree`, `--worktree`).
 
 It is believed only for files that are still what it was made from, and whose
 dependencies are too. Edit a file, and that file and everything that depends on it are
 answered by the resolver again until a new index is imported; the answer says so.
 
-`aleph scip run` runs the indexer only for languages where its memory was measured under
-the limit (Python; Java with Maven), watches it, and stops it above 2,048 MB
-(`ALEPH_SCIP_MEMORY_MB`). For Java this runs the project's own build. Aleph never
+`aleph scip run` runs the indexer for the languages where its memory was measured under
+the limit (Python, Go, Rust, Java with Maven), watches it, and stops it above 2,048 MB
+(`ALEPH_SCIP_MEMORY_MB`). For Java and Rust this compiles the project, in a copy of its
+files: your worktree is not touched, and it is only ever done when you ask. Aleph never
 installs an indexer; `aleph doctor` says which are present.
 
 ## Where things are
