@@ -17,6 +17,14 @@ Configurations compared on the same questions:
   lexical  Aleph without vectors
   dense    vectors only
   hybrid   Aleph with vectors (rank fusion)
+  convex   a weighted sum of normalised text and vector scores, for several weights
+           (benchmark only: ADR-002 asks whether it beats rank fusion)
+
+Each is run on three forms of the question, because an issue is hundreds of words and
+an agent's query is not:
+  full   the whole issue text
+  title  its first line
+  rare   the 24 rarest words of the issue, the ones Aleph's text search keeps anyway
 """
 from __future__ import annotations
 
@@ -35,7 +43,7 @@ import apsw
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 
-from aleph_zero import embedder, filters, gitio
+from aleph_zero import embedder, filters, gitio, lexical
 from aleph_zero.embed import worker
 from aleph_zero.embed.client import VECTOR_KIND, EmbedClient, EmbedPool, Unavailable
 from aleph_zero.indexer import Index
@@ -47,7 +55,9 @@ from aleph_zero.view import View
 DATASET = ("czlll/Loc-Bench_V1", "data/test-00000-of-00001.parquet")
 CACHE = Path(__file__).resolve().parents[1] / "data" / "locbench"
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
-MODES = ("bm25", "lexical", "dense", "hybrid")
+FORMS = ("full", "title", "rare")
+ALPHAS = (0.2, 0.4, 0.6, 0.8)   # weight of the vector score in the convex combination
+MODES = ("lexical", "dense", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
 
 
 def instances(repos: set[str] | None) -> list[dict]:
@@ -90,8 +100,7 @@ def view_at(clone: Path, commit: str) -> View:
 
 
 def prepare(workdir: Path, rows: list[dict], max_chunks: int) -> None:
-    sock = worker.ensure()
-    done = 0
+    done = partial = 0
     for number, row in enumerate(rows, 1):
         started = time.monotonic()
         try:
@@ -109,14 +118,17 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int) -> None:
             print(f"{number:4}/{len(rows)} {row['instance_id']:40} skipped: {total} chunks is over the limit", flush=True)
             index.conn.close()
             continue
+        sock = worker.ensure()  # a long fetch may have outlasted the worker's idle limit
         pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
         report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots())
         pool.close()
         index.conn.close()
-        done += 1
+        done += report.remaining == 0
+        partial += report.remaining > 0
         print(f"{number:4}/{len(rows)} {row['instance_id']:40} files {len(view.files):6} chunks {total:7} "
               f"embedded {report.embedded:6} left {report.remaining} {time.monotonic() - started:6.1f} s {report.reason}", flush=True)
-    print(f"prepared {done} of {len(rows)} instances", flush=True)
+    print(f"prepared {done} of {len(rows)} instances; {partial} left partly embedded (run prepare again); "
+          f"{len(rows) - done - partial} skipped or not fetched", flush=True)
 
 
 def first_files(paths: list[str], count: int = 10) -> list[str]:
@@ -145,9 +157,10 @@ def bm25_files(view: View, question: str) -> list[str]:
     return [row[0] for row in conn.execute("SELECT path FROM files WHERE files MATCH ? ORDER BY bm25(files) LIMIT 10", (match,))]
 
 
-def dense_files(index: Index, store: VectorStore, vector) -> list[str]:
+def chunk_files(index: Index, chunk_ids: list[int]) -> list[str]:
+    """The first ten files that hold the given chunks, in the chunks' order."""
     paths: list[str] = []
-    for chunk_id, _ in store.search(index, vector, 200):
+    for chunk_id in chunk_ids:
         for oid, family in index.conn.execute(
                 "SELECT bc.blob_oid, bc.family FROM blob_chunks bc JOIN temp.view_blobs v "
                 "ON v.blob_oid = bc.blob_oid AND v.family = bc.family WHERE bc.chunk_id = ?", (chunk_id,)):
@@ -155,6 +168,26 @@ def dense_files(index: Index, store: VectorStore, vector) -> list[str]:
         if len(set(paths)) >= 10:
             break
     return first_files(paths)
+
+
+def convex_chunks(text_scores: list[tuple[int, float]], vector_scores: list[tuple[int, float]], alpha: float) -> list[int]:
+    """Chunks by alpha * vector + (1 - alpha) * text, each normalised between its
+    theoretical minimum and the best score of this query (Bruch, Gai and Ingber, 2023)."""
+    best_text = max((-score for _, score in text_scores), default=0.0) or 1.0   # bm25() is negative: lower is better
+    best_vector = max((score for _, score in vector_scores), default=0.0)
+    combined: dict[int, float] = {}
+    for chunk_id, score in text_scores:
+        combined[chunk_id] = (1 - alpha) * (-score / best_text)
+    for chunk_id, score in vector_scores:
+        normalised = (score + 1.0) / (best_vector + 1.0) if best_vector > -1.0 else 0.0   # cosine's floor is -1
+        combined[chunk_id] = combined.get(chunk_id, 0.0) + alpha * normalised
+    return [chunk_id for chunk_id, _ in sorted(combined.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def question_forms(index: Index, statement: str) -> dict[str, str]:
+    title = next((line.strip() for line in statement.splitlines() if line.strip()), statement)
+    rare = " ".join(lexical.select_terms(index.conn, lexical.query_terms(statement)))
+    return {"full": statement, "title": title, "rare": rare or title}
 
 
 def score(gold: list[str], found: list[str]) -> dict[str, float]:
@@ -196,37 +229,51 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool) -> d
         if have < total:
             index.conn.close()
             continue  # not fully embedded: skipped rather than scored on partial vectors
-        question = row["problem_statement"]
+        forms = question_forms(index, row["problem_statement"])
         try:
-            vector = client.embed([question], kind="query")[0]
+            vectors = dict(zip(forms, client.embed(list(forms.values()), kind="query")))
         except Unavailable as exc:
             raise SystemExit(f"the worker is needed for the query vectors: {exc}") from exc
-        nearest = lambda limit, scoped: [chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]  # noqa: E731
-        found = {
-            "lexical": first_files([hit.path for hit in search(index, view, question, k=50)]),
-            "hybrid": first_files([hit.path for hit in search(index, view, question, k=50, dense=nearest)]),
-            "dense": dense_files(index, store, vector),
-            "bm25": bm25_files(view, question) if with_bm25 else [],
-        }
+        found: dict[str, dict[str, list[str]]] = {}
+        for form, question in forms.items():
+            vector = vectors[form]
+            nearest = lambda limit, scoped, vector=vector: [  # noqa: E731
+                chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
+            text_scores = lexical.search(index.conn, question, 200)
+            vector_scores = store.search(index, vector, 200)
+            found[form] = {
+                "lexical": first_files([hit.path for hit in search(index, view, question, k=50)]),
+                "hybrid": first_files([hit.path for hit in search(index, view, question, k=50, dense=nearest)]),
+                "dense": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores]),
+                **{f"convex{alpha}": chunk_files(index, convex_chunks(text_scores, vector_scores, alpha)) for alpha in ALPHAS},
+            }
+        bm25 = bm25_files(view, forms["full"]) if with_bm25 else []
         index.conn.close()
         entry = {"instance": row["instance_id"], "repo": row["repo"], "gold": row["gold"], "chunks": total,
-                 "files": found, "scores": {mode: score(row["gold"], found[mode]) for mode in MODES}}
+                 "title": forms["title"][:120], "files": found, "bm25_files": bm25,
+                 "bm25": score(row["gold"], bm25),
+                 "scores": {form: {mode: score(row["gold"], found[form][mode]) for mode in MODES} for form in FORMS}}
         results.append(entry)
-        print(f"{number:4}/{len(rows)} {row['instance_id']:40} " + "  ".join(
-            f"{mode} {entry['scores'][mode]['recall@10']:.2f}" for mode in MODES), file=sys.stderr, flush=True)
+        print(f"{number:4}/{len(rows)} {row['instance_id']:36} " + "  ".join(
+            f"{form}: lex {entry['scores'][form]['lexical']['recall@10']:.2f} dense {entry['scores'][form]['dense']['recall@10']:.2f} "
+            f"hyb {entry['scores'][form]['hybrid']['recall@10']:.2f}" for form in FORMS), file=sys.stderr, flush=True)
     if not results:
         raise SystemExit("no prepared instances found; run `prepare` first")
-    summary: dict = {"instances": len(results), "repos": sorted({entry["repo"] for entry in results})}
-    for mode in MODES:
-        summary[mode] = {key: round(statistics.mean(entry["scores"][mode][key] for entry in results), 3)
-                         for key in results[0]["scores"][mode]}
-    for name, (first, second) in {"hybrid_minus_lexical": ("hybrid", "lexical"), "dense_minus_lexical": ("dense", "lexical"),
-                                  "lexical_minus_bm25": ("lexical", "bm25")}.items():
-        summary[name] = {}
-        for key in ("recall@10", "recall@1", "all@10", "mrr"):
-            mean, low, high = paired_bootstrap([entry["scores"][first][key] for entry in results],
-                                               [entry["scores"][second][key] for entry in results])
-            summary[name][key] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
+    summary: dict = {"instances": len(results), "repos": sorted({entry["repo"] for entry in results}),
+                     "bm25_full": {key: round(statistics.mean(entry["bm25"][key] for entry in results), 3)
+                                   for key in results[0]["bm25"]}}
+    for form in FORMS:
+        block: dict = {}
+        for mode in MODES:
+            block[mode] = {key: round(statistics.mean(entry["scores"][form][mode][key] for entry in results), 3)
+                           for key in ("recall@1", "recall@5", "recall@10", "all@10", "mrr")}
+        for name, (first, second) in {"hybrid_minus_lexical": ("hybrid", "lexical"), "dense_minus_lexical": ("dense", "lexical")}.items():
+            block[name] = {}
+            for key in ("recall@10", "recall@1", "mrr"):
+                mean, low, high = paired_bootstrap([entry["scores"][form][first][key] for entry in results],
+                                                   [entry["scores"][form][second][key] for entry in results])
+                block[name][key] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
+        summary[form] = block
     print(json.dumps(summary, indent=2))
     if out:
         out.write_text(json.dumps({"summary": summary, "instances": results}, indent=2) + "\n")
