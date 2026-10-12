@@ -238,6 +238,10 @@ def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Cont
             counts["unfetched"] += 1
             job.note(not_fetched=counts["unfetched"])
             continue
+        job()                       # a fetch can take long: what was asked for meanwhile holds before the indexing
+        if job.stop_wanted():
+            print("stopped on request; the same command takes it up here", flush=True)
+            return False
         view = view_at(clone, row["base_commit"])
         index = Index(open_db(index_file(view.common_dir)))
         while index.sync(view, budget_seconds=600).pending:

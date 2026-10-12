@@ -442,3 +442,46 @@ def test_a_job_that_waits_keeps_saying_so_so_that_its_last_word_does_not_go_stal
 
     assert job.wait_for("waiting for the network", ready, every=0) is True
     assert len(written) >= 5                         # at every look, not once at the start of two hours
+
+
+def test_a_process_number_taken_by_another_process_is_not_read_as_the_job_still_running(tmp_path):
+    job = control(tmp_path)
+    assert longrun.describe(tmp_path).splitlines()[0].endswith("running")          # this process, started when it says
+    found = status(tmp_path)
+    assert found["process_started"]
+    found["process_started"] = "Thu Jan  1 00:00:00 1970"                          # the number is alive, the process is another
+    (tmp_path / longrun.STATUS).write_text(json.dumps(found))
+    assert "ended without saying so" in longrun.describe(tmp_path)
+    del found["process_started"]                                                   # a status written before this was recorded
+    (tmp_path / longrun.STATUS).write_text(json.dumps(found))
+    assert "ended without saying so" not in longrun.describe(tmp_path)
+    job.finish(done=True)
+
+
+def test_after_cooling_the_job_goes_on_and_says_so_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(temps.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(temps, "reading", _fake([90.0, 60.0]))
+    said = []
+    guard = temps.Guard(limit=85, resume=70, every=0, say=said.append)
+    job = longrun.Control(tmp_path, "job", total=1, guard=guard, say=said.append, poll=0.01)
+    guard.while_waiting = job.cooling
+    job(1, 1)
+    assert sum("going on" in text for text in said) == 1 and status(tmp_path)["state"] == "running"
+
+
+def test_a_pause_asked_for_during_a_fetch_holds_the_job_before_it_indexes(tmp_path, fake_worker, monkeypatch):
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(benchmark_c.worker, "slots", lambda: 1)
+    monkeypatch.setattr(benchmark_c.worker, "capacity_tokens", lambda: 4096)
+    real, opened = benchmark_c.fetch, []
+
+    def stopped_meanwhile(workdir, row):
+        longrun.stop(workdir)                        # as if asked for while a long fetch ran
+        return real(workdir, row)
+
+    monkeypatch.setattr(benchmark_c, "fetch", stopped_meanwhile)
+    monkeypatch.setattr(benchmark_c, "view_at", lambda *_: opened.append(1) or pytest.fail("it went on to index"))
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "stopped" and opened == []

@@ -97,7 +97,8 @@ class Control:
         (self.workdir / STOP).unlink(missing_ok=True)       # a stop was for the run before; a pause is kept
         self._started = time.time()
         self._written = 0.0
-        self.found = {"job": job, "state": "running", "pid": os.getpid(), "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+        self.found = {"job": job, "state": "running", "pid": os.getpid(), "process_started": _started(os.getpid()),
+                      "started": time.strftime("%Y-%m-%d %H:%M:%S"),
                       "unit": 0, "of": total, "name": "", "paused_seconds": 0.0, "why": ""}
         self._write()
 
@@ -113,6 +114,9 @@ class Control:
                 self._write()
                 raise
             self._heat()
+            if self.found["state"] == "cooling":        # the guard waited, and said that it goes on
+                self.found["state"] = "running"
+                self._write()
         waited = time.time()
         while not self.stop_wanted():
             state = "paused" if (self.workdir / PAUSE).exists() else \
@@ -221,8 +225,20 @@ def stop(workdir: Path) -> None:
     Path(workdir, STOP).touch()
 
 
-def _alive(pid: int) -> bool:
+def _started(pid: int) -> str:
+    """When the process with this number started, as `ps` says it; "" when that cannot be told."""
+    try:
+        return subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _alive(pid: int, started: str = "") -> bool:
+    """Whether the job's process still runs. A number can be given to another process after the job died:
+    when the status says when the job's process started, the one alive now must have started then."""
     if pid <= 0:
+        return False
+    if started and _started(pid) not in ("", started):
         return False
     try:
         os.kill(pid, 0)
@@ -267,7 +283,7 @@ def describe(workdir: Path) -> str:
     if isinstance(found, str):
         return found
     state = str(found.get("state", "?"))
-    if state in LIVE and not _alive(int(_number(found.get("pid")))):
+    if state in LIVE and not _alive(int(_number(found.get("pid"))), str(found.get("process_started") or "")):
         state = f"not running: it ended without saying so (killed, or the machine restarted) while {state}. Start it again to take it up"
     lines = [f"{found.get('job', 'job')}: {state}" + (f" ({found['why']})" if found.get("why") else ""),
              f"  at {found.get('unit', 0)} of {found.get('of', '?')}" + (f": {found['name']}" if found.get("name") else ""),
@@ -278,7 +294,7 @@ def describe(workdir: Path) -> str:
         lines.append(f"  chip: highest {_number(found['highest_c']):.0f} C, waited to cool {int(_number(found.get('heat_pauses')))} times")
     extra = {key: value for key, value in found.items() if key not in (
         "job", "state", "why", "unit", "of", "name", "started", "updated", "elapsed_seconds", "paused_seconds", "highest_c",
-        "heat_pauses", "pid", "last_c")}
+        "heat_pauses", "pid", "last_c", "process_started")}
     if extra:
         lines.append("  " + ", ".join(f"{key} {value}" for key, value in extra.items()))
     if Path(workdir, PAUSE).exists():
