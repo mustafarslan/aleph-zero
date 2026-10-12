@@ -147,7 +147,7 @@ def _read(index: Index, view: View, reader: gitio.Readers, key: tuple[str, str])
     return extract(profile, text)
 
 
-def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
+def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes] | None:
     """(shape, calls) of one file as stored: see the `graph_facts` table."""
     source = text.replace("\r\n", "\n").encode("utf-8", "surrogateescape")    # as the chunker read it: the symbols' order is the callers' key
     try:
@@ -156,7 +156,9 @@ def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
         sites = calls(profile, tree, source, found)
         bound, built_on, typed = facts(profile, tree, source)
     except Exception:  # noqa: BLE001 - a grammar that fails to load, or a shape a reader does not know
-        return _EMPTY
+        # Nothing is recorded: a row saying "no calls" would be believed for as long as the readers' version
+        # stands. The file stays unread, the answer says so, and the next question tries again.
+        return None
     # The last list is where each definition starts and ends, in the symbols' order: the index's symbols
     # table keeps only where one starts, and an answer taken from a compiler index must fall inside one.
     shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed,

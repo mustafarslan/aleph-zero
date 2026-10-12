@@ -262,3 +262,31 @@ def test_a_compiler_index_pointing_at_an_inner_function_is_agreed_with_not_apolo
             return (path, 30, "keep")       # ... but not when the index means something the resolver did not find
 
     assert callgraph.resolve(graph, Elsewhere(), "a.py", call)[1] != ""
+
+
+def test_a_file_the_readers_fail_on_stays_unread_and_is_read_when_they_can(repo, monkeypatch):
+    """It used to be recorded as a file with no calls and no facts, for as long as the readers' version stood."""
+    from aleph_zero import archfacts, callgraph
+
+    engine = app(repo)
+    real_calls, real_facts = callgraph.calls, archfacts.facts
+
+    def failing(reader):
+        def read(profile, tree, data, *rest):
+            if b"class Service" in data:
+                raise RuntimeError("a shape this reader does not know")
+            return reader(profile, tree, data, *rest)
+        return read
+
+    monkeypatch.setattr(callgraph, "calls", failing(real_calls))
+    monkeypatch.setattr(archfacts, "facts", failing(real_facts))
+    answer = engine.references("helper")
+    assert answer.graph_pending == 1 and engine.facts().unread == 1
+    conn = open_db(index_path(repo.root))
+    oid = conn.execute("SELECT blob_oid FROM symbols WHERE name = 'helper'").fetchall()[0][0]
+    for table in ("graph_facts", "arch_facts"):
+        assert conn.execute(f"SELECT count(*) FROM {table} WHERE blob_oid = ?", (oid,)).fetchall() == [(0,)]     # nothing false is kept
+    monkeypatch.setattr(callgraph, "calls", real_calls)
+    monkeypatch.setattr(archfacts, "facts", real_facts)
+    again = engine.references("helper")
+    assert again.graph_pending == 0 and any(r.path == "src/app/service.py" for r in again.callers) and engine.facts().unread == 0

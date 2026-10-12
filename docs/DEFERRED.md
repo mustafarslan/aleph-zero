@@ -99,8 +99,9 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 ## 8. Carried to later milestones (recorded in the design)
 
-- M4, still open: the 2026 MCP handshake (the engine still relies on the client's fallback to `initialize`); L4 of the steering ladder, if the measurement leaves a gap.
-- M2, still open: whether one query prefix serves both code and documentation (needs questions whose answers are documentation).
+- M4: the 2026 MCP handshake (the engine still relies on the client's fallback to `initialize`, which works): waits for a client that requires the new one, so that there is something to test against. L4 of the steering ladder waits for the A/B run of entry 0: it is built only if that measurement leaves a gap.
+- M2: whether one query prefix serves both code and documentation: waits for questions whose answers are documentation, which are among the hand-written questions of entry 2.
+- **About the plan files.** The plans of M7 to M10 (2026-10-12) have every box ticked. The plans of M0 to M6 do not: most of their unticked boxes are work that is done and merged (their status is in the design's status section and the ADRs; the boxes were never ticked, and I have not ticked them wholesale after the fact), and the rest are what entries 0, 1 and 2 of this file hold for you: the A/B run, the long GPU run with the split-threshold sweep and the re-tuning, and the fifty hand-written questions.
 
 ## 9. The code graph (M7): what waits for you
 
@@ -141,7 +142,7 @@ Also from M8:
 - **The facts were graded on two repositories, both yours, and the precision samples were read by me.** A third repository in another framework (Django, Spring, gin) would say more than another sample of these two.
 - **A flaky test turned out to be a small bug, fixed.** On a busy machine the embedding worker was stopped for its memory before it was ready, and the next request then said "it did not become ready in time" instead of why. It now says why.
 - **Strings in the history of this branch.** The plan said nothing from your repositories would be copied here. The independent review found four test fixture strings and one path in the plan that resemble names in them (an environment name, a task name, a mount path, a file path). They are renamed, but the earlier commits of this branch still hold them. Nothing is pushed: if you want them gone from the history, say so before the first push and I will rewrite those commits.
-- **Minor findings of M8's review:** fixed since (2026-10-12, the open-items pass): the `oxn.yaml` reader no longer takes a mapping under a layer for a layer, reads a quoted pattern with a comma whole, and `aleph decisions --for` says how many lines it did not understand; a name set and read on one line is reported as both; `--for` a path outside the worktree says so. Still open: a reader that fails on a file records that file as stating nothing until the readers' version changes (the code graph does the same; it wants a rule for trying again, not a one-line fix); a `tsconfig.json` you create while the JavaScript indexer runs would be removed with the one it inferred; the first path question of a process misses a path whose word ends in a Greek capital sigma.
+- **Minor findings of M8's review:** fixed since (2026-10-12, the open-items pass): the `oxn.yaml` reader no longer takes a mapping under a layer for a layer, reads a quoted pattern with a comma whole, and `aleph decisions --for` says how many lines it did not understand; a name set and read on one line is reported as both; `--for` a path outside the worktree says so. Fixed in a second pass the same day: a reader that fails on a file no longer records that file as stating nothing (nothing is recorded, the answer counts the file as unread, and the next question tries again; the code graph likewise). Still open: a `tsconfig.json` you create while the JavaScript indexer runs would be removed with the one it inferred; the first path question of a process misses a path whose word ends in a Greek capital sigma.
 
 ## 13. Releasing (M10): what only you decide
 

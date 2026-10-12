@@ -657,7 +657,11 @@ class Engine:
         index = self._indexes.get(view.root)
         if index is not None:
             path, opened = self._files[view.root]
-            if store_db.inode(path) != opened:
+            if path != index_file(view.common_dir):
+                # The directory became a repository (`git init`), or stopped being one: its index is elsewhere now.
+                self._forget(view.root)
+                index = None
+            elif store_db.inode(path) != opened:
                 # Another session set a damaged index aside and built a new one. This session
                 # may never have read the damage (its pages were in memory): it would go on
                 # writing into the file that was set aside, where nobody else reads.

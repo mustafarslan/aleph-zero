@@ -518,3 +518,19 @@ def test_an_older_build_does_not_redo_what_a_newer_build_indexed(repo, monkeypat
     assert versions == {theirs}                              # nothing of the newer build's was touched
     monkeypatch.setattr(indexer, "CHUNKER_VERSION", theirs)
     assert [hit.path for hit in search(newer, view, "refresh token")][:1] == ["src/auth/token_store.py"]
+
+
+def test_an_older_build_s_write_never_replaces_a_newer_build_s_row(repo, monkeypatch):
+    """The check before a sync cannot see a newer build that writes while the older one is already under way."""
+    from aleph_zero import gitio, indexer
+
+    older, view = _index(repo), build_view(repo.root)
+    older.sync(view)
+    key = next(key for key in older._paths if key[1] == "python")
+    with gitio.Readers() as reader:
+        item = older._prepare(view, reader, key)
+    older.conn.execute("UPDATE blobs SET chunker_version = ? WHERE blob_oid = ? AND family = ?", (indexer.CHUNKER_VERSION + 1, *key))
+    assert older._store(item) is False
+    assert older.conn.execute("SELECT chunker_version FROM blobs WHERE blob_oid = ? AND family = ?", key).fetchall() == [(indexer.CHUNKER_VERSION + 1,)]
+    older.conn.execute("UPDATE blobs SET chunker_version = ? WHERE blob_oid = ? AND family = ?", (indexer.CHUNKER_VERSION - 1, *key))
+    assert older._store(item) is True                        # an older row is still replaced: that is an upgrade

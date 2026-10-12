@@ -394,3 +394,20 @@ def test_a_file_that_cannot_be_read_is_counted(project):
         assert Engine(project).status()["unreadable"] == 1
     finally:
         locked.chmod(0o600)
+
+
+def test_an_open_engine_follows_its_directory_into_and_out_of_git(project):
+    import shutil
+
+    engine = Engine(project)
+    assert engine.search("refresh token").hits and "/.git/" not in engine.status()["index"]
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init"], check=True)
+    assert [hit.path for hit in engine.search("refresh token").hits][0] == "src/tokens.py"
+    status = engine.status()
+    assert status["repository"] is True and status["index"] == str(project.resolve() / ".git" / "aleph-zero" / "index.db")
+    assert Path(status["index"]).exists() and status["pending"] == 0            # the index it says is the index it uses
+    shutil.rmtree(project / ".git")
+    assert [hit.path for hit in engine.search("refresh token").hits][0] == "src/tokens.py"
+    assert engine.status()["repository"] is False and "/.git/" not in engine.status()["index"]

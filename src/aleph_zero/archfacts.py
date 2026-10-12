@@ -124,11 +124,13 @@ def _read(index: Index, view: View, reader: gitio.Readers, key: tuple[str, str])
     _, text = filters.classify(family, data)
     if text is None:
         return _NONE
-    return pack(extract(family, path, text))
+    found = extract(family, path, text)
+    return None if found is None else pack(found)
 
 
-def extract(family: str, path: str, text: str) -> list[Fact]:
-    """The facts of one file. A reader that fails on a shape it does not know states nothing."""
+def extract(family: str, path: str, text: str) -> list[Fact] | None:
+    """The facts of one file; None when a reader failed on it. Nothing is recorded then: a row saying "states
+    nothing" would be believed for as long as the readers' version stands. The file stays unread, and is tried again."""
     text = text.replace("\r\n", "\n")
     try:
         if family == _TEXT:
@@ -137,7 +139,7 @@ def extract(family: str, path: str, text: str) -> list[Fact]:
         source = text.encode("utf-8", "surrogateescape")
         return facts(profile, parse.tree(profile, source), source)
     except Exception:  # noqa: BLE001 - a grammar that fails to load, or a shape a reader does not know
-        return []
+        return None
 
 
 def pack(found: list[Fact]) -> bytes:

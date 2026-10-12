@@ -401,7 +401,9 @@ class Index:
         """Write one blob. False if another session had already written it."""
         conn = self.conn
         oid, family = item.key
-        conn.execute("DELETE FROM blobs WHERE blob_oid = ? AND family = ? AND chunker_version != ?",
+        # Only what an older chunker wrote is replaced. A row of a newer build (written while this sync was
+        # already under way, past its check) stays: the insert below then does nothing, and the next sync refuses.
+        conn.execute("DELETE FROM blobs WHERE blob_oid = ? AND family = ? AND chunker_version < ?",
                      (oid, family, CHUNKER_VERSION))
         if conn.changes():
             _removed_content(conn)  # another session may be listing this blob's chunks
