@@ -21,8 +21,11 @@ class Verdict:
     evidence: str      # the numbers, in a few words, and where they are recorded
 
 
-# Filled in from Benchmark C, one language at a time. Empty means: not yet measured.
-VERDICTS: dict[str, Verdict] = {}
+# Filled in from Benchmark C, one language at a time. A language not listed has not been measured.
+VERDICTS: dict[str, Verdict] = {
+    "python": Verdict(True, "+5.8 points of file recall@10, interval +1.5 to +10.2, on 235 Loc-Bench questions "
+                            "asked by their issue titles; ADR-002, 2026-10-12"),
+}
 
 # Languages that share a verdict because they share a benchmark.
 _SAME_AS = {"tsx": "typescript"}

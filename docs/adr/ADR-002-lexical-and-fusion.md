@@ -1,6 +1,6 @@
 # ADR-002: Lexical index and hybrid fusion
 
-- **Status:** Lexical part accepted for M1. Fusion part proposed, decided by M2 (Benchmark C).
+- **Status:** Accepted. Lexical part in M1; fusion and the per-language gate for vectors in M2 (Python decided 2026-10-12; other languages have no verdict yet).
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -97,6 +97,31 @@ All of these are starting values, to be re-examined with the M2 benchmark.
 M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at ten and 33 points ahead in first place, without any embedding model. Thirty-five questions from one Python repository are a small sample: a difference of one question is 3 points.
 
 **Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.
+
+## Benchmark C, Python: vectors pass the gate (2026-10-12)
+
+`bench/eval/benchmark_c.py`, 235 Loc-Bench questions from 18 Python repositories (Django, yt-dlp, dask, sqlglot, prefect, mypy, prowler, modin, jax, diffusers, sentence-transformers, docling, flet, pydantic, sqlfluff, moto, trl, aiohttp). Each repository is read at the issue's base commit from git's object store; every commit was indexed and embedded beforehand. File recall@10 unless stated.
+
+| Query form | BM25 over whole files | Aleph, words and names | Vectors only | Aleph with vectors | Gain from vectors (95% interval) |
+|---|---|---|---|---|---|
+| **Issue title** (the gate form) | | 0.670 | 0.609 | **0.728** | **+5.8 points (+1.5 to +10.2)** |
+| Whole issue text | 0.403 | 0.580 | 0.584 | 0.693 | +11.3 points (+6.8 to +15.7) |
+| The issue's 24 rarest words | | 0.565 | 0.351 | 0.577 | +1.2 points (−2.8 to +5.1) |
+
+First place: 0.362 → 0.372 on titles (+1.1, interval −3.4 to +5.5); 0.285 → 0.360 on the whole issue (+7.4, +2.1 to +13.0).
+
+**The rule was fixed on the 35-question pilot, before these numbers existed:** read the gate on the title form, the closest to what an agent types; pass at 5 points of recall@10 with a paired bootstrap interval that excludes zero. It passes: +5.8, interval +1.5 to +10.2. The margin over 5 points is thin and the lower bound is 1.5, so this is "vectors help Python" with moderate confidence, not a large effect. The deferred 400-question run would narrow the interval; it is not needed to apply the rule.
+
+What else the numbers say:
+
+- **Vectors alone are worse than words and names** on short queries (0.609 against 0.670 on titles) and far worse on a bag of rare words. They earn their place in combination, where they add files that share no word with the question.
+- **The gain grows with the length and naturalness of the question** (+1.2 on rare words, +5.8 on titles, +11.3 on whole issues).
+- **Rank fusion beat the weighted sum** of normalised scores at every weight tried on titles (0.728 against 0.709 to 0.716), though the weighted sum ran without the name and path signals, so the comparison is not like for like. Rank fusion stays.
+- **Against plain BM25** on the whole issue: 0.403; Aleph by words and names 0.580; with vectors 0.693.
+- **Not embedding data files** (chunks of files with no language profile) was decided on the pilot and is part of what was measured here.
+- Still unmeasured: the 50 hand-written questions; other languages; documentation questions; the split-threshold sweep of ADR-001.
+
+**Verdict recorded:** `dense_policy.VERDICTS["python"]` is on. With the worker installed, a Python project gets vectors by default; without it nothing changes and nothing is said in answers.
 
 ## The gate is per language (owner's instruction, 2026-10-12)
 

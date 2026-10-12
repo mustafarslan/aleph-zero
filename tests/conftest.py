@@ -91,3 +91,10 @@ def fake_worker():
     proc.terminate()
     proc.wait(timeout=10)
     shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_worker(monkeypatch, tmp_path_factory):
+    """Tests never see the embedding worker installed on this machine, nor its cache."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
+    monkeypatch.delenv("ALEPH_DENSE", raising=False)

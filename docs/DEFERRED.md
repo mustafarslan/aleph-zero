@@ -6,7 +6,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 - **What:** embed the large Loc-Bench repositories so the Python benchmark has about 400 questions instead of 235. This decides Python only (see 1b for the other languages). The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.
 - **Why it waits:** it keeps the GPU busy for a long time. The first estimate was about a day. That was made while the worker was degrading with uptime and before data files were excluded from embedding; with both fixed it is probably 6 to 12 hours, but that is a guess until one large repository has been timed. It also fetches these public repositories from GitHub (several GB): vllm, pandas, scikit-learn, transformers, ray, scipy, keras, sympy, qiskit, ultralytics, matplotlib, numpy, mlflow, phidata, streamlit, pytorch-lightning, checkov, pypdf.
-- **Decide first:** read the 235-question result (`bench/data/results/benchmark_c.json`, summarised in ADR-002 when it is in). If the gain on the title form is clearly above 5 points or clearly near zero, the long run may not be needed.
+- **Now optional.** The 235-question result is in (ADR-002): +5.8 points on issue titles, interval +1.5 to +10.2. That passes the rule fixed beforehand, so Python's verdict is on. The long run would only narrow the interval (to roughly ±3.5); run it if you want more certainty than "passes, thinly".
 - **How to start it** (it can be interrupted and resumed; run it when the machine is otherwise idle, and do not run the test suite at the same time):
 
       uv run --group bench python bench/eval/benchmark_c.py prepare bench/data/benchc --repos vllm-project/vllm,pandas-dev/pandas,scikit-learn/scikit-learn,huggingface/transformers,ray-project/ray,scipy/scipy,keras-team/keras,sympy/sympy,Qiskit/qiskit,ultralytics/ultralytics,matplotlib/matplotlib,numpy/numpy,mlflow/mlflow,phidatahq/phidata,streamlit/streamlit,Lightning-AI/pytorch-lightning,bridgecrewio/checkov,py-pdf/pypdf
@@ -14,7 +14,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
       uv run --group bench python bench/eval/benchmark_c.py run bench/data/benchc --out bench/data/results/benchmark_c.json
 
   A commit with more than 250,000 chunks is skipped (`--max-chunks`); the last line of `prepare` says how many were skipped or left partly embedded.
-- **Status:** not started. Waiting for the owner's go-ahead.
+- **Status:** not started; no longer blocking anything. Waiting for the owner's go-ahead if wanted.
 
 ## 1b. Benchmarks for the languages other than Python
 

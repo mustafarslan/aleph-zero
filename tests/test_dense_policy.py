@@ -4,6 +4,7 @@ import pytest
 
 from aleph_zero import cli, dense_policy
 from aleph_zero.dense_policy import Verdict
+from aleph_zero.embed import setup as embed_setup
 from aleph_zero.embed import worker
 from aleph_zero.engine import Engine
 
@@ -53,6 +54,7 @@ def test_an_engine_left_to_decide_uses_vectors_only_where_the_verdict_allows(rep
     monkeypatch.setattr(worker, "available", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
     engine = Engine(repo.root)                      # no setting: decide per worktree
     engine.search("render_invoice")
     engine.embed()
@@ -68,6 +70,7 @@ def test_an_engine_left_to_decide_uses_vectors_only_where_the_verdict_allows(rep
 
 def test_command_line_settings(repo, monkeypatch, capsys):
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
     monkeypatch.setattr(worker, "available", lambda: None)
     assert cli.main(["--cwd", str(repo.root), "search", "render_invoice", "--no-dense", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["dense"] == ""
@@ -78,3 +81,37 @@ def test_command_line_settings(repo, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["dense"] == ""
     with pytest.raises(SystemExit):
         cli.main(["--cwd", str(repo.root), "search", "x", "--dense", "--no-dense"])
+
+
+def test_python_has_its_verdict_and_it_is_backed_by_numbers():
+    verdict = dense_policy.VERDICTS["python"]
+    assert verdict.helps is True and "235" in verdict.evidence and "ADR-002" in verdict.evidence
+
+
+def test_left_to_decide_and_with_no_worker_installed_nothing_is_said_about_vectors(repo, monkeypatch):
+    monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
+    engine = Engine(repo.root)   # the verdict says on, but `aleph embed setup` was never run on this machine
+    answer = engine.search("render_invoice")
+    assert answer.dense == "" and "semantic" not in engine.render(answer)
+    status = engine.status()["vectors"]
+    assert status["enabled"] is False and "aleph embed setup" in status["why"]
+    asked = Engine(repo.root, dense=True).search("render_invoice")   # asked for by hand: the answer says why not
+    assert asked.dense != ""
+
+
+def test_a_worker_that_is_waking_does_not_hold_a_query_up(repo, fake_worker, monkeypatch):
+    import time
+
+    from aleph_zero.embed.client import EmbedClient
+
+    monkeypatch.setattr(worker, "available", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    engine = Engine(repo.root, dense=True)
+    engine.search("render_invoice")
+    engine.embed()
+    real = EmbedClient.embed
+    monkeypatch.setattr(EmbedClient, "embed", lambda self, texts, kind: real(self, ["HANG " + text for text in texts], kind))
+    started = time.monotonic()
+    answer = engine.search("render_invoice")
+    assert time.monotonic() - started < 1.0
+    assert answer.hits[0].path == "src/billing/invoice.py" and "did not answer" in answer.dense

@@ -33,6 +33,18 @@ The server offers four tools. `search` is always loaded; `symbol`, `outline` and
 
 Its files are searched as `docs:path/in/that/repo.md`.
 
+## Search by meaning
+
+    uv run aleph embed setup      # once: builds the worker and downloads the model (310 MB; uses the network)
+    uv run aleph embed run        # gives this worktree's code and docs their vectors (about 90 chunks a second)
+    uv run aleph embed status
+
+With the worker installed, vectors are used by default in projects whose main language
+has a benchmark verdict in their favour: today that is Python (ADR-002). `aleph status`
+shows a project's main language and whether vectors are on, and why. `--dense`,
+`--no-dense` and `ALEPH_DENSE=1|0` decide by hand. One worker serves every session and
+repository; it unloads its model after ten idle minutes and exits after thirty.
+
 ## Faster queries
 
 Every query asks git what the working tree looks like. On a large repository that is

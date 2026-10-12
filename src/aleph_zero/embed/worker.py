@@ -22,7 +22,7 @@ from pathlib import Path
 from .client import EmbedClient, Unavailable
 
 MODEL_FILE = "embeddinggemma-2-Q8_0.gguf"
-IDLE_SLEEP = 120          # seconds without a request before the worker unloads its model
+IDLE_SLEEP = 600          # seconds without a request before the worker unloads its model
 SOCKET_LIMIT = 100        # a UNIX socket path may be 104 bytes on macOS, 108 on Linux
 MEMORY_LIMIT_MB = 600     # the worker's share of the machine-wide budget (ADR-005); past it, it is restarted
 

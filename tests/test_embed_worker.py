@@ -74,7 +74,7 @@ def test_the_real_command_line(home):
     # Eight slots of 2,048 tokens, but never more than 4,096 tokens in one decode: measured
     # 104 chunks/s against 72 with one slot, and 490 MB at worst against 954 MB uncapped.
     assert "-ngl 99" in joined and "-t 1" in joined and "-c 16384 -b 4096 -ub 4096" in joined
-    assert "--parallel 8" in joined and "--metrics" in joined and "--sleep-idle-seconds 120" in joined
+    assert "--parallel 8" in joined and "--metrics" in joined and "--sleep-idle-seconds 600" in joined
     assert f"--host {worker.socket_path()}" in joined
     assert (worker.slots(gpu=True), worker.capacity_tokens(gpu=True)) == (8, 2048)
     cpu = " ".join(worker.server_command(gpu=False))

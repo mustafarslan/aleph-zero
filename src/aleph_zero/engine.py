@@ -27,7 +27,9 @@ from .view import View, build_view
 SYNC_SECONDS = 5.0       # how long a query without a time limit may spend indexing first
 SEARCH_SHARE = 0.25      # of a time limit, kept for the search itself
 SHOWN_LIMIT = 5000       # texts remembered as shown before the memory starts over
-QUERY_EMBED_SECONDS = 2.0  # a sleeping worker wakes in half a second; longer than this, answer without vectors
+# How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
+# takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
+QUERY_EMBED_SECONDS = 0.3
 _LANGUAGES = {
     "py": ("python",), "ts": ("typescript", "tsx"), "typescript": ("typescript", "tsx"), "js": ("javascript",),
     "golang": ("go",), "rs": ("rust",), "c++": ("cpp",), "md": ("markdown",), "rst": ("prose",),
@@ -217,7 +219,13 @@ class Engine:
         key = index._view_epoch
         cached = self._decisions.get(id(index))
         if cached is None or cached[0] != key:
-            cached = (key, dense_policy.decide(None, next(iter(index.languages()), None)))
+            enabled, why = dense_policy.decide(None, next(iter(index.languages()), None))
+            if enabled:
+                from .embed import setup
+
+                if not setup.installed():  # the verdict is in favour, but there is nothing to make vectors with
+                    enabled, why = False, why + "; the embedding worker is not installed (`aleph embed setup`)"
+            cached = (key, (enabled, why))
             self._decisions[id(index)] = cached
         return cached[1]
 
