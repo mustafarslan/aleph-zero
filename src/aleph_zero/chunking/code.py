@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..lang import LanguageProfile, parse
-from ..lang.bindings import Binding, bases, bindings, fields
+from ..lang.bindings import Binding, facts
 from ..lang.calls import Call, calls
 from ..lang.definitions import Definition, definitions
 from ..lang.imports import RawImport, extract_imports
@@ -55,8 +55,7 @@ def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
         windows = window_chunks(text)
         return CodeFile(windows, [((c.start_line, c.end_line),) for c in windows], [], [], [])
     try:
-        graph = (calls(profile, tree, data, found), bindings(profile, tree, data), bases(profile, tree, data),
-                 fields(profile, tree, data))
+        graph = (calls(profile, tree, data, found), *facts(profile, tree, data))
     except Exception:  # noqa: BLE001 - search must not lose a file because a graph reader met a shape it does not know
         graph = ([], [], [], [])
 

@@ -12,12 +12,14 @@ same author).
 """
 from __future__ import annotations
 
+import bisect
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
+from . import query
 from .profile import LanguageProfile
 
 
@@ -36,29 +38,49 @@ _GO_MAJOR = re.compile(r"^v[0-9]+$")
 _GO_DOTTED_MAJOR = re.compile(r"^(?P<name>.+)\.v[0-9]+$")
 
 
+def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> tuple[list[Binding], list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """`bindings`, `bases` and `fields` of one file, from one pass over its tree."""
+    family = "ecma" if profile.name in _ECMA else profile.name
+    found = query.by_role(profile.name, tree, {
+        "binds": _STATEMENTS.get(family, ()), "types": _TYPE_NODES.get(family, ()), "owners": _OWNERS.get(family, ()),
+        "assigns": _ASSIGNMENTS.get(family, ())})
+    in_order = lambda nodes: sorted(nodes, key=lambda node: (node.start_byte, -node.end_byte))  # noqa: E731
+    assigned = in_order(found.get("assigns", []))
+    return (_bindings(family, in_order(found.get("binds", []))), _bases(family, in_order(found.get("types", []))),
+            _fields(family, in_order(found.get("owners", [])), assigned, [node.start_byte for node in assigned]))
+
+
 def bindings(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Binding]:
     """Every name the file's imports bind, in source order, and what the file republishes under another name."""
-    family = "ecma" if profile.name in _ECMA else profile.name
+    return facts(profile, tree, data)[0]
+
+
+def _bindings(family: str, statements: list[Node]) -> list[Binding]:
     read = _READERS.get(family)
-    if read is None:
-        return []
     out: list[Binding] = []
-    stack: list[tuple[Node, int]] = [(tree.root_node, 0)]
-    while stack:
-        node, depth = stack.pop()
+    for node in statements if read is not None else ():     # wherever they stand: imports hide in functions too
         found = list(read(node))
-        if family == "rust":
+        if found and family == "rust":
+            depth, above = 0, node.parent
+            while above is not None:
+                depth += above.type == "mod_item"
+                above = above.parent
             found = [Binding(b.local, b.source, b.name, depth, b.kind) for b in found]
-            if node.type == "mod_item" and node.child_by_field_name("body") is not None:
-                depth += 1
         out.extend(found)
-        if not found or node.type in _LOOK_INSIDE:
-            stack.extend((child, depth) for child in reversed(node.children))
     return out
 
 
-# Statements that bind something and can still hold another binding statement inside.
-_LOOK_INSIDE = frozenset({"export_statement", "program", "lexical_declaration", "variable_declaration", "expression_statement"})
+# The assignments that can give a field its type, where a language has no field declarations to say it.
+_ASSIGNMENTS: dict[str, tuple[str, ...]] = {"python": ("assignment",), "ecma": ("assignment_expression",)}
+# The statements that can bind a name from elsewhere, per language.
+_STATEMENTS: dict[str, tuple[str, ...]] = {
+    "python": ("import_statement", "import_from_statement"),
+    "ecma": ("import_statement", "export_statement", "variable_declarator", "assignment_expression"),
+    "go": ("package_clause", "import_spec"),
+    "rust": ("use_declaration", "extern_crate_declaration", "mod_item"),
+    "java": ("package_declaration", "import_declaration"),
+    "c": ("preproc_include",), "cpp": ("preproc_include",),
+}
 
 
 # ---- Python --------------------------------------------------------------------------------
@@ -386,25 +408,30 @@ _NESTS = frozenset({"class_definition", "class_declaration", "abstract_class_dec
 
 def bases(profile: LanguageProfile, tree: Tree, data: bytes) -> list[tuple[str, str]]:
     """(type, what it extends, implements or embeds), both as written, the type qualified within the file."""
-    family = "ecma" if profile.name in _ECMA else profile.name
-    kinds = _TYPE_NODES.get(family)
-    if not kinds:
-        return []
+    return facts(profile, tree, data)[1]
+
+
+def _bases(family: str, types: list[Node]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
-    stack: list[tuple[Node, str]] = [(tree.root_node, "")]
-    while stack:
-        node, prefix = stack.pop()
-        inner = prefix
-        if node.type in kinds:
-            name, built_on = _type_and_bases(family, node)
-            if name:
-                out.extend((prefix + name, base) for base in built_on if base)
-        if node.type in _NESTS:
-            own = node.child_by_field_name("name")
-            if own is not None:
-                inner = prefix + _text(own) + "."
-        stack.extend((child, inner) for child in reversed(node.children))
+    for node in types:
+        name, built_on = _type_and_bases(family, node)
+        if name:
+            prefix = _prefix(node)
+            out.extend((prefix + name, base) for base in built_on if base)
     return out
+
+
+def _prefix(node: Node) -> str:
+    """`Outer.` for a node inside the type or module `Outer`: how the file qualifies what is declared there."""
+    names: list[str] = []
+    above = node.parent
+    while above is not None:
+        if above.type in _NESTS:
+            own = above.child_by_field_name("name")
+            if own is not None:
+                names.append(_text(own))
+        above = above.parent
+    return "".join(name + "." for name in reversed(names))
 
 
 def _type_and_bases(family: str, node: Node) -> tuple[str, list[str]]:
@@ -534,23 +561,26 @@ def fields(profile: LanguageProfile, tree: Tree, data: bytes) -> list[tuple[str,
     """(type, field, the field's type as `named_type` gives it), the type qualified within the file. Only
     fields whose type the source states: a declaration, a constructor parameter kept as a field, or an
     assignment from a constructor call or a typed parameter."""
-    family = "ecma" if profile.name in _ECMA else profile.name
-    kinds = _OWNERS.get(family)
-    if not kinds:
-        return []
+    return facts(profile, tree, data)[2]
+
+
+def _fields(family: str, owners: list[Node], assigned: list[Node], starts: list[int]) -> list[tuple[str, str, str]]:
     said: dict[tuple[str, str], list[tuple[str, bool]]] = {}      # (type, field) -> (a type, whether it is declared)
-    stack: list[tuple[Node, str]] = [(tree.root_node, "")]
-    while stack:
-        node, prefix = stack.pop()
-        inner = prefix
-        own = node.child_by_field_name("name") if node.type in _NESTS or node.type in kinds else None
-        if node.type in kinds and own is not None:
-            for name, kind, declared in _FIELD_READERS[family](node):
-                if name:
-                    said.setdefault((prefix + _text(own), name), []).append((kind, declared))
-        if node.type in _NESTS and own is not None:
-            inner = prefix + _text(own) + "."
-        stack.extend((child, inner) for child in reversed(node.children))
+
+    def inside(node: Node | None) -> list[Node]:
+        """The assignments under `node`, in source order."""
+        if node is None:
+            return []
+        return assigned[bisect.bisect_left(starts, node.start_byte):bisect.bisect_left(starts, node.end_byte)]
+
+    for node in owners:
+        own = node.child_by_field_name("name")
+        if own is None:
+            continue
+        owner = _prefix(node) + _text(own)
+        for name, kind, declared in _FIELD_READERS[family](node, inside):
+            if name:
+                said.setdefault((owner, name), []).append((kind, declared))
     out: list[tuple[str, str, str]] = []
     for (owner, name), stated in said.items():
         declared = [kind for kind, is_declared in stated if is_declared]
@@ -561,7 +591,7 @@ def fields(profile: LanguageProfile, tree: Tree, data: bytes) -> list[tuple[str,
     return out
 
 
-def _go_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _go_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("type")
     if body is None or body.type != "struct_type":
         return
@@ -571,13 +601,13 @@ def _go_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
             yield _text(name), named_type(_text(kind)), True
 
 
-def _rust_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _rust_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("body")
     for declared in (_descend(body, "field_declaration") if body is not None else ()):
         yield _text(declared.child_by_field_name("name")), named_type(_text(declared.child_by_field_name("type"))), True
 
 
-def _java_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _java_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("body")
     for declared in (body.named_children if body is not None else ()):
         if declared.type != "field_declaration":
@@ -587,7 +617,7 @@ def _java_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
             yield _text(declarator.child_by_field_name("name")), kind, True
 
 
-def _cpp_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _cpp_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("body")
     for declared in (body.named_children if body is not None else ()):
         if declared.type != "field_declaration":
@@ -608,7 +638,7 @@ def _annotation(node: Node | None) -> str:
     return named_type(_text(node.named_children[0])) if node.type == "type_annotation" and node.named_children else named_type(_text(node))
 
 
-def _ecma_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _ecma_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("body")
     for member in (body.named_children if body is not None else ()):
         if member.type in ("public_field_definition", "field_definition"):
@@ -630,7 +660,7 @@ def _ecma_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
                 typed[_text(pattern)] = kind
                 if any(child.type in ("accessibility_modifier", "readonly", "override_modifier") for child in parameter.children):
                     yield _text(pattern), kind, True    # constructor(private readonly svc: Service)
-            for assigned in _descend_all(member.child_by_field_name("body"), "assignment_expression"):
+            for assigned in inside(member.child_by_field_name("body")):
                 left, right = assigned.child_by_field_name("left"), assigned.child_by_field_name("right")
                 if left is None or right is None or left.type != "member_expression":
                     continue
@@ -643,7 +673,7 @@ def _ecma_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
                     yield _text(name), typed.get(_text(right), "") if right.type == "identifier" else "", False
 
 
-def _python_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
+def _python_fields(node: Node, inside: Callable[[Node | None], list[Node]]) -> Iterator[tuple[str, str, bool]]:
     body = node.child_by_field_name("body")
     for member in (body.named_children if body is not None else ()):
         if member.type == "expression_statement" and member.named_children:
@@ -667,7 +697,7 @@ def _python_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
             if parameter.type in ("typed_parameter", "typed_default_parameter"):
                 name = parameter.child_by_field_name("name") or (parameter.named_children[0] if parameter.named_children else None)
                 typed[_text(name)] = named_type(_text(parameter.child_by_field_name("type")))
-        for assigned in _descend_all(method.child_by_field_name("body"), "assignment"):
+        for assigned in inside(method.child_by_field_name("body")):
             left, right, kind = (assigned.child_by_field_name(field) for field in ("left", "right", "type"))
             if left is None or left.type != "attribute" or _text(left.child_by_field_name("object")) != receiver:
                 continue
@@ -682,16 +712,6 @@ def _python_fields(node: Node) -> Iterator[tuple[str, str, bool]]:
 
 _FIELD_READERS = {"python": _python_fields, "ecma": _ecma_fields, "java": _java_fields, "go": _go_fields, "rust": _rust_fields,
                   "cpp": _cpp_fields}
-
-
-def _descend_all(node: Node | None, kind: str) -> Iterator[Node]:
-    """Every node of that kind under `node`, in source order, nested ones included."""
-    stack = [node] if node is not None else []
-    while stack:
-        current = stack.pop()
-        if current.type == kind:
-            yield current
-        stack.extend(reversed(current.named_children))
 
 
 def _descend(node: Node, kind: str) -> Iterator[Node]:

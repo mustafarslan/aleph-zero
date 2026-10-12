@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
+from . import query
 from .bindings import constructed, named_type
 from .definitions import Definition
 from .profile import LanguageProfile
@@ -93,6 +94,7 @@ _PATTERNS = frozenset({
     "formal_parameter", "spread_parameter", "variable_declarator", "inferred_parameters",
     "optional_parameter_declaration", "init_declarator", "pointer_declarator", "reference_declarator", "array_declarator",
 })
+_PARTS = {"named": 0, "scope": 1, "binds": 2, "typed": 3, "call": 4}
 _NOT_A_NAME = frozenset({"type", "value", "right", "default_value", "parameters", "size", "key", "dimensions"})
 _BOUND_LEAVES = frozenset({"identifier", "shorthand_property_identifier_pattern", "shorthand_field_identifier"})
 _OWNER_HEADS = ("object", "operand", "value", "argument", "path", "scope")
@@ -125,44 +127,48 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     scopes, binders = _SCOPES.get(family, frozenset()), _BINDERS.get(family, {})
     bound: dict[int, set[str]] = {}     # scope -> the names bound in it
     declared: dict[int, dict[str, str]] = {}  # scope -> name -> the type the scope states for it ('' when it states two)
-    typed = _TYPED.get(family, frozenset())
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
     seen: list[tuple[Node, Node | None, str, tuple[int, ...]]] = []
-    stack: list[tuple[Node, tuple[int, ...]]] = [(tree.root_node, ())]
-    while stack:  # explicit: expressions nest deeper than Python recurses
-        node, chain = stack.pop()
-        kind = node.type
-        if chain and kind in _NAMED_OUTSIDE:
+    # Only the nodes that matter are visited, found by the parser's query engine: scopes, what binds or
+    # types a local name, and calls. In source order, an outer node first, so a scope is open before what
+    # it holds is met; one node can play several parts, taken in the order of _PARTS.
+    parts = query.by_role(family, tree, {"named": _NAMED_OUTSIDE, "scope": scopes, "binds": binders,
+                                         "typed": _TYPED.get(family, frozenset()), "call": sites})
+    events = sorted(((node.start_byte, -node.end_byte, _PARTS[part], node) for part, nodes in parts.items() for node in nodes),
+                    key=lambda event: event[:3])
+    open_scopes: list[tuple[int, int]] = []    # (where it ends, its id), innermost last
+    for start, _, part, node in events:
+        while open_scopes and open_scopes[-1][0] <= start:
+            open_scopes.pop()
+        if part == 0:           # a declaration whose own name belongs to the scope around it
             name = node.child_by_field_name("name")
-            if name is not None:
-                bound[chain[-1]].add(_text(name))
-        if kind in scopes:
-            chain = (*chain, node.id)
-            bound[node.id] = set()
-            declared[node.id] = {}
+            if open_scopes and name is not None:
+                bound[open_scopes[-1][1]].add(_text(name))
+        elif part == 1:         # a scope opens
+            open_scopes.append((node.end_byte, node.id))
+            bound[node.id], declared[node.id] = set(), {}
             receiver = _receiver_name(family, node)
             if receiver:
                 receivers[node.id] = receiver
                 bound[node.id].add(receiver)
-        if chain and kind in binders and not _is_require(node):
-            for field in binders[kind]:
-                for holder in ([node] if not field else node.children_by_field_name(field)):
-                    bound[chain[-1]].update(_bound_names(holder, family))
-        if chain and kind in typed:
-            known = declared[chain[-1]]
-            for name, stated in _stated(family, node):
-                known[name] = stated if known.get(name, stated) == stated else ""
-        stack.extend((child, chain) for child in reversed(node.children))
-        field = sites.get(kind)
-        if field is None:
-            continue
-        callee = node.child_by_field_name(field)
-        if callee is None:
-            continue
-        owner = node.child_by_field_name("object") if family == "java" and kind == "method_invocation" else None
-        split = (callee, owner, "member" if owner is not None else "") if owner is not None or _is_name(callee) else _split(callee)
-        if split is not None:
-            seen.append((*split, chain))
+        elif part == 2:
+            if open_scopes and not _is_require(node):
+                for field in binders[node.type]:
+                    for holder in ([node] if not field else node.children_by_field_name(field)):
+                        bound[open_scopes[-1][1]].update(_bound_names(holder, family))
+        elif part == 3:
+            if open_scopes:
+                known = declared[open_scopes[-1][1]]
+                for name, stated in _stated(family, node):
+                    known[name] = stated if known.get(name, stated) == stated else ""
+        else:
+            callee = node.child_by_field_name(sites[node.type])
+            if callee is None:
+                continue
+            owner = node.child_by_field_name("object") if family == "java" and node.type == "method_invocation" else None
+            split = (callee, owner, "member" if owner is not None else "") if owner is not None or _is_name(callee) else _split(callee)
+            if split is not None:
+                seen.append((*split, tuple(scope for _, scope in open_scopes)))
     out: list[Call] = []
     for name, owner, via, chain in seen:
         position = name.start_byte
