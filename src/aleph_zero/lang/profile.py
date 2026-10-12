@@ -90,6 +90,10 @@ class LanguageProfile:
     #: Statements that hold one declaration and nothing else, whose lines belong to it:
     #: `type X struct{}` around a Go type_spec, `export const f = ...` around a declarator.
     holders: frozenset[str] = frozenset()
+    #: Object literals, and the key-value entries inside them. A function that is the value
+    #: of a key is called by that key: `const api = { get() {}, post: () => {} }`.
+    object_kinds: frozenset[str] = frozenset()
+    pair_kinds: frozenset[str] = frozenset()
     #: True where a name is reached by following `declarator` fields: C and C++.
     declarator_chain: bool = False
     #: Tokens that make a value a constant: `const`, `constexpr`, `readonly`.

@@ -180,3 +180,19 @@ def test_in_a_longer_query_a_name_is_one_vote_among_others(repo):
     shaped = search(index, view, "where is refresh_token called")
     assert shaped[0].symbol == "refresh_token" and "symbol" in shaped[0].sources
     assert "symbol" in search(index, view, "total")[0].sources  # asked for by itself, any word is a name
+
+
+def test_a_cpp_destructor_is_found_by_its_tilde_name(empty_repo):
+    from aleph_zero.engine import Engine
+
+    empty_repo.write("src/buffer.cpp", (
+        "class Buffer {\npublic:\n    Buffer();\n    ~Buffer();\n};\n\n"
+        "Buffer::~Buffer() {\n    release();\n}\n\nBuffer::Buffer() {}\n"))
+    empty_repo.commit()
+    engine = Engine(empty_repo.root)
+    for asked in ("~Buffer", "Buffer::~Buffer", "Buffer.~Buffer"):
+        found = engine.symbol(asked).symbols
+        assert found and all(hit.name == "~Buffer" for hit in found), asked
+        assert any(hit.line == 7 for hit in found)
+    assert all(hit.name != "~Buffer" for hit in engine.symbol("Buffer").symbols)
+    assert engine.search("~Buffer").hits[0].path == "src/buffer.cpp"

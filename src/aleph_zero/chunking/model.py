@@ -6,10 +6,18 @@ import math
 import textwrap
 from dataclasses import dataclass
 
-# Bump when chunk boundaries, hashing, or the text handed to the lexical index change:
-# every blob is then indexed again. 2: words are recognised in every script, not only
-# ASCII. 3: source code is chunked by definition, with symbols and imports.
-CHUNKER_VERSION = 3
+# Bump when what is extracted from a file changes (chunk boundaries, symbols, imports):
+# every blob is then processed again. 2: words are recognised in every script, not only
+# ASCII. 3: source code is chunked by definition, with symbols and imports. 4: methods of
+# object literals and every target of a chained assignment are definitions.
+CHUNKER_VERSION = 4
+# Part of every chunk's hash. A chunk that comes out of a newer chunker with the same kind,
+# names and text keeps its hash, and with it its row in the text index and its vector:
+# embedding a large repository takes minutes to hours. Bump this only when what is stored
+# for the same chunk would differ (how its words are indexed, what text is embedded); then
+# everything is indexed and embedded again. It is 3 because the chunker's version was part
+# of the hash until that version.
+HASH_FORMAT = 3
 # Measured in M0 on 35,851 Python functions with the EmbeddingGemma 2 tokenizer.
 TOKENS_PER_CHAR = 0.2919
 
@@ -39,7 +47,7 @@ def normalize(text: str) -> str:
 def chunk_hash(family: str, chunk: Chunk) -> str:
     """Identity of a chunk. Paths and line numbers are not part of it, so a chunk that
     moves, or whose file is renamed, keeps its hash and everything derived from it."""
-    payload = "\0".join((str(CHUNKER_VERSION), family, chunk.kind, chunk.breadcrumb, chunk.symbol,
+    payload = "\0".join((str(HASH_FORMAT), family, chunk.kind, chunk.breadcrumb, chunk.symbol,
                          chunk.signature, normalize(chunk.text)))
     return hashlib.sha256(payload.encode("utf-8", "surrogateescape")).hexdigest()
 

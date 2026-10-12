@@ -120,3 +120,15 @@ def test_rst_directives_fields_and_bullets_are_not_titles():
     text = ("Title\n=====\n\n.. comment line\n---------------\n\n:field: value\n--------------\n\n"
             "- bullet item\n-------------\n\nReal\n----\n\nText.\n")
     assert [chunk.breadcrumb for chunk in rst_chunks(text)] == ["Title", "Title > Real"]
+
+
+def test_a_chunks_identity_does_not_change_when_only_the_chunker_version_does(monkeypatch):
+    """The version makes blobs be processed again. A chunk that comes out the same must keep
+    its hash, because its vector hangs on it and vectors cost GPU time."""
+    from aleph_zero.chunking import model
+
+    before = chunk_hash("python", _chunk("def f():\n    return 1"))
+    monkeypatch.setattr(model, "CHUNKER_VERSION", model.CHUNKER_VERSION + 1)
+    assert chunk_hash("python", _chunk("def f():\n    return 1")) == before
+    # The value every index made before M3 holds: version 3 was part of the hash then.
+    assert before == "c8a2f8c8744106719e88eb5c45df7cc24cd3c1e69d08c284a1b357e170137070"

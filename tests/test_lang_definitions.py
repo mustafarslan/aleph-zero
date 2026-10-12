@@ -278,3 +278,80 @@ def test_a_licence_header_is_not_the_first_definitions_documentation():
     assert first.doc == "" and first.start_line == 3
     documented, = found("typescript", "// Starts the service.\nexport function first() {}\n")
     assert documented.doc == "Starts the service." and documented.start_line == 1
+
+
+# ---- carried from M1b to M3 -------------------------------------------------------------------------------
+
+def test_methods_of_an_object_literal_bound_to_a_name_are_definitions():
+    defs = found("javascript", """
+const api = {
+  // Fetch one record.
+  get(id) { return fetch(id); },
+  post: function (body) { return send(body); },
+  remove: (id) => drop(id),
+  limit: 10,
+  nested: {
+    deep() { return 1; },
+  },
+};
+""")
+    assert one(defs, "api").kind == "constant"
+    for name in ("api.get", "api.post", "api.remove", "api.nested.deep"):
+        assert one(defs, name).kind == "method"
+    assert one(defs, "api.get").doc == "Fetch one record."
+    assert one(defs, "api.post").signature.startswith("post: function (body)")
+    assert (one(defs, "api.remove").start_line, one(defs, "api.remove").end_line) == (6, 6)
+    assert one(defs, "api.get").parent == defs.index(one(defs, "api"))
+    assert not any(d.qualified in ("api.limit", "limit") for d in defs)   # plain values are not listed one by one
+
+
+def test_typescript_object_literal_methods_and_exported_objects():
+    defs = found("typescript", """
+export const routes = {
+  list(req: Request): Response { return ok(); },
+  create: async (req: Request) => { return ok(); },
+};
+""")
+    assert one(defs, "routes.list").kind == "method" and one(defs, "routes.create").kind == "method"
+    assert "list(req: Request): Response" in one(defs, "routes.list").signature
+
+
+def test_a_function_valued_key_in_an_unnamed_object_is_found_by_its_key():
+    """`describe`-style option objects and component definitions: the key is the only
+    name the function has."""
+    defs = found("javascript", """
+export default {
+  methods: {
+    fetchData() { return 1; },
+    reload: async () => { return 2; },
+  },
+};
+""")
+    names = {d.name for d in defs}
+    assert {"fetchData", "reload"} <= names
+
+
+def test_every_target_of_a_chained_assignment_is_defined():
+    defs = found("python", """
+first = second = lambda value: value + 1
+alpha = beta = 3
+MAX_A = MAX_B = 10
+handler = lambda event: event
+""")
+    assert one(defs, "first").kind == "function" and one(defs, "second").kind == "function"
+    assert one(defs, "alpha").kind == "variable" and one(defs, "beta").kind == "variable"
+    assert one(defs, "MAX_A").kind == "constant" and one(defs, "MAX_B").kind == "constant"
+    assert one(defs, "handler").kind == "function"
+    assert one(defs, "second").signature.startswith("first = second = lambda value")
+
+
+def test_c_declarations_behind_an_unknown_macro_are_found_in_a_c_file():
+    defs = found("c", """
+EXPORT_API int widget_open(struct widget *w, int flags);
+STATIC_INLINE int widget_close(struct widget *w)
+{
+    return 0;
+}
+""")
+    assert one(defs, "widget_open").kind == "function" and one(defs, "widget_close").kind == "function"
+    assert (one(defs, "widget_close").start_line, one(defs, "widget_close").end_line) == (3, 6)

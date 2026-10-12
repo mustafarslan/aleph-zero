@@ -99,6 +99,8 @@ class _Walk:
             return self._type(node, definition, scope)
         if kind in profile.values:
             return self._value(node, definition, scope)
+        if kind in profile.pair_kinds:
+            return self._pair(node, scope)
         return node, scope
 
     # ---- what each kind of node records ------------------------------------------------
@@ -138,23 +140,85 @@ class _Walk:
         index = self._add(kind, name, (*scope.names, *owners), scope.parent, self._outer(node, definition), definition)
         return definition, _Scope((*scope.names, *owners, name), index, members=kind in _MEMBER_SCOPES)
 
+    def _pair(self, node: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
+        """`key: value` in an object literal. A function there is called by its key; an
+        object there continues the name: `api.nested.deep`."""
+        key = _sole_identifier(node.child_by_field_name("key"))
+        value = node.child_by_field_name("value")
+        if key is None or value is None:
+            return node, scope
+        if value.type in self.profile.anonymous:
+            self._function(node, value, _text(key), scope)
+            return None
+        if value.type in self.profile.object_kinds and scope.members:
+            return value, _Scope((*scope.names, _text(key)), scope.parent, members=True)
+        return node, scope
+
     def _value(self, node: Node, definition: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
         profile = self.profile
+        chain = self._chain(definition)
+        if len(chain) > 1:
+            return self._chained(node, chain, scope)
         if self._holds_definition(definition):
             return definition, scope  # `const f = () => {}`: the function is the definition
         kind = profile.values[definition.type]
         outer = self._outer(node, definition)
-        recorded = False
+        recorded: list[tuple[int, str, tuple[str, ...]]] = []
         for name_node, is_function in self._value_names(definition):
             written = _text(name_node)
             if is_function:
                 self._function(outer, definition, written, scope)
+                recorded.append((-1, "", ()))
             else:
                 owners, name = _split_qualified(written)
-                self._add(self._value_kind(kind, name, definition, scope), name, (*scope.names, *owners),
-                          scope.parent, outer, definition)
-            recorded = True
-        return None if recorded else (definition, scope)
+                index = self._add(self._value_kind(kind, name, definition, scope), name, (*scope.names, *owners),
+                                  scope.parent, outer, definition)
+                recorded.append((index, name, owners))
+        if not recorded:
+            return definition, scope
+        literal = self._value_node(definition)
+        if len(recorded) == 1 and recorded[0][0] >= 0 and literal is not None and literal.type in profile.object_kinds:
+            # `const api = { get() {} }`: what the object holds is reached through its name.
+            index, name, owners = recorded[0]
+            return literal, _Scope((*scope.names, *owners, name), index, members=True)
+        return None
+
+    def _chain(self, definition: Node) -> list[Node]:
+        """`a = b = value` nests one assignment in another: all of them, outermost first."""
+        chain = [definition]
+        while True:
+            inner = self._value_node(chain[-1])
+            if inner is None or inner.type != definition.type:
+                return chain
+            chain.append(inner)
+
+    def _chained(self, node: Node, chain: list[Node], scope: _Scope) -> None:
+        """Every target of a chained assignment names the same value."""
+        profile = self.profile
+        outer = self._outer(node, chain[0])
+        value = self._value_node(chain[-1])
+        is_callable = value is not None and (value.type in profile.anonymous or value.type in profile.function_like)
+        kind = profile.values[chain[0].type]
+        for link in chain:
+            for name_node, _ in self._value_names(link):
+                written = _text(name_node)
+                if is_callable:
+                    self._function(outer, value, written, scope)
+                else:
+                    owners, name = _split_qualified(written)
+                    self._add(self._value_kind(kind, name, chain[0], scope), name, (*scope.names, *owners),
+                              scope.parent, outer, chain[0])
+        return None
+
+    def _value_node(self, definition: Node) -> Node | None:
+        """What a declaration assigns, seen through parentheses."""
+        for field_name in _VALUE_FIELDS:
+            value = definition.child_by_field_name(field_name)
+            while value is not None and value.type in _VALUE_WRAPPERS and value.named_child_count == 1:
+                value = value.named_children[0]
+            if value is not None:
+                return value
+        return None
 
     def _value_kind(self, kind: str, name: str, definition: Node, scope: _Scope) -> str:
         if kind in ("macro", "constant"):

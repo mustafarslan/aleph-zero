@@ -136,8 +136,8 @@ def test_a_fresh_index_made_by_another_session_is_not_set_aside(repo):
 
 
 def test_an_index_of_the_previous_schema_is_upgraded_in_place(repo):
-    """Schema 4 to 5 adds a table and a column. Nothing indexed or embedded is thrown away."""
-    from aleph_zero.store import index_path, open_db
+    """Schema 4 is brought up to date where it is. Nothing indexed or embedded is thrown away."""
+    from aleph_zero.store import SCHEMA_VERSION, index_path, open_db
 
     engine = Engine(repo.root)
     assert engine.search("refresh token").hits
@@ -146,14 +146,35 @@ def test_an_index_of_the_previous_schema_is_upgraded_in_place(repo):
     conn = open_db(path)
     blobs = conn.execute("SELECT count(*) FROM blobs").fetchall()
     conn.execute("INSERT INTO vector_files(kind, next_row) VALUES ('probe', 7)")
-    conn.execute("DROP TABLE meta")
-    conn.execute("ALTER TABLE vector_files DROP COLUMN writes")
+    for statement in ("DROP TRIGGER chunk_vectors_freed", "DROP INDEX chunk_vectors_by_row", "DROP TABLE vector_free",
+                      "DROP TABLE meta", "ALTER TABLE vector_files DROP COLUMN writes"):
+        conn.execute(statement)
     conn.pragma("user_version", 4)
     conn.close()
     conn = open_db(path)
-    assert conn.pragma("user_version") == 5
+    assert conn.pragma("user_version") == SCHEMA_VERSION == 6
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == blobs
     assert conn.execute("SELECT next_row, writes FROM vector_files WHERE kind = 'probe'").fetchall() == [(7, 0)]
     assert conn.execute("SELECT count(*) FROM meta").fetchall() == [(0,)] or True
     engine = Engine(repo.root)
     assert engine.search("refresh token").pending == 0
+
+
+def test_an_index_of_schema_5_gets_the_free_list_it_lacks(repo):
+    """Schema 5 had the write counter but no record of which vector rows are free."""
+    from aleph_zero.store import SCHEMA_VERSION, index_path, open_db
+
+    engine = Engine(repo.root)
+    assert engine.search("refresh token").hits
+    engine.close()
+    path = index_path(repo.root)
+    conn = open_db(path)
+    conn.execute("INSERT INTO vector_files(kind, next_row) VALUES ('probe', 3)")
+    for statement in ("DROP TRIGGER chunk_vectors_freed", "DROP INDEX chunk_vectors_by_row", "DROP TABLE vector_free"):
+        conn.execute(statement)
+    conn.pragma("user_version", 5)
+    conn.close()
+    conn = open_db(path)
+    assert conn.pragma("user_version") == SCHEMA_VERSION
+    assert conn.execute("SELECT row FROM vector_free WHERE kind = 'probe' ORDER BY row").fetchall() == [(0,), (1,), (2,)]
+    assert Engine(repo.root).search("refresh token").pending == 0

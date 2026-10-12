@@ -244,3 +244,20 @@ def test_free_rows_are_listed_for_an_index_upgraded_from_the_previous_schema(rep
     upgraded = open_db(index_path(repo.root))
     assert upgraded.execute("SELECT kind, row FROM vector_free").fetchall() == [(KIND, dead)]
     assert upgraded.execute("SELECT count(*) FROM chunk_vectors").fetchall() == [(len(chunk_ids) - 1,)]
+
+
+def test_vectors_survive_when_a_newer_chunker_processes_the_same_content_again(repo):
+    """Blobs written by an older chunker are processed again. Chunks that come out the same
+    keep their ids, so their vectors are still theirs: nothing is embedded twice."""
+    index, store, chunk_ids = ready(repo)
+    matrix = unit(30, len(chunk_ids))
+    store.add(chunk_ids, matrix)
+    rows = dict(index.conn.execute("SELECT chunk_id, row FROM chunk_vectors"))
+    # As an older build left it: seen from this session as a change made by another one.
+    open_db(index_path(repo.root)).execute("UPDATE blobs SET chunker_version = chunker_version - 1")
+    view = build_view(repo.root)
+    assert index.sync(view).indexed == 3
+    assert dict(index.conn.execute("SELECT chunk_id, row FROM chunk_vectors")) == rows
+    assert store.missing(index) == [] and store.coverage(index) == (len(chunk_ids), len(chunk_ids))
+    assert store.search(index, matrix[0], limit=1)[0][0] == chunk_ids[0]
+    assert index.conn.execute("SELECT count(*) FROM vector_free").fetchall() == [(0,)]
