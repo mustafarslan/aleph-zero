@@ -429,3 +429,16 @@ def test_a_network_that_stays_away_is_waited_for_only_so_long_and_a_stop_is_hear
     job = control(tmp_path / "other")
     assert job.wait_for("waiting for the network", lambda: True, every=0, at_most=1) is True and status(tmp_path / "other")["state"] == "running"
     assert "waiting for the network" in longrun.LIVE
+
+
+def test_a_job_that_waits_keeps_saying_so_so_that_its_last_word_does_not_go_stale(tmp_path):
+    job, looks, written = control(tmp_path), [], []
+    plain = job._write
+    job._write = lambda: written.append(1) or plain()
+
+    def ready():
+        looks.append(1)
+        return len(looks) >= 5
+
+    assert job.wait_for("waiting for the network", ready, every=0) is True
+    assert len(written) >= 5                         # at every look, not once at the start of two hours

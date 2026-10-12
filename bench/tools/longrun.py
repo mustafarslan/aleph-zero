@@ -147,7 +147,7 @@ class Control:
                 if self.found["state"] != state:
                     self.say(state)
                     self.found["state"] = state
-                    self._write()
+                self._write()               # at every look: "last word" in the status stays fresh while it waits
                 time.sleep(every)
             return False
         finally:
