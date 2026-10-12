@@ -206,3 +206,12 @@ def test_an_answer_in_doubt_says_why(repo):
     answer = Engine(repo.root).references("ExportMixin.get_queryset", direction="callers")
     assert [(r.path, r.line, r.candidates, r.certain) for r in answer.callers] == [("adm/admin.py", 6, 1, False)]
     assert "inherited past a base that is not among these files" in callgraph.text(answer)
+
+
+def test_an_empty_file_takes_part_with_nothing_and_breaks_nothing(repo):
+    """An empty `__init__.py` is stored with no facts at all; a question that goes through it must still be answered."""
+    repo.write("pkg/__init__.py", "")
+    repo.write("pkg/mod.py", "def f():\n    return 1\n")
+    repo.write("user.py", "from pkg import mod\n\ndef user():\n    return mod.f()\n")
+    answer = Engine(repo.root).references("user", direction="callees")
+    assert [(r.written, r.target, r.certain) for r in answer.callees] == [("mod.f", "f", True)]

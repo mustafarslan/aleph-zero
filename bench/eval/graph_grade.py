@@ -180,10 +180,13 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
     at = {(occurrence.start_line, occurrence.start_char): occurrence for occurrence in document.occurrences
           if not occurrence.is_definition}
     for call in found:
-        # SCIP counts columns in the unit its document says, or in UTF-16 units when it says none (four of the
-        # five indexers); Aleph in bytes. They differ only on a line with non-ASCII text before the call.
-        column = {1: call.column, 2: call.column16, 3: call.column32}.get(document.position_encoding, call.column16)
-        occurrence = at.get((call.line - 1, column if column >= 0 else call.column))
+        # SCIP counts columns in the unit its document says; Aleph in bytes. They differ only on a line with
+        # non-ASCII text before the call. Where the document names no unit, the indexer's habit is tried
+        # first (Go and Rust tools count bytes, the others UTF-16 units), then the other units.
+        in_units = {1: call.column, 2: call.column16 if call.column16 >= 0 else call.column,
+                    3: call.column32 if call.column32 >= 0 else call.column}
+        order = {1: (1,), 2: (2,), 3: (3,)}.get(document.position_encoding, (1, 2, 3) if profile.name in ("go", "rust") else (2, 3, 1))
+        occurrence = next((at[(call.line - 1, in_units[unit])] for unit in order if (call.line - 1, in_units[unit]) in at), None)
         if occurrence is None:
             continue  # SCIP resolved nothing here
         scope = path if occurrence.symbol.startswith("local ") else ""
