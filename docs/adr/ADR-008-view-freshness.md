@@ -104,3 +104,7 @@ Measured on Django (7,080 files):
 **What is given up:** the "5 ms when nothing changed" that the watcher promised. A query costs about 30 ms on a 7,000-file repository with the cache on and about 80 ms with it off.
 
 **Left open:** on Linux, inotify delivers events synchronously from the kernel queue and might not have this lag. It was not built, because it cannot be tested on this machine; if it is ever added it must pass the same "change, then ask at once" test before it is trusted. The agent's own edits could also be reported to the engine by the Claude Code mod (M4) through its tool hooks; that would be exact for those edits but not for the user's editor, so it cannot replace the git check either.
+
+## Sparse checkouts, partial clones, submodules (M3, 2026-10-12)
+
+What a view contains in those cases, and how a query makes sure the index it reads still holds the view it checked, are in ADR-010.

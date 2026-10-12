@@ -203,6 +203,11 @@ def _upgrade_5(conn: apsw.Connection) -> None:
 _UPGRADES = {4: _upgrade_4, 5: _upgrade_5}
 
 
+def upgradable() -> frozenset[int]:
+    """Schema versions this build brings up to date in place."""
+    return frozenset(_UPGRADES)
+
+
 def _retry_while_busy(action, seconds: float = 10.0):
     """Two sessions can open a brand-new index at the same instant. Switching to WAL
     needs a moment of exclusive access and fails at once instead of waiting, so retry."""

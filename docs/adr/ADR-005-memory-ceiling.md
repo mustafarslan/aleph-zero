@@ -85,7 +85,7 @@ Other M0 readings: MCP attach 1.36 s on the first launch and 0.25 s after. One s
 ## Mechanisms kept from the first decision
 
 - Vectors are served from a memory-mapped sidecar file, shared by the OS across sessions: a 256-d scan takes 2.6 ms at 100k vectors and 7.9 ms at 300k with negligible private memory.
-- A watchdog in each session reads its private memory after each call.
+- A watchdog in each session reads its private memory after each call. (Not built until M3; as built, see ADR-010: one system call after every answer, and a release of caches over 130 MB.)
 - Brute-force dense search caps a view at roughly 300k chunks.
 
 ## Views consulted

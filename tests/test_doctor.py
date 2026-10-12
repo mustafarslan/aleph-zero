@@ -75,3 +75,21 @@ def test_doctor_says_when_the_index_is_not_beside_gits_data(repo, monkeypatch):
     finally:
         db.forget_state_dirs()
     assert rows["index location"].level == "note" and "network" in rows["index location"].detail
+
+
+def test_doctor_describes_the_vector_file(repo, fake_worker, monkeypatch, capsys):
+    import numpy as np
+
+    from aleph_zero.indexer import Index
+    from aleph_zero.store import index_path, open_db
+    from aleph_zero.vectors import WIDTH, VectorStore
+    from aleph_zero.view import build_view
+
+    index = Index(open_db(index_path(repo.root)))
+    index.sync(build_view(repo.root))
+    ids = [row[0] for row in index.conn.execute("SELECT chunk_id FROM temp.view_chunks ORDER BY chunk_id")][:2]
+    rows = np.ones((2, WIDTH), dtype=np.float32) / np.sqrt(WIDTH)
+    VectorStore(index.conn, index_path(repo.root).parent, "kind/p1/256").add(ids, rows)
+    index.conn.close()
+    code, out = run(capsys, "--cwd", str(repo.root), "doctor")
+    assert "2 rows in use, 0 free to be used again" in out

@@ -12,6 +12,7 @@ import apsw
 from . import gitio, lang
 from .lang import parse
 from .store import SCHEMA_VERSION, index_file, state_reason
+from .store import db as store_db
 from .store.db import MIN_SQLITE
 from .view import build_view
 
@@ -50,6 +51,13 @@ def _checkout(cwd: Path) -> list[Row]:
     if worktree.outside_checkout:
         rows.append(Row("note", "sparse checkout", f"sparse checkout: {worktree.outside_checkout} tracked files are "
                         "outside it and are not searched"))
+    try:
+        promisor = gitio.git(worktree.info.root, "config", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.promisor)$")
+    except gitio.GitError:
+        promisor = b""  # git exits 1 when no such setting exists: a full clone
+    if promisor.strip():
+        rows.append(Row("note", "partial clone", "partial clone: a file whose content git has not fetched is not searched, "
+                        "and nothing is fetched to answer a query; `aleph status` counts such files (unreadable)"))
     if worktree.submodules:
         listed = ", ".join(worktree.submodules[:5]) + (" ..." if len(worktree.submodules) > 5 else "")
         rows.append(Row("note", "submodules", f"submodules are not searched ({listed}); link one as a source "
@@ -118,8 +126,31 @@ def _index(path: Path) -> Row:
         return Row("FAIL", "index", f"index: {path} cannot be read ({type(exc).__name__}); it is a cache: the next search sets it aside and builds a new one")
     if verdict != "ok":
         return Row("FAIL", "index", f"index: {path} is damaged ({verdict}); it is a cache: the next search sets it aside and builds a new one")
-    age = "" if version == SCHEMA_VERSION else f", schema {version} (this build writes {SCHEMA_VERSION} and will rebuild it)"
-    return Row("ok", "index", f"index: {path} ({path.stat().st_size / 1e6:.1f} MB{age})")
+    if version == SCHEMA_VERSION:
+        age = ""
+    elif version in store_db.upgradable():
+        age = f", schema {version} (this build writes {SCHEMA_VERSION} and brings it up to date on first use; nothing is lost)"
+    else:
+        age = f", schema {version} (this build writes {SCHEMA_VERSION} and will rebuild it)"
+    return Row("ok", "index", f"index: {path} ({path.stat().st_size / 1e6:.1f} MB{age}{_vector_file(path)})")
+
+
+def _vector_file(index: Path) -> str:
+    """The vector files beside the index, in a few words."""
+    found = sorted(index.parent.glob("vectors.*.f16"))
+    if not found:
+        return ""
+    size = sum(path.stat().st_size for path in found)
+    try:
+        conn = apsw.Connection(str(index), flags=apsw.SQLITE_OPEN_READONLY)
+        try:
+            free = conn.execute("SELECT count(*) FROM vector_free").fetchall()[0][0]
+            used = conn.execute("SELECT count(*) FROM chunk_vectors").fetchall()[0][0]
+        finally:
+            conn.close()
+    except apsw.Error:
+        return f"; vectors {size / 1e6:.1f} MB"
+    return f"; vectors {size / 1e6:.1f} MB, {used} rows in use, {free} free to be used again"
 
 
 def _untracked_cache(root: Path) -> Row:

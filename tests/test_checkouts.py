@@ -177,3 +177,12 @@ def test_the_server_stays_up_in_a_directory_that_is_not_a_repository(tmp_path):
         assert client.request("tools/list")["result"]["tools"]
     finally:
         client.close()
+
+
+def test_doctor_says_what_a_partial_clone_means_for_search(origin, tmp_path, capsys):
+    root = clone(origin, tmp_path / "partial", "--filter=blob:none")
+    cli.main(["--cwd", str(root), "doctor"])
+    out = capsys.readouterr().out
+    assert "partial clone" in out and "unreadable" in out
+    cli.main(["--cwd", str(origin.root), "doctor"])
+    assert "partial clone" not in capsys.readouterr().out

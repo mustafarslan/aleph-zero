@@ -133,3 +133,7 @@ A file with no language profile (JSON, YAML, SQL fixtures, templates, configurat
 - **Quality.** On the 35-question Loc-Bench pilot (Django), leaving them out of the vector candidates raised recall@10 with vectors from 0.771 to 0.800 on the whole issue text and from 0.743 to 0.771 on the issue title, and vectors alone from 0.629 to 0.686. Thirty-five questions cannot prove a gain, and they are part of the set the verdict was later read on, so this is not independent evidence. The decision rests on the cost.
 
 Coverage figures count only chunks that should have a vector.
+
+## Rows are used again (M3, 2026-10-12)
+
+Until M3 a row of the vector file was never reused, and the file grew with every chunk ever embedded. A row whose chunk is collected now goes on a free list and is given to the next chunk; the file stops growing and does not shrink. A chunk's hash no longer includes the chunker's version, so a newer chunker keeps the vectors of chunks it leaves unchanged. Both are described in ADR-010.

@@ -261,3 +261,37 @@ def test_vectors_survive_when_a_newer_chunker_processes_the_same_content_again(r
     assert store.missing(index) == [] and store.coverage(index) == (len(chunk_ids), len(chunk_ids))
     assert store.search(index, matrix[0], limit=1)[0][0] == chunk_ids[0]
     assert index.conn.execute("SELECT count(*) FROM vector_free").fetchall() == [(0,)]
+
+
+def test_a_vector_file_cut_short_leaves_the_row_accounts_in_step_with_the_file(repo):
+    """The file lost its tail (restored from an older copy, cut by a full disk). Rows it no
+    longer holds are forgotten, and they must not be handed out as free rows: every row,
+    in use or free, is a row the file has."""
+    import os
+
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids, unit(40, len(chunk_ids)))
+    kept = 2
+    os.truncate(store.path, kept * vectors.ROW_BYTES)
+    again = VectorStore(index.conn, index_path(repo.root).parent, KIND)
+    one = lambda sql: index.conn.execute(sql).fetchall()[0][0]  # noqa: E731
+    assert one("SELECT count(*) FROM chunk_vectors") == kept
+    assert one("SELECT next_row FROM vector_files") == kept
+    assert one("SELECT count(*) FROM vector_free") == 0
+    missing = again.missing(index)
+    assert len(missing) == len(chunk_ids) - kept
+    again.add(missing, unit(41, len(missing)))
+    assert again.path.stat().st_size == len(chunk_ids) * vectors.ROW_BYTES == one("SELECT next_row FROM vector_files") * vectors.ROW_BYTES
+    assert again.coverage(index) == (len(chunk_ids), len(chunk_ids))
+
+
+def test_a_deleted_vector_file_starts_again_from_nothing(repo):
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids, unit(42, len(chunk_ids)))
+    store.path.unlink()
+    again = VectorStore(index.conn, index_path(repo.root).parent, KIND)
+    one = lambda sql: index.conn.execute(sql).fetchall()[0][0]  # noqa: E731
+    assert (one("SELECT count(*) FROM chunk_vectors"), one("SELECT next_row FROM vector_files"),
+            one("SELECT count(*) FROM vector_free")) == (0, 0, 0)
+    again.add(chunk_ids[:1], unit(43, 1))
+    assert again.path.stat().st_size == vectors.ROW_BYTES

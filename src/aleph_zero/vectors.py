@@ -190,8 +190,9 @@ class VectorStore:
         return self._map
 
     def _recover(self) -> None:
-        """Forget rows the file does not hold. The flush before commit makes this rare: it
-        takes a file that was truncated or replaced, or a database restored without it."""
+        """Bring the row accounts in step with the file: forget rows it does not hold, in use
+        or free, and count its length as it is. The flush before commit makes this rare: it
+        takes a file that was cut short, deleted or replaced, or a database restored without it."""
         def rows_on_disk() -> int:
             try:
                 return os.path.getsize(self.path) // ROW_BYTES
@@ -199,9 +200,14 @@ class VectorStore:
                 return 0
 
         beyond = self.conn.execute(
-            "SELECT 1 FROM chunk_vectors WHERE kind = ? AND row >= ? LIMIT 1", (self.kind, rows_on_disk())).fetchall()
+            "SELECT 1 FROM vector_files WHERE kind = ? AND next_row > ?", (self.kind, rows_on_disk())).fetchall()
         if beyond:
             with transaction(self.conn):
                 # Measured again under the write lock: a session that was adding rows while we
                 # looked has finished, and its rows must not be taken for missing ones.
-                self.conn.execute("DELETE FROM chunk_vectors WHERE kind = ? AND row >= ?", (self.kind, rows_on_disk()))
+                held = rows_on_disk()
+                self.conn.execute("DELETE FROM chunk_vectors WHERE kind = ? AND row >= ?", (self.kind, held))
+                # After the delete: its trigger has just put those rows on the free list.
+                self.conn.execute("DELETE FROM vector_free WHERE kind = ? AND row >= ?", (self.kind, held))
+                self.conn.execute("UPDATE vector_files SET next_row = ?, writes = writes + 1 "
+                                  "WHERE kind = ? AND next_row > ?", (held, self.kind, held))

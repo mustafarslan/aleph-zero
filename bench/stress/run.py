@@ -40,6 +40,7 @@ from aleph_zero import memstat
 
 ROOT = Path(__file__).resolve().parents[2]
 SESSION_LIMIT_MB = 130
+BUDGET_MB = 1024   # four sessions and the embedding worker (ADR-005)
 SEEN_REFRESH_SECONDS = 5
 COLLECT_AGE_SECONDS = 40
 WORDS = ("ledger", "beacon", "harbor", "quartz", "lantern", "meadow", "cinder", "pylon", "saddle", "thicket")
@@ -390,15 +391,38 @@ class Run:
                 self.collected[key] += removed.get(key, 0)
 
     def measure(self, sessions: list[Session]) -> None:
+        """Private memory of every session, and of the worker and its supervisor, every ten
+        seconds. Each session has its limit; all of them with the worker have the budget."""
         while not self.stop.wait(10):
+            total = 0.0
             for session in sessions:
                 try:
                     megabytes = memstat.private_bytes(session.proc.pid) / 1e6
                 except memstat.MemstatError:
                     continue
+                total += megabytes
                 self.memory_mb[session.name] = max(self.memory_mb.get(session.name, 0.0), megabytes)
                 if megabytes > SESSION_LIMIT_MB:
                     self.fail(f"{session.name}: {megabytes:.0f} MB of private memory, over {SESSION_LIMIT_MB} MB")
+            for name, pid in self.worker_pids().items():
+                try:
+                    megabytes = memstat.private_bytes(pid) / 1e6
+                except memstat.MemstatError:
+                    continue
+                total += megabytes
+                self.memory_mb[name] = max(self.memory_mb.get(name, 0.0), megabytes)
+            self.memory_mb["all together"] = max(self.memory_mb.get("all together", 0.0), total)
+            if total > BUDGET_MB:
+                self.fail(f"{total:.0f} MB of private memory in all, over the budget of {BUDGET_MB} MB")
+
+    def worker_pids(self) -> dict[str, int]:
+        cache = Path(self.env.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+        try:
+            state = json.loads((cache / "aleph-zero" / "worker" / "state.json").read_text())
+        except (OSError, ValueError):
+            return {}
+        return {name: state[key] for name, key in (("worker", "worker_pid"), ("supervisor", "supervisor_pid"))
+                if isinstance(state.get(key), int)}
 
     # ---- the end -----------------------------------------------------------------------------------------
 

@@ -58,8 +58,16 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **What:** oxn requires `tree-sitter>=0.25` with no upper bound; 0.26.0 crashes on large trees in a way Aleph pins against (ADR-007). oxn 0.1.2 was not observed to crash.
 - **Why it waits:** the oxn checkout is not to be modified from here.
 
-## 7. Carried to later milestones (recorded in the design)
+## 7. Left out of M3 on purpose (ADR-010)
 
-- M3: C prototypes behind an unknown macro in `.c` files; methods of object literals and chained-assignment lambdas as symbols; a trigram index for Chinese, Japanese and Korean text; file names that are not valid UTF-8 (test on Linux); reclaiming space in the vector file; a Linux file-system check, if it passes the "change, then ask at once" test.
-- M4: the Claude Code plugin manifest (with the mod); marking a hit whose path is not on disk; the 2026 MCP handshake.
+- **Searching a directory that is not a git repository.** Today it gets one clear sentence (`git init`). Doing it properly needs its own way to list, hash and watch files, and a rule against walking a home directory. Planned for M10; say if you want it sooner.
+- **Things that need Linux:** file names that are not valid UTF-8 (cannot be created on macOS); reading a session's own memory there is written (`/proc/self/smaps_rollup`) but has only been run on macOS; the network-filesystem check reads `/proc/self/mountinfo` and is likewise untested there; a file-system watcher, if it passes the "change, then ask at once" test.
+- **Two installed versions of Aleph with different chunkers sharing one index** re-process each other's content on every switch (vectors survive it since M3). Matters when more than one version is in use: M10.
+- **The vector file never shrinks.** Rows of collected content are used again, so it stops growing, but after a very large branch is abandoned the file stays at its high-water mark (150 MB per 300,000 chunks). Deleting `vectors.*.f16` and running `aleph embed run` rebuilds it.
+- **A trigram index for text written without spaces** (Chinese, Japanese, Korean): no repository in use needs it.
+- **Plain values of object literals** (`limit: 10`) are not listed as symbols; functions in them are.
+
+## 8. Carried to later milestones (recorded in the design)
+
+- M4: the Claude Code plugin manifest (with the mod); the 2026 MCP handshake.
 - M2, still open: whether one query prefix serves both code and documentation (needs questions whose answers are documentation).
