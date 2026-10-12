@@ -77,7 +77,9 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 ## 5. Fixes proposed for Aeon v4
 
 - **What:** the list in ADR-006 (multi-process safety, id reassignment on replay, index rebuilt before replay).
-- **Why it waits:** nothing is committed in the Aeon repository without the owner's go-ahead. Needed when M6 (the memory layer) starts.
+- **Why it waits:** nothing is committed in the Aeon repository without the owner's go-ahead.
+- **This is what blocks the next milestone.** M0 to M5 are merged (2026-10-12). M6, the memory layer, is next, and ADR-006 lists three changes Aeon needs before Aleph's first write: heavy dependencies moved into optional extras (a plain install must not download PyTorch), the write-ahead log replayed before the search index is rebuilt, and event ids kept across a replay. With your go-ahead they are made on a branch off `v4` in the Aeon checkout; M6 also needs its own short design first (ADR-006 says so), which I can draft for you to read without touching Aeon.
+- **After M6:** M7 to M10 (code graph, knowledge graph, SCIP, public release) each ship only if the A/B measurement improves, so they wait for entry 0.
 
 ## 6. An upper bound on tree-sitter in oxn
 
