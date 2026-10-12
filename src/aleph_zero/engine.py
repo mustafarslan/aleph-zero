@@ -16,7 +16,7 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, lang, render, sources, symbols
+from . import dense_policy, gitio, lang, render, sources, symbols
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
 from .indexer import Index
@@ -63,10 +63,13 @@ def deadline(conn: apsw.Connection, until: float | None, stop: threading.Event |
 
 
 class Engine:
-    def __init__(self, default_cwd: Path | None = None, dense: bool = False) -> None:
+    def __init__(self, default_cwd: Path | None = None, dense: bool | None = None) -> None:
         self.default_cwd = Path(default_cwd) if default_cwd is not None else Path.cwd()
-        self.dense = dense  # semantic search: off unless asked for, until Benchmark C decides (ADR-002)
+        # Semantic search: True or False is the owner's choice; None follows the benchmark
+        # verdict for each worktree's main language (dense_policy).
+        self.dense = dense
         self._stores: dict[Path, object] = {}
+        self._decisions: dict[int, tuple] = {}
         self._embedder = None  # the connection to the worker used for queries
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._shown: set[tuple] = set()
@@ -158,6 +161,7 @@ class Engine:
         index = self._index(view)
         pending = index.sync(view, budget_seconds=0.0).pending
         counts = index.counts()
+        shares = index.languages()
         try:
             linked, problem = sources.describe(view.common_dir), ""
         except sources.SourceError as exc:
@@ -169,6 +173,8 @@ class Engine:
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
             "sources": linked, **({"sources_error": problem} if problem else {}),
+            "main_language": next(iter(shares), None),
+            "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
         }
 
@@ -201,12 +207,29 @@ class Engine:
         from .embed.client import VECTOR_KIND
 
         have, total = self._store(index, view).coverage(index)
-        return {"enabled": self.dense, "kind": VECTOR_KIND, "with_vector": have, "chunks": total}
+        enabled, why = self._dense_decision(index)
+        return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total}
+
+    def _dense_decision(self, index: Index) -> tuple[bool, str]:
+        """Whether vectors take part for the worktree this index is synced to, and why."""
+        if self.dense is not None:
+            return dense_policy.decide(self.dense, None)
+        key = index._view_epoch
+        cached = self._decisions.get(id(index))
+        if cached is None or cached[0] != key:
+            cached = (key, dense_policy.decide(None, next(iter(index.languages()), None)))
+            self._decisions[id(index)] = cached
+        return cached[1]
+
+    def dense_enabled(self, cwd: Path | str | None = None) -> bool:
+        """Whether vectors take part for the worktree containing `cwd`. Does not index."""
+        index, _, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
+        return self._dense_decision(index)[0]
 
     def _dense(self, index: Index, view: View, query: str):
         """How vectors take part in this query: (note, chunks covered, chunks, the function
         that ranks by vector or None). Nothing here may fail or delay the query."""
-        if not self.dense:
+        if not self._dense_decision(index)[0]:
             return "", 0, 0, None
         from .embed import worker
         from .embed.client import EmbedClient, Unavailable

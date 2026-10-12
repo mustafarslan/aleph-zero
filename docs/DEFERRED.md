@@ -4,7 +4,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 ## 1. The long GPU run for Benchmark C (decides whether semantic search is on by default)
 
-- **What:** embed the large Loc-Bench repositories so the benchmark has about 400 questions instead of 235. The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.
+- **What:** embed the large Loc-Bench repositories so the Python benchmark has about 400 questions instead of 235. This decides Python only (see 1b for the other languages). The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.
 - **Why it waits:** it keeps the GPU busy for a long time. The first estimate was about a day. That was made while the worker was degrading with uptime and before data files were excluded from embedding; with both fixed it is probably 6 to 12 hours, but that is a guess until one large repository has been timed. It also fetches these public repositories from GitHub (several GB): vllm, pandas, scikit-learn, transformers, ray, scipy, keras, sympy, qiskit, ultralytics, matplotlib, numpy, mlflow, phidata, streamlit, pytorch-lightning, checkov, pypdf.
 - **Decide first:** read the 235-question result (`bench/data/results/benchmark_c.json`, summarised in ADR-002 when it is in). If the gain on the title form is clearly above 5 points or clearly near zero, the long run may not be needed.
 - **How to start it** (it can be interrupted and resumed; run it when the machine is otherwise idle, and do not run the test suite at the same time):
@@ -15,6 +15,14 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
   A commit with more than 250,000 chunks is skipped (`--max-chunks`); the last line of `prepare` says how many were skipped or left partly embedded.
 - **Status:** not started. Waiting for the owner's go-ahead.
+
+## 1b. Benchmarks for the languages other than Python
+
+- **What:** the gate is read per language (ADR-002), and Loc-Bench is Python only. For C++, C, Go, Java, JavaScript, TypeScript and Rust there are no questions yet, so those languages have no verdict and search by meaning stays off for projects written mainly in them.
+- **Order:** by the projects Aleph is activated on. Today that is Python (aleph-zero, oxn, private repository C, and 63% of aeon), then C++ (35% of aeon). The others wait until a project in that language is activated.
+- **Question sets found, not fetched:** SWE-bench Multilingual (`SWE-bench/SWE-bench_Multilingual` on Hugging Face: 300 questions, about 12 to 38 per language) and Multi-SWE-bench (`ByteDance-Seed/Multi-SWE-bench`: more repositories per language, among them fmt, nlohmann/json, simdjson, Catch2 and cpp-httplib for C++). Thirty-five questions per language cannot resolve 5 points, so both sets are needed per language.
+- **What it costs:** the benchmark harness needs an adapter for each set (the gold files are the files in the fix's patch); then, per language, fetching five to ten public repositories and some hours of GPU embedding.
+- **Status:** not started. C++ is next after the Python verdict, with the owner's go-ahead, since it is another GPU run.
 
 ## 2. Fifty hand-written questions for Benchmark C
 

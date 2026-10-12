@@ -39,7 +39,7 @@ def _index(args) -> int:
 
 
 def _search(args) -> int:
-    engine = Engine(args.cwd, dense=args.dense or os.environ.get("ALEPH_DENSE") == "1")
+    engine = Engine(args.cwd, dense=_dense_setting(args))
     answer = engine.search(args.query, k=args.k, kind=args.kind, path_glob=args.glob, lang=args.lang,
                            timeout_ms=args.timeout_ms)
     if args.json:
@@ -73,10 +73,20 @@ def _status(args) -> int:
     return 0
 
 
+def _dense_setting(args) -> bool | None:
+    """The owner's choice about search by meaning: a flag, else ALEPH_DENSE=1 or 0, else
+    None, which lets the benchmark verdict for the project's main language decide."""
+    if getattr(args, "dense", False):
+        return True
+    if getattr(args, "no_dense", False):
+        return False
+    return {"1": True, "0": False}.get(os.environ.get("ALEPH_DENSE", ""))
+
+
 def _serve(args) -> int:
     from . import server  # only this command needs it
 
-    return server.main(Engine(args.cwd, dense=os.environ.get("ALEPH_DENSE") == "1"))
+    return server.main(Engine(args.cwd, dense=_dense_setting(args)))
 
 
 def _source(args) -> int:
@@ -162,7 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("--detail", choices=render.DETAILS, default="snippets")
     find.add_argument("--budget-tokens", type=int, default=render.DEFAULT_BUDGET, help="ceiling for the text answer")
     find.add_argument("--timeout-ms", type=int, help="answer within this time, marked partial if cut short")
-    find.add_argument("--dense", action="store_true", help="also search by meaning (needs `aleph embed run` first)")
+    meaning = find.add_mutually_exclusive_group()
+    meaning.add_argument("--dense", action="store_true", help="also search by meaning (needs `aleph embed run` first)")
+    meaning.add_argument("--no-dense", action="store_true", help="search by words and names only")
     find.add_argument("--json", action="store_true")
     find.set_defaults(run=_search)
 

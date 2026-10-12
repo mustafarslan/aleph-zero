@@ -201,6 +201,20 @@ class Index:
                 )
         self._scope = (self._view_epoch, kind, key)
 
+    def languages(self) -> dict[str, float]:
+        """The share of each programming language in the view's indexed source, by size.
+        Documentation, data files and anything without a language profile are left out."""
+        sizes = dict(self.conn.execute(
+            "SELECT b.family, sum(b.size) FROM blobs b JOIN temp.view_blobs v "
+            "ON v.blob_oid = b.blob_oid AND v.family = b.family WHERE b.kind NOT LIKE 'skip:%' GROUP BY b.family"))
+        code: dict[str, int] = {}
+        for family, size in sizes.items():
+            if family in lang.PROFILES:
+                name = "typescript" if family == "tsx" else family
+                code[name] = code.get(name, 0) + size
+        total = sum(code.values())
+        return {name: size / total for name, size in sorted(code.items(), key=lambda item: -item[1])} if total else {}
+
     def counts(self) -> dict[str, int]:
         one = lambda sql: self.conn.execute(sql).fetchall()[0][0]  # noqa: E731
         return {

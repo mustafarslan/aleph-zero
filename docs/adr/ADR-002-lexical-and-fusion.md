@@ -98,6 +98,15 @@ M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at 
 
 **Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.
 
+## The gate is per language (owner's instruction, 2026-10-12)
+
+Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.
+
+- `aleph status` reports a worktree's main language and each language's share of its source (documentation and data files are not counted).
+- `dense_policy.VERDICTS` holds one verdict per language, filled in from Benchmark C. A language without a verdict is off: nothing is switched on by default on the strength of another language's result. `--dense`, `--no-dense` and `ALEPH_DENSE=1|0` are the owner's override.
+- The benchmarks are run in the order of the projects Aleph is activated on. Measured on 2026-10-12, by size of source: aleph-zero 99% Python; oxn 100% Python; private repository C 100% Python; aeon 63% Python, 35% C++. So Python first (under way), then C++.
+- Question sets with the same shape as Loc-Bench (issue text, files edited by the fix) exist for the other languages: SWE-bench Multilingual (300 questions: Go 38, Java 35, Rust 35, C 27, JavaScript 25, TypeScript 17, C++ 12, and PHP and Ruby, which Aleph has no profile for) and Multi-SWE-bench (repositories in C, C++, Go, Java, JavaScript, TypeScript, Rust). About 35 questions per language cannot resolve a 5-point gate, so each language needs both sets. None has been fetched or run; they are listed in `docs/DEFERRED.md`.
+
 ## Known limits
 
 - **Languages written without spaces.** Words are recognised in every script, and case and diacritics are folded, so German, Russian or Greek text is searchable. Chinese, Japanese and Korean text is indexed as whole runs between spaces and punctuation, so a query finds a run only if it equals it. Closing this needs a second index with FTS5's trigram tokenizer; it is planned for M3 if the benchmark repositories show a need.

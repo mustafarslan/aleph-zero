@@ -112,8 +112,8 @@ class _Background:
     ROUND_SECONDS = 10     # one stretch of embedding before checking whether to go on
     RETRY_SECONDS = 60     # after the worker was unavailable or another session was embedding
 
-    def __init__(self, default_cwd) -> None:
-        self._engine = Engine(default_cwd, dense=True)
+    def __init__(self, default_cwd, dense: bool | None) -> None:
+        self._engine = Engine(default_cwd, dense=dense)
         self._wanted: queue.Queue = queue.Queue()
         self._stopping = threading.Event()
         self._thread = threading.Thread(target=self._work, name="aleph-embed", daemon=True)
@@ -135,6 +135,8 @@ class _Background:
                 cwd = self._wanted.get()
             while not self._stopping.is_set():
                 try:
+                    if not self._engine.dense_enabled(cwd):
+                        break  # this worktree's language has no verdict in favour of vectors
                     report = self._engine.embed(cwd, budget_seconds=self.ROUND_SECONDS, stop=self._stopping.is_set,
                                                 sync_seconds=0.0)  # indexing is the foreground's job
                 except Exception:  # noqa: BLE001 - not a repository any more, a locked index: try again on the next call
@@ -147,7 +149,7 @@ class _Background:
 
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     """Answer requests from `incoming` on `outgoing` until the input closes."""
-    background = _Background(engine.default_cwd) if engine.dense else None
+    background = _Background(engine.default_cwd, engine.dense) if engine.dense is not False else None
     write_lock = threading.Lock()
     state = threading.Lock()      # guards the three names below
     calls: queue.Queue = queue.Queue()
