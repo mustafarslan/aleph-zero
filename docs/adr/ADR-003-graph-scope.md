@@ -135,12 +135,34 @@ The six corpora are both what the resolver was developed against and what it is 
 
 ### What is not answered, and what is not known
 
-- **Functions defined inside functions** are not definitions in Aleph (M1), so a call to one gets no answer. That is 36% of eslint's graded calls and most of its distance from the others.
+- **Functions defined inside functions** were not answered in M7 (36% of eslint's graded calls). They are since M7b: see "Inner functions" below. They are still not found by `symbol` or shown by `outline`, and `callers` of one is not answered.
 - **httpx:** 27.7% of the call sites SCIP resolves are excluded as untrustworthy by the protocol (scip-python resolves re-exported names to a place that contradicts what is written). oxn reports 19% for the same corpus; the difference was not traced.
 - **The oracle is not the truth.** Where SCIP cannot follow a destructured `require` it names the local constant; Aleph's answer, the class or function in the other file, is graded wrong.
 - **Cost:** the first graph question about a worktree reads every code file: 3.6 s for Django's 2,280 code files, of which the readers themselves are about 1.8 s and the rest is reading the files from git and writing the rows. After that a question costs 6 to 94 ms on Django beyond finding the view, and the graph keeps about 15 MB of Python objects once it has touched 500 large files (the limit it keeps loaded). A name mentioned in more than 3,000 chunks is answered from the first 3,000 and says so.
 - **Callers that are not found:** a caller that reaches a definition through a default export under a name of its own (`import s from './util'`), or under a name built at run time, does not mention the definition's name, and the text index is what finds callers. A name with no letter or digit in it (`$`) cannot be looked up; the answer says so.
 - **Linked sources:** an absolute Python import inside a linked repository is not followed.
+
+## Inner functions (M7b, 2026-10-12)
+
+**What changed.** A call to a function defined inside the function it is called from, or to a local name bound to a function written there (`const f = () => …`, `f = lambda: …`, `f := func() {…}`, `let f = |x| …`), is answered with that function: same file, by syntax. It is certain when the nearest scope that binds the name binds it once, to a function, and the file never assigns to the name again; a name assigned again, or defined on both sides of an `if`, is answered and not stamped certain. A name also bound as a parameter, or to anything that is not a function, is not answered, as before. Only the code graph changed: its per-file facts are read again on the next graph question (they are filled lazily), and nothing is indexed or embedded again. An inner function is a target and nothing else: `symbol` and `outline` print what they printed, and `callers` of one is not answered (whether they should show there is the owner's, DEFERRED entry 9).
+
+**Measured**, by the plan written before the code: the same harness, protocol and nine corpora as above, the baseline run again first (it reproduced, but for one go-kit site that a grader fix made a minute after M7's result file now matches). Confident precision / confident recall, then certain precision over all sites / certain recall; the six first, the held-out three once afterwards.
+
+| Corpus | Confident before | Confident after | Certain before | Certain after | Inner answers (correct of confident) |
+|---|---|---|---|---|---|
+| go-kit | 100.0 / 80.7 | 100.0 / 81.6 | 100.0 / 76.4 | 100.0 / 77.3 | 18 of 18 |
+| ripgrep | 100.0 / 60.1 | 100.0 / 60.7 | 99.97 / 56.2 | 99.97 / 56.9 | 44 of 44 |
+| nest | 100.0 / 80.1 | 100.0 / 82.5 | 100.0 / 78.9 | 100.0 / 81.3 | 222 of 222 |
+| httpx | 100.0 / 87.5 | 100.0 / 89.7 | 99.76 / 81.8 | 99.77 / 84.0 | 34 of 34 |
+| eslint | 99.95 / 48.5 | 99.97 / **81.3** | 99.97 / 46.9 | 99.98 / 78.1 | 5,012 of 5,012 |
+| petclinic | 100.0 / 94.6 | unchanged | 100.0 / 87.3 | unchanged | none |
+| fastapi (held-out) | 100.0 / 72.2 | 100.0 / 73.1 | 100.0 / 71.6 | 100.0 / 72.4 | 48 of 48 |
+| routing-controllers (held-out) | 98.22 / 82.4 | 98.28 / 85.0 | 100.0 / 74.0 | 100.0 / 76.6 | 7 of 7 |
+| flask (held-out) | 100.0 / 69.3 | **99.18** / 76.9 | 100.0 / 63.0 | **99.11** / 70.6 | 33 of 36 by the protocol |
+
+- **Flask's three.** The plan's condition was that no precision figure falls, and Flask's fell by three answers. Read in the source and in the index: three test methods of one class each define a function holding a function `generate` (or `gen`) and call it a few lines below. Aleph answers each call with the function defined just above it. scip-python names all of them with one symbol (it leaves the functions around an inner function out of the name), so that symbol has three definitions, and the grader's truth is the first of them, whichever is called. The figure is reported as measured; no rule was changed for it, because the only change that would satisfy the grader is to answer with the wrong function. The grader now counts apart the answers it calls wrong that sit at a further definition of the very symbol the index names: 3 on Flask, none on the other eight.
+- **ripgrep** also has 7 calls answered with several candidates (a name bound to a closure twice in one function; in Rust the later `let` shadows the earlier): not confident, not certain, 4 of the 7 with the right one first.
+- **The rule check** (each rule of the resolver broken in turn) catches all 39 of M7's mutations and the two added for this rule.
 
 ## The knowledge graph as built and measured (M8, 2026-10-12)
 
