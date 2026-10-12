@@ -162,3 +162,20 @@ def test_the_ranking_that_was_measured_is_the_default():
     assert [number for number, _ in default] == [3, 1, 2]
     assert default != [(hit.number, hit.score) for hit in decisions.Records(records, stems=True).rank(task)]
     assert default != [(hit.number, hit.score) for hit in decisions.Records(records, b=0.4).rank(task)]
+
+
+def test_a_path_outside_the_worktree_is_said_to_be_and_a_half_read_oxn_yaml_says_so(repo):
+    from aleph_zero import architecture
+    from aleph_zero.engine import Engine
+
+    repo.write("oxn.yaml", "layers:\n  api: [\"src/api/*\"]\n  odd: {include: [\"x/*\"]}\n  nested:\n    include: [\"y/*\"]\ncontracts:\n  - name: c\n    kind: layered\n    order: [api]\n")
+    repo.write("src/api/a.py", "x = 1\n")
+    engine = Engine(repo.root)
+    outside = engine.decisions("", path="/etc/passwd")
+    assert outside.place == ["/etc/passwd is not a path of this worktree"] and outside.governing == []
+    assert engine.decisions("", path="../elsewhere/x.py").place == ["../elsewhere/x.py is not a path of this worktree"]
+    inside = engine.decisions("", path="src/api/a.py")
+    assert inside.place[0].startswith("layer api") and inside.place[-1] == "note: 3 lines of oxn.yaml's layers and contracts were not understood"
+    assert architecture.unread("layers:\n  api: [\"src/api/*\"]\ncontracts:\n  - name: c\n    kind: layered\n    order: [api]\n") == 0
+    assert [layer.name for layer in architecture.read("layers:\n  globs: [\"x/{a,b}/*\", 'it''s/*']\n")[0]] == ["globs"]
+    assert architecture.read("layers:\n  globs: [\"x/{a,b}/*\", \"y/*\"]\n")[0][0].patterns == ("x/{a,b}/*", "y/*")     # a comma inside quotes

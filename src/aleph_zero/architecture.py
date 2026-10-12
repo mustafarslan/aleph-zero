@@ -38,24 +38,40 @@ def covers(patterns, path: str) -> bool:
 
 def read(text: str) -> tuple[list[Layer], list[Contract]]:
     """The layers and contracts a file declares, in its order; nothing for what cannot be read."""
+    layers, contracts, _ = _parse(text)
+    return layers, contracts
+
+
+def unread(text: str) -> int:
+    """How many lines of the two sections said something this reader did not understand: a file half read
+    must not look like a file that says less."""
+    return _parse(text)[2]
+
+
+def _parse(text: str) -> tuple[list[Layer], list[Contract], int]:
     layers: list[list] = []
     contracts: list[dict] = []
-    section, open_list, item_indent = "", None, 0
+    section, open_list, item_indent, layer_indent, skipped = "", None, 0, None, 0
     for indent, line, number in _entries(text):
         if indent == 0 and not line.startswith("- "):
-            section, open_list = (line[:-1] if line in ("layers:", "contracts:") else ""), None
+            section, open_list, layer_indent = (line[:-1] if line in ("layers:", "contracts:") else ""), None, None
             continue
         if section == "layers":
             if line.startswith("- "):
                 if open_list is not None:
                     open_list.append(_scalar(line[2:]))
+                else:
+                    skipped += 1
                 continue
             name, colon, value = line.partition(":")
-            open_list = _flow(value) if value.strip() else []
-            if colon and _plain(name) and (not value.strip() or value.strip().startswith("[")):
+            layer_indent = indent if layer_indent is None else layer_indent
+            listed = not value.strip() or value.strip().startswith("[")
+            if colon and _plain(name) and listed and indent == layer_indent:
+                open_list = _flow(value) if value.strip() else []
                 layers.append([_scalar(name), open_list, number])
-            else:
+            else:       # a mapping under a layer, a value that is no list: not a layer of that name
                 open_list = None
+                skipped += 1
         elif section == "contracts":
             if line.startswith("- ") and (not contracts or indent <= item_indent or open_list is None):
                 contracts.append({"line": number})
@@ -65,6 +81,7 @@ def read(text: str) -> tuple[list[Layer], list[Contract]]:
                 continue
             name, colon, value = line.partition(":")
             if not colon or not contracts or not _plain(name):
+                skipped += 1
                 continue
             open_list = None
             if not value.strip():
@@ -73,10 +90,12 @@ def read(text: str) -> tuple[list[Layer], list[Contract]]:
                 contracts[-1][name.strip()] = _flow(value)
             else:
                 contracts[-1][name.strip()] = _scalar(value)
+    named = [found for found in contracts if isinstance(found.get("name"), str) and found["name"]]
+    skipped += sum(1 for _, patterns, _ in layers if not patterns) + len(contracts) - len(named)
     return ([Layer(name, tuple(patterns), line) for name, patterns, line in layers if patterns],
             [Contract(found["name"], found.get("kind", "") if isinstance(found.get("kind", ""), str) else "",
-                      tuple(found["order"]) if isinstance(found.get("order"), list) else (), found["line"])
-             for found in contracts if isinstance(found.get("name"), str) and found["name"]])
+                      tuple(found["order"]) if isinstance(found.get("order"), list) else (), found["line"]) for found in named],
+            skipped)
 
 
 def sequence(text: str, key: str) -> tuple[str, ...]:
@@ -158,7 +177,18 @@ def _flow(written: str) -> list[str]:
     written = written.strip()
     if not (written.startswith("[") and written.endswith("]")):
         return []
-    return [_scalar(item) for item in written[1:-1].split(",") if item.strip()]
+    items, item, quote = [], "", ""
+    for char in written[1:-1]:      # split at commas, but not at one inside quotes: "x/{a,b}/*"
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "\"'":
+            quote = char
+        elif char == ",":
+            items.append(item)
+            item = ""
+            continue
+        item += char
+    return [_scalar(each) for each in (*items, item) if each.strip()]
 
 
 def _plain(name: str) -> bool:

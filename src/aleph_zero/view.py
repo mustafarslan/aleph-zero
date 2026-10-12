@@ -46,6 +46,7 @@ class View:
     submodules: tuple[str, ...] = ()       # paths of submodules; their content is not searched
     plain: bool = False                    # a directory that is not a repository: every file is read from disk
     inner_repositories: int = 0            # repositories inside such a directory; they are not searched from here
+    left_unread: int = 0                   # files of such a directory that could not be read
 
     @cached_property
     def fingerprint(self) -> str:
@@ -198,14 +199,16 @@ class Worktree:
     outside_checkout: int = 0
     submodules: tuple[str, ...] = ()
     inner_repositories: int = 0
+    left_unread: int = 0
 
 
 def read_worktree(cwd: Path) -> Worktree:
     try:
         info = gitio.repo_info(cwd)
     except gitio.NoRepository:      # git's own word, and nothing less: a repository git cannot read is not walked
-        root, kept, files, inner = plain.read(Path(cwd))
-        return Worktree(gitio.RepoInfo(root, "sha1", kept, None, None, plain=True), files, frozenset(files), inner_repositories=inner)
+        root, kept, files, inner, unread = plain.read(Path(cwd))
+        return Worktree(gitio.RepoInfo(root, "sha1", kept, None, None, plain=True), files, frozenset(files),
+                        inner_repositories=inner, left_unread=unread)
     root, fmt, tree = info.root, info.object_format, info.tree
     submodules: tuple[str, ...] = ()
     files: dict[str, str] = {}
@@ -261,4 +264,4 @@ def build_view(cwd: Path) -> View:
                     dirty.add(path)
         dirty = frozenset(dirty)
     return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts, frozenset(mounted),
-                worktree.outside_checkout, worktree.submodules, info.plain, worktree.inner_repositories)
+                worktree.outside_checkout, worktree.submodules, info.plain, worktree.inner_repositories, worktree.left_unread)

@@ -303,8 +303,12 @@ def resolve(graph: Graph, compiled, path: str, call: Call) -> tuple[Edge | None,
         target = _defined_at(graph, *said)
         if target is not None:
             return Edge((target,), "L2", "scip", "compiler index"), ""
-        return graph.resolve(path, call), ("the compiler index points at something that is not a recorded definition "
-                                           "(a function or class inside a function)")
+        found = graph.resolve(path, call)
+        if found is not None and found.rule == "inner function" and any(
+                each.path == said[0] and each.start_line - 1 <= said[1] <= each.end_line - 1 for each in found.targets):
+            return found, ""    # a function inside a function: the resolver reaches the one the index names
+        return found, ("the compiler index points at something that is not a recorded definition "
+                       "(a function or class inside a function)")
     return graph.resolve(path, call), ""
 
 

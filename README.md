@@ -200,8 +200,9 @@ marked with a `CACHEDIR.TAG`, symbolic links, and git repositories inside it (ru
 those). `aleph status` and `aleph doctor` say so.
 
 It refuses, with one sentence, where walking would be a mistake: your home directory or
-anything that holds it (however the path is spelled), the top of a disk, the system's
-temporary directories, and a directory of more than 20,000 files (or one where more than
+anything that holds it (however the path is spelled), the top of a disk, system
+directories (`/usr/local`, `/var`, somebody else's home), the temporary directories
+themselves, and a directory of more than 20,000 files (or one where more than
 200,000 entries would have to be looked at). For those, `git init` and a `.gitignore` are
 the way to say what belongs to the project. A directory with a `.git` at or above it that
 git cannot read is an error, not a plain directory: what it ignores must stay ignored.

@@ -99,11 +99,11 @@ def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Fact]:
     for node in nodes:
         for fact in read(node, state):
             found.append((node.start_byte, fact))
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[Fact] = set()        # the same fact from two nodes is one; a name set and read on one line is two
     out = []
     for _, fact in sorted(found, key=lambda item: (item[1].line, item[0])):
-        if (fact.kind, fact.name, fact.line) not in seen:
-            seen.add((fact.kind, fact.name, fact.line))
+        if fact not in seen:
+            seen.add(fact)
             out.append(fact)
     return out
 

@@ -333,3 +333,8 @@ def test_a_mapping_called_environ_is_not_the_process_environment():
     assert found("a.py", 'from os import environ, getenv\nA = environ["A_KEY"]\nB = getenv("B_KEY")\n') == [
         ("env", "A_KEY", 2, "read"), ("env", "B_KEY", 3, "read")]
     assert found("a.py", "class T(MyBaseSettingsBase):\n    z: int = 1\n") == []
+
+
+def test_a_name_set_and_read_on_one_line_is_both():
+    assert found("a.js", 'process.env.PORT = process.env.PORT || "3000";\n') == [("env", "PORT", 1, "set"), ("env", "PORT", 1, "read")]
+    assert found("a.py", 'import os\nos.environ["TZ"] = os.environ.get("TZ", "UTC")\n') == [("env", "TZ", 2, "set"), ("env", "TZ", 2, "read")]

@@ -234,3 +234,31 @@ def test_callees_list_a_function_defined_inside_and_rows_of_the_version_before_a
     assert [r.target for r in again.callees] == ["outer.keep"] and again.graph_pending == 0
     conn = open_db(index_path(repo.root))
     assert conn.execute("SELECT DISTINCT version FROM graph_facts").fetchall() == [(callgraph.GRAPH_VERSION,)]
+
+
+def test_a_compiler_index_pointing_at_an_inner_function_is_agreed_with_not_apologised_for():
+    """The index names a function inside a function; the resolver answers with that very function. There is
+    nothing to say about the index, and running the indexer again would change nothing."""
+    from test_graph import build
+
+    from aleph_zero import callgraph
+
+    source = "def outer(items):\n    def keep(item):\n        return item\n    return [keep(item) for item in items]\n"
+    graph, sites = build({"a.py": source})
+    call = next(call for call in sites["a.py"] if call.name == "keep")
+
+    class Compiled:
+        def status(self, path):
+            return ""
+
+        def target(self, path, line, columns, name):
+            return (path, 1, "keep")        # the line of the inner function's name, from 0
+
+    edge, downgraded = callgraph.resolve(graph, Compiled(), "a.py", call)
+    assert [t.qualified for t in edge.targets] == ["outer.keep"] and downgraded == ""
+
+    class Elsewhere(Compiled):
+        def target(self, path, line, columns, name):
+            return (path, 30, "keep")       # ... but not when the index means something the resolver did not find
+
+    assert callgraph.resolve(graph, Elsewhere(), "a.py", call)[1] != ""

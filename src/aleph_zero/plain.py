@@ -35,6 +35,13 @@ _REMEMBERED: dict[Path, tuple[tuple[int, int], dict[str, list]]] = {}    # per d
 _LOCK = threading.Lock()    # the server's call thread and its embedding thread both walk
 _BLOB = re.compile(r"^[0-9a-f]{40}$")
 _TEMPORARY = ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp")
+# The top directories of a system. Nothing in the first is a project; in the second, a project lies at least two
+# levels down (`/usr/local/src/x`, `/Users/me/x`), so a directory directly in one (`/private/var`, somebody's home,
+# a disk under `/Volumes`) is not walked.
+_NEVER = frozenset({"proc", "sys", "dev", "System"})
+_SYSTEM = frozenset({"private", "var", "etc", "usr", "bin", "sbin", "lib", "lib64", "boot", "run", "opt", "srv",
+                     "Library", "Applications", "Volumes", "mnt", "media", "home", "Users"})
+_DATA_VOLUME = ("/", "System", "Volumes", "Data")      # macOS: another name for `/`, under which the home directory lies too
 
 
 class Refused(gitio.NotARepository):
@@ -50,12 +57,16 @@ def refusal(root: Path) -> str | None:
     if len(home.parts) <= 1:    # HOME is empty: there is nothing to keep out of, so nothing is walked
         return (f"{root} is not inside a git repository, and your home directory is not known (HOME is empty): Aleph "
                 f"walks a directory without git only when it can tell that it is not your home. Run `git init` there")
-    # The same directory, however its path is spelled: on a file system that takes HOME for home, so must this.
-    if any(root == each or _same(root, each) for each in (home, *home.parents)):
+    # The same directory, however its path is spelled: on a file system that takes HOME for home, so must this,
+    # and macOS has a second name for the whole disk.
+    named = Path("/", *root.parts[4:]) if root.parts[:4] == _DATA_VOLUME else root
+    if any(each in (root, named) or _same(root, each) for each in (home, *home.parents)):
         return (f"{root} is not inside a git repository, and it is your home directory or holds it: Aleph does not walk "
                 f"that. Start it in a project's directory, or run `git init` in one")
     temporary = {Path(tempfile.gettempdir()).resolve(), *(Path(each).resolve() for each in _TEMPORARY)}
-    if len(root.parts) <= 2 or os.path.ismount(root) or root in temporary:
+    top = named.parts[1] if len(named.parts) > 1 else ""
+    if (len(named.parts) <= 2 or top in _NEVER or (top in _SYSTEM and len(named.parts) <= 3)
+            or os.path.ismount(root) or root in temporary):
         return (f"{root} is not inside a git repository, and it is the top of a disk, a system directory or the "
                 f"temporary directory: Aleph does not walk that. Start it in a project's directory")
     return None
@@ -85,11 +96,13 @@ def _canonical(directory: Path) -> Path:
     return root
 
 
-def read(directory: Path) -> tuple[Path, Path, dict[str, str], int]:
+def read(directory: Path) -> tuple[Path, Path, dict[str, str], int, int]:
     """(the directory, where its state is kept, path -> blob id of every file searched, repositories inside
-    that were not descended into). Raises Refused where the rule says so, before or while walking."""
+    that were not descended into, files that could not be read). Raises Refused where the rule says so, before
+    or while walking."""
     root = _canonical(directory)
-    for above in (root, *root.parents):
+    written = Path(os.path.abspath(directory))      # as it was named: a link inside a repository is inside it
+    for above in dict.fromkeys((root, *root.parents, written, *written.parents)):
         if os.path.lexists(above / ".git"):
             # Git said "not a repository" of a directory that has one at or above it: a damaged `.git`, or GIT_DIR
             # or GIT_CEILING_DIRECTORIES in the environment. Walking it would search what its `.gitignore` keeps out.
@@ -108,7 +121,7 @@ def read(directory: Path) -> tuple[Path, Path, dict[str, str], int]:
     remembered = _remembered(root, kept / MEMORY)
     now: dict[str, list] = {}
     try:
-        files, inner = _walk(root, remembered, now)
+        files, inner, unread = _walk(root, remembered, now)
     except (gitio.GitTimeout, Refused):
         if now:     # out of time, or too large: what was hashed is kept, so the next attempt does not start over
             _remember(root, kept / MEMORY, {**remembered, **now})
@@ -118,14 +131,25 @@ def read(directory: Path) -> tuple[Path, Path, dict[str, str], int]:
                       f"Start Aleph inside one of them")
     if now != remembered:
         _remember(root, kept / MEMORY, now)
-    return root, kept, files, inner
+    return root, kept, files, inner, unread
 
 
-def _walk(root: Path, remembered: dict[str, list], now: dict[str, list]) -> tuple[dict[str, str], int]:
-    """(path -> blob id, repositories inside). `now` is filled as it goes: what is remembered of each file seen."""
+def _device(entry: os.DirEntry) -> int:
+    return entry.stat(follow_symlinks=False).st_dev
+
+
+def _walk(root: Path, remembered: dict[str, list], now: dict[str, list]) -> tuple[dict[str, str], int, int]:
+    """(path -> blob id, repositories inside, files that could not be read). `now` is filled as it goes: what
+    is remembered of each file seen."""
     started = time.time_ns()
     files: dict[str, str] = {}
-    inner = looked = read = 0
+    inner = looked = read = unread = 0
+    try:
+        found = os.stat(Path.home())
+        home = (found.st_dev, found.st_ino)
+    except (OSError, RuntimeError):
+        home = None
+    disk = os.stat(root).st_dev
     pending = [root]
     while pending:
         here = pending.pop()
@@ -150,10 +174,16 @@ def _walk(root: Path, remembered: dict[str, list], now: dict[str, list]) -> tupl
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name in LEFT_OUT or os.path.exists(os.path.join(entry.path, "CACHEDIR.TAG")):
+                    if entry.name.lower() in LEFT_OUT or os.path.exists(os.path.join(entry.path, "CACHEDIR.TAG")):
                         continue
-                    if os.path.exists(os.path.join(entry.path, ".git")):
+                    if os.path.lexists(os.path.join(entry.path, ".git")):     # also one that points nowhere any more
                         inner += 1      # a repository: it has its own index, and its own say on what belongs to it
+                        continue
+                    # Whatever path led here: the home directory is not read, and neither is another disk mounted inside.
+                    if home is not None and (_device(entry), entry.inode()) == home:
+                        raise Refused(f"{root} is not inside a git repository and holds your home directory "
+                                      f"({entry.path}): Aleph does not walk that. Start it in a project's directory")
+                    if _device(entry) != disk:
                         continue
                     pending.append(Path(entry.path))
                     continue
@@ -168,14 +198,18 @@ def _walk(root: Path, remembered: dict[str, list], now: dict[str, list]) -> tupl
                 if known is not None and known[:3] == stamp and found.st_ctime_ns < known[3]:
                     now[path] = known
                 else:
-                    with open(entry.path, "rb") as file:
-                        now[path] = [*stamp, started, gitio.hash_blob(file.read(), "sha1")]
+                    try:
+                        with open(entry.path, "rb") as file:
+                            now[path] = [*stamp, started, gitio.hash_blob(file.read(), "sha1")]
+                    except PermissionError:
+                        unread += 1     # there, and not ours to read: said in `status`, like a repository's
+                        continue
             except OSError:
-                continue    # unreadable, or removed while we looked
+                continue    # removed while we looked
             files[path] = now[path][4]
             if len(files) > FILE_LIMIT:
                 raise Refused(_too_large(root, f"it has more than {FILE_LIMIT:,} files"))
-    return files, inner
+    return files, inner, unread
 
 
 def forget() -> None:

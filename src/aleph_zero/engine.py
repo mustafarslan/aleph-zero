@@ -314,7 +314,8 @@ class Engine:
                     if isinstance(data, bytes):
                         found.append(decisions.parse(each, number, data.decode("utf-8", "replace")))
                 declared = view.read(architecture.FILE, reader, architecture.MAX_BYTES) if architecture.FILE in view.files else None
-            stated = architecture.read(declared.decode("utf-8", "replace")) if isinstance(declared, bytes) else ([], [])
+            written = declared.decode("utf-8", "replace") if isinstance(declared, bytes) else ""
+            stated = (*architecture.read(written), architecture.unread(written))
             cached = (view.fingerprint, decisions.Records(found), stated)
             self._records[view.root] = cached
         records = cached[1]
@@ -323,8 +324,14 @@ class Engine:
         if path is None or not str(path).strip():
             return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
         asked = _within(view.root, path)
-        return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started), asked,
-                                records.governing(asked), architecture.place(asked, *cached[2]))
+        if asked.startswith(("/", "../")) or asked == "..":
+            return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started), asked, [],
+                                    [f"{asked} is not a path of this worktree"])
+        layers, contracts, unread = cached[2]
+        place = architecture.place(asked, layers, contracts)
+        if unread:      # "in no layer" must not be what a file half read says
+            place.append(f"note: {unread} lines of {architecture.FILE}'s layers and contracts were not understood")
+        return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started), asked, records.governing(asked), place)
 
     @_rebuilding
     def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
@@ -470,7 +477,7 @@ class Engine:
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
             "index_note": index_note(view.common_dir),
             "lost_to_collection": index.lost_to_collection,
-            "unreadable": index.unreadable,
+            "unreadable": index.unreadable + view.left_unread,
             "outside_checkout": view.outside_checkout,
             "submodules": list(view.submodules),
             **({"submodules_note": "submodules are not searched; link one as a source with "

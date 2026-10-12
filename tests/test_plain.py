@@ -144,9 +144,10 @@ def test_only_git_saying_there_is_no_repository_opens_this_path(project, tmp_pat
     (real_repo / ".git" / "HEAD").unlink()                                          # half deleted
     with pytest.raises(gitio.GitError, match="cannot read the repository"):
         build_view(real_repo)
-    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))                           # no git at all: an error, as before
-    with pytest.raises((gitio.GitError, OSError)):
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))                           # no git at all: one sentence, and no walk
+    with pytest.raises(gitio.GitError, match="git is not installed"):
         build_view(project)
+    assert cli.main(["--cwd", str(project), "search", "refresh"]) == 2
 
 
 def test_a_file_is_hashed_again_only_when_it_may_have_changed(project, monkeypatch):
@@ -332,3 +333,64 @@ def test_one_directory_of_very_many_entries_is_refused_without_reading_it_throug
     with pytest.raises(gitio.NotARepository, match="more than 10 entries"):
         build_view(project)
     assert hashed == []                                 # counted while listing, before anything was read
+
+
+def test_system_directories_are_not_walked_under_any_of_their_names(project):
+    for refused in ("/private/var", "/private/etc", "/var", "/etc", "/usr/local", "/System/Volumes", "/System/Volumes/Data",
+                    "/System/Library/Fonts", "/Volumes/SomeDisk", "/Users/somebody", "/home/somebody", "/proc/1", "/opt/tool"):
+        assert plain.refusal(Path(refused)), refused
+    for allowed in ("/private/tmp/project", "/private/var/folders/z4/abc/T/work/project", "/Users/somebody/project",
+                    "/Volumes/Disk/Projects/thing", "/opt/tool/src", "/srv/site/app"):
+        assert plain.refusal(Path(allowed)) is None, allowed
+    home = Path.home()
+    assert plain.refusal(Path("/System/Volumes/Data", *home.parts[1:]))          # the home directory, as the data volume spells it
+    assert plain.refusal(Path("/System/Volumes/Data", *home.parent.parts[1:]))
+
+
+def test_the_walk_never_enters_the_home_directory_or_another_disk(project, tmp_path, monkeypatch):
+    """A backstop: whatever path led here, a directory that IS the home directory is not read."""
+    inside = project / "elsewhere"
+    inside.mkdir()
+    (inside / "private.py").write_text("def mine(): ...\n")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: inside))            # home lies inside what is searched
+    monkeypatch.setattr(plain, "refusal", lambda root: None)                      # ... and the rule did not see it
+    with pytest.raises(gitio.NotARepository, match="home directory"):
+        build_view(project)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    real = os.stat(project).st_dev
+    entry_stat = os.DirEntry.stat if hasattr(os.DirEntry, "stat") else None
+    assert entry_stat is not None
+    monkeypatch.setattr(plain, "_device", lambda entry: real + (1 if entry.name == "elsewhere" else 0))   # as if a disk were mounted there
+    assert not [path for path in build_view(project).files if path.startswith("elsewhere/")]
+
+
+def test_a_link_into_a_plain_directory_from_inside_a_repository_and_a_broken_git_link(project, tmp_path):
+    repository = tmp_path / "work" / "repo"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    (repository / "ext").symlink_to(project, target_is_directory=True)
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):       # a `.git` is above the path as it was written
+        build_view(repository / "ext")
+    broken = project / "sub"
+    broken.mkdir()
+    (broken / ".git").symlink_to(tmp_path / "gone" / "modules" / "sub")           # a submodule whose repository went away
+    (broken / "theirs.py").write_text("def theirs(): ...\n")
+    for name in ("Node_modules", "VENV"):
+        (project / name).mkdir()
+        (project / name / "x.py").write_text("x = 1\n")
+    view = build_view(project)
+    assert sorted(view.files) == ["notes.md", "src/invoice.ts", "src/tokens.py"] and view.inner_repositories == 1
+
+
+def test_a_file_that_cannot_be_read_is_counted(project):
+    if os.geteuid() == 0:
+        pytest.skip("root reads everything")
+    locked = project / "src" / "locked.py"
+    locked.write_text("def locked(): ...\n")
+    locked.chmod(0o000)
+    try:
+        view = build_view(project)
+        assert "src/locked.py" not in view.files and view.left_unread == 1
+        assert Engine(project).status()["unreadable"] == 1
+    finally:
+        locked.chmod(0o600)

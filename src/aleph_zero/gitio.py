@@ -57,6 +57,9 @@ def _run(command: list[str]) -> subprocess.CompletedProcess:
         return subprocess.run(command, capture_output=True, env=_env(), timeout=timeout)
     except subprocess.TimeoutExpired:
         raise GitTimeout("git timed out before the time limit") from None
+    except FileNotFoundError:
+        raise GitError("git is not installed, or not on the PATH: Aleph asks git what a repository holds, and whether "
+                       "a directory is in one. Install git and try again") from None
 
 
 def check_deadline() -> None:
