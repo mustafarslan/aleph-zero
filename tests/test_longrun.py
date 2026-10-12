@@ -374,8 +374,58 @@ def test_a_repository_that_could_not_be_fetched_is_not_called_done(tmp_path, fak
         return real(workdir, row)
 
     monkeypatch.setattr(benchmark_c, "fetch", offline_for_the_first)
+    monkeypatch.setattr(benchmark_c, "reachable", lambda: True)          # the network is there: it is this repository's fetch that fails
     assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "ended"
     assert "1 not fetched" in status(work)["why"] and "again" in longrun.describe(work)
     monkeypatch.setattr(benchmark_c, "fetch", real)
     assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "done"       # the same command gets it
     assert benchmark_c.prepare(work, rows, max_chunks=1, guard=cool) == "done"          # left out for its size on purpose: still done
+
+
+def test_while_the_network_is_away_the_job_waits_and_then_fetches_the_same_repository(tmp_path, fake_worker, monkeypatch):
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(benchmark_c.worker, "slots", lambda: 1)
+    monkeypatch.setattr(benchmark_c.worker, "capacity_tokens", lambda: 4096)
+    monkeypatch.setattr(benchmark_c, "NETWORK_EVERY", 0.0)
+    real, tried, looks, states = benchmark_c.fetch, [], [], []
+
+    def away_twice(workdir, row):
+        tried.append(row["instance_id"])
+        if len(tried) <= 2:
+            raise subprocess.CalledProcessError(128, "git fetch")
+        return real(workdir, row)
+
+    def back_at_the_third_look():
+        looks.append(1)
+        states.append(status(work)["state"])
+        return len(looks) >= 3
+
+    monkeypatch.setattr(benchmark_c, "fetch", away_twice)
+    monkeypatch.setattr(benchmark_c, "reachable", back_at_the_third_look)
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "done"
+    assert tried[:3] == [rows[0]["instance_id"]] * 3 and "waiting for the network" in states
+    assert status(work)["prepared"] == 2 and "not_fetched" not in status(work)
+
+
+def test_a_network_that_stays_away_is_waited_for_only_so_long_and_a_stop_is_heard_meanwhile(tmp_path, fake_worker, monkeypatch):
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(benchmark_c.worker, "slots", lambda: 1)
+    monkeypatch.setattr(benchmark_c.worker, "capacity_tokens", lambda: 4096)
+    monkeypatch.setattr(benchmark_c, "NETWORK_EVERY", 0.0)
+    monkeypatch.setattr(benchmark_c, "NETWORK_WAIT", 0.05)
+    monkeypatch.setattr(benchmark_c, "fetch", lambda *_: (_ for _ in ()).throw(subprocess.CalledProcessError(128, "git fetch")))
+    monkeypatch.setattr(benchmark_c, "reachable", lambda: False)
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "ended"       # not for ever: both counted, and said
+    assert "2 not fetched" in status(work)["why"]
+    monkeypatch.setattr(benchmark_c, "NETWORK_WAIT", 3600.0)
+    monkeypatch.setattr(benchmark_c, "reachable", lambda: longrun.stop(work) or False)   # a stop arrives while it waits
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "stopped"
+    job = control(tmp_path / "other")
+    assert job.wait_for("waiting for the network", lambda: True, every=0, at_most=1) is True and status(tmp_path / "other")["state"] == "running"
+    assert "waiting for the network" in longrun.LIVE

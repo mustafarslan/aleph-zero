@@ -135,6 +135,27 @@ class Control:
         elif time.time() - self._written > 15:
             self._write()
 
+    def wait_for(self, state: str, ready, every: float = 60.0, at_most: float = float("inf")) -> bool:
+        """Wait, saying `state`, until `ready()`. False when a stop is asked for, or `at_most` seconds have passed."""
+        began = time.time()
+        try:
+            while not self.stop_wanted():
+                if ready():
+                    return True
+                if time.time() - began >= at_most:
+                    return False
+                if self.found["state"] != state:
+                    self.say(state)
+                    self.found["state"] = state
+                    self._write()
+                time.sleep(every)
+            return False
+        finally:
+            if self.found["state"] == state:
+                self.found["paused_seconds"] = round(self.found["paused_seconds"] + time.time() - began, 1)
+                self.found["state"] = "running"
+                self._write()
+
     def cooling(self, degrees: float) -> bool:
         """For the heat guard to call while it waits: says so in the status; True when the wait should be given up."""
         if self.found["state"] != "cooling":
@@ -212,7 +233,7 @@ def _alive(pid: int) -> bool:
     return True
 
 
-LIVE = ("running", "paused", "cooling", "waiting for its hours", "waiting for mains power")
+LIVE = ("running", "paused", "cooling", "waiting for its hours", "waiting for mains power", "waiting for the network")
 
 
 def _read(workdir: Path) -> dict | None | str:

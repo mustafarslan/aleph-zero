@@ -28,7 +28,8 @@ half an hour. `--away` sets these for a machine nobody is sitting at (85, 97, 6)
 `--hours 19-7` keeps the work to those hours. It does not start with less than 20 GB of
 free disk, on battery, with a pause left over in the work directory, or on a machine whose chip
 temperature cannot be read; it waits while the machine is on battery, and with `--away` it gives the job up
-when the temperature can no longer be read. To start it so that it outlives the connection:
+when the temperature can no longer be read. While the network is away it waits (up to two hours a repository) and
+then fetches the same repository; what it could not fetch is counted, and the run is then not "done". To start it so that it outlives the connection:
 
     nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR --away ... > WORKDIR/prepare.log 2>&1 &
 
@@ -56,6 +57,7 @@ import os
 import random
 import re
 import statistics
+import socket
 import subprocess
 import sys
 import time
@@ -117,6 +119,39 @@ def fetch(workdir: Path, row: dict) -> Path:
         subprocess.run(["git", "-C", str(clone), "fetch", "--quiet", "--depth", "1", "origin", row["base_commit"]],
                        check=True, capture_output=True, timeout=1800)
     return clone
+
+
+NETWORK_EVERY = 120.0     # seconds between two looks whether the network is back
+NETWORK_WAIT = 7200.0     # how long one repository waits for it; then it is counted as not fetched
+
+
+def reachable() -> bool:
+    """Whether GitHub answers at all: tells a network that is away from a repository whose fetch fails."""
+    try:
+        socket.create_connection(("github.com", 443), timeout=10).close()
+    except OSError:
+        return False
+    return True
+
+
+def fetched(workdir: Path, row: dict, job: longrun.Control, say) -> Path | None:
+    """`fetch`, for a job nobody watches: while the network is away it waits (a stop is heard, the status says so)
+    and then fetches the same repository; a fetch that fails with the network there is tried once more. None when
+    it is given up: the caller counts it."""
+    again, deadline = True, time.monotonic() + NETWORK_WAIT
+    while True:
+        try:
+            return fetch(workdir, row)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            say(f"fetch failed: {str(exc)[:80]}")
+            if not reachable():
+                left = deadline - time.monotonic()
+                if left <= 0 or not job.wait_for("waiting for the network", reachable, every=NETWORK_EVERY, at_most=left):
+                    return None
+            elif again and isinstance(exc, subprocess.CalledProcessError):
+                again = False
+            else:
+                return None
 
 
 def view_at(clone: Path, commit: str) -> View:
@@ -198,10 +233,8 @@ def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Cont
             return False
         job.unit(number, row["instance_id"])
         started = time.monotonic()
-        try:
-            clone = fetch(workdir, row)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            print(f"{number:4}/{len(rows)} {row['instance_id']:40} fetch failed: {str(exc)[:80]}", flush=True)
+        clone = fetched(workdir, row, job, lambda text: print(f"{number:4}/{len(rows)} {row['instance_id']:40} {text}", flush=True))
+        if clone is None:
             counts["unfetched"] += 1
             job.note(not_fetched=counts["unfetched"])
             continue
