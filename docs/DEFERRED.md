@@ -116,3 +116,10 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Why it waits:** I do not look through your repositories to find out. M9 (SCIP import) is being built meanwhile, since it needs nothing from you.
 - **What does not wait:** the part of M8 that has a bar of its own, retrieval of decisions (ADR text) against oxn's 100 labelled pairs, can be built without the answer.
 
+## 11. Compiler indexes (M9): what waits for you
+
+- **Finishing the memory measurement.** Go, Rust, TypeScript and JavaScript could not be measured: on a fresh copy of each corpus, the dependencies could not be installed offline. One permission is needed: the network, once, to install the four corpora's dependencies into scratch copies (`npm ci`, `cargo fetch`, `go mod download`). Until then `aleph scip run` runs Python and Java (Maven) only and the rest are import-only.
+- **The limit for an indexer run** is 2,048 MB (twice the standing budget), registered before the measurement. Python peaked at 459 MB and Java at 896 MB. `ALEPH_SCIP_MEMORY_MB` changes it.
+- **How strict the trust rule should be.** ADR-004's rule is exact and strict: on httpx, one uncommitted edit to a central file sends 52 of 60 files back to the resolver. If compiler-grade answers matter to you while editing, the options are to re-run the indexer (3.6 s for httpx) or to relax the rule and accept that an edge may be stale; I kept the rule.
+- **Like M7, off for the agent** unless `ALEPH_GRAPH=1`.
+
