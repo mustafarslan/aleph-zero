@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from tree_sitter import Node, Tree
 
+from .bindings import constructed, named_type
 from .definitions import Definition
 from .profile import LanguageProfile
 
@@ -108,6 +109,8 @@ class Call:
     head: str = ""        # what the first name is bound to where the call stands: 'self' the method's own receiver,
     #                       'super' its base, 'local' a parameter or local name, 'value' no name at all (`f().g()`),
     #                       '' nothing local: a name of the file, an import, a builtin
+    receiver_type: str = ""  # for a call on a local name: the type its function declares for it (`generic.Gauge`), or
+    #                       the call that built it (`Engine()`); '' when the function does not say
 
 
 def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definition]) -> list[Call]:
@@ -120,6 +123,8 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
                        for index, definition in enumerate(found) if definition.kind in _CALLABLE)
     scopes, binders = _SCOPES.get(family, frozenset()), _BINDERS.get(family, {})
     bound: dict[int, set[str]] = {}     # scope -> the names bound in it
+    declared: dict[int, dict[str, str]] = {}  # scope -> name -> the type the scope states for it ('' when it states two)
+    typed = _TYPED.get(family, frozenset())
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
     seen: list[tuple[Node, Node | None, str, tuple[int, ...]]] = []
     stack: list[tuple[Node, tuple[int, ...]]] = [(tree.root_node, ())]
@@ -133,6 +138,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
         if kind in scopes:
             chain = (*chain, node.id)
             bound[node.id] = set()
+            declared[node.id] = {}
             receiver = _receiver_name(family, node)
             if receiver:
                 receivers[node.id] = receiver
@@ -141,6 +147,10 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             for field in binders[kind]:
                 for holder in ([node] if not field else node.children_by_field_name(field)):
                     bound[chain[-1]].update(_bound_names(holder, family))
+        if chain and kind in typed:
+            known = declared[chain[-1]]
+            for name, stated in _stated(family, node):
+                known[name] = stated if known.get(name, stated) == stated else ""
         stack.extend((child, chain) for child in reversed(node.children))
         field = sites.get(kind)
         if field is None:
@@ -156,14 +166,17 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     for name, owner, via, chain in seen:
         position = name.start_byte
         caller = next((index for _, start, end, index in callables if start <= position < end), None)
+        head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
+        stated = next((declared[scope].get(first, "") for scope in reversed(chain) if first in bound[scope]), "") \
+            if head == "local" and owner is not None else ""
         out.append(Call(_text(name), _text(owner) if owner is not None else "", name.start_point[0] + 1,
-                        name.start_point[1], caller, via, _head(name if owner is None else owner, via, chain, bound, receivers)))
+                        name.start_point[1], caller, via, head, stated))
     out.sort(key=lambda call: (call.line, call.column))
     return out
 
 
-def _head(start: Node, via: str, chain: tuple[int, ...], bound: dict[int, set[str]], receivers: dict[int, str]) -> str:
-    """What the first name of a call is bound to: see `Call.head`."""
+def _head(start: Node, via: str, chain: tuple[int, ...], bound: dict[int, set[str]], receivers: dict[int, str]) -> tuple[str, str]:
+    """What the first name of a call is bound to (see `Call.head`), and that name."""
     node = start
     while node.child_count:
         if node.type in _SEE_THROUGH and node.named_child_count == 1:
@@ -171,23 +184,133 @@ def _head(start: Node, via: str, chain: tuple[int, ...], bound: dict[int, set[st
             continue
         if node.type in ("call", "call_expression", "method_invocation"):
             function = node.child_by_field_name("function") or node.child_by_field_name("name")
-            return "super" if function is not None and _text(function) == "super" else "value"
+            return ("super" if function is not None and _text(function) == "super" else "value"), ""
         inner = next((node.child_by_field_name(field) for field in _OWNER_HEADS if node.child_by_field_name(field) is not None), None)
         if inner is None:
-            return "value"
+            return "value", ""
         node = inner
     kind, text = node.type, _text(node)
     if via == "path":
-        return "self" if text == "Self" else ""     # `self::f`, `super::f`, `crate::f` name modules, not objects
+        return ("self" if text == "Self" else ""), text     # `self::f`, `super::f`, `crate::f` name modules, not objects
     if kind in ("this", "self"):
-        return "self"
+        return "self", text
     if kind == "super":
-        return "super"
+        return "super", text
     if "identifier" not in kind:
-        return "value"
+        return "value", ""
     for scope in reversed(chain):
         if text in bound[scope]:
-            return "self" if receivers.get(scope) == text else "local"
+            return ("self" if receivers.get(scope) == text else "local"), text
+    return "", text
+
+
+# Per language: the nodes that state a type for a local name.
+_TYPED: dict[str, frozenset[str]] = {
+    "python": frozenset({"typed_parameter", "typed_default_parameter", "assignment", "as_pattern"}),
+    "typescript": frozenset({"required_parameter", "optional_parameter", "variable_declarator"}),
+    "tsx": frozenset({"required_parameter", "optional_parameter", "variable_declarator"}),
+    "javascript": frozenset({"variable_declarator"}),
+    "go": frozenset({"parameter_declaration", "var_spec", "short_var_declaration"}),
+    "rust": frozenset({"parameter", "let_declaration"}),
+    "java": frozenset({"formal_parameter", "local_variable_declaration", "enhanced_for_statement"}),
+    "cpp": frozenset({"parameter_declaration", "declaration"}),
+    "c": frozenset({"parameter_declaration", "declaration"}),
+}
+
+
+def _stated(family: str, node: Node) -> list[tuple[str, str]]:
+    """(name, type) for each local name whose type this node states: an annotation, or the constructor
+    or call it is built from."""
+    kind = node.type
+    get = node.child_by_field_name
+    if family == "python":
+        if kind == "typed_parameter":
+            name = node.named_children[0] if node.named_children else None
+            return [(_text(name), named_type(_text(get("type"))))] if name is not None and name.type == "identifier" and get("type") else []
+        if kind == "typed_default_parameter":
+            return [(_text(get("name")), named_type(_text(get("type"))))] if get("name") and get("type") else []
+        if kind == "assignment":
+            left, right = get("left"), get("right")
+            if left is None or left.type != "identifier":
+                return []
+            if get("type") is not None:
+                return [(_text(left), named_type(_text(get("type"))))]
+            if right is not None and right.type == "call" and right.child_by_field_name("function") is not None:
+                return [(_text(left), constructed(_text(right.child_by_field_name("function"))))]
+            return [(_text(left), "")] if right is not None else []
+        value, alias = (node.named_children[0] if node.named_children else None), get("alias")      # with Session() as s
+        target = alias.named_children[0] if alias is not None and alias.named_children else None
+        if value is not None and value.type == "call" and target is not None and target.type == "identifier":
+            return [(_text(target), constructed(_text(value.child_by_field_name("function"))))]
+        return []
+    if family in ("typescript", "tsx", "javascript"):
+        name = get("pattern") if kind != "variable_declarator" else get("name")
+        if name is None or name.type != "identifier":
+            return []
+        annotation, value = get("type"), get("value") if kind == "variable_declarator" else None
+        if annotation is not None:
+            inner = annotation.named_children[0] if annotation.type == "type_annotation" and annotation.named_children else annotation
+            return [(_text(name), named_type(_text(inner)))]
+        if value is not None and value.type == "new_expression" and value.child_by_field_name("constructor") is not None:
+            return [(_text(name), named_type(_text(value.child_by_field_name("constructor"))))]
+        return [(_text(name), "")] if kind == "variable_declarator" else []
+    if family == "go":
+        if kind == "short_var_declaration":
+            left, right = get("left"), get("right")
+            if left is None or right is None or left.named_child_count != 1 or right.named_child_count != 1:
+                return [(_text(each), "") for each in (left.named_children if left is not None else []) if each.type == "identifier"]
+            return [(_text(left.named_children[0]), _go_value(right.named_children[0]))] if left.named_children[0].type == "identifier" else []
+        stated = named_type(_text(get("type"))) if get("type") is not None else ""
+        if kind == "var_spec" and not stated:
+            value = get("value")
+            stated = _go_value(value.named_children[0]) if value is not None and value.named_child_count == 1 else ""
+        return [(_text(name), stated) for name in node.children_by_field_name("name")]
+    if family == "rust":
+        pattern = get("pattern")
+        if pattern is not None and pattern.type == "mut_pattern" and pattern.named_children:
+            pattern = pattern.named_children[-1]
+        if pattern is None or pattern.type != "identifier":
+            return []
+        if get("type") is not None:
+            return [(_text(pattern), named_type(_text(get("type"))))]
+        value = get("value") if kind == "let_declaration" else None
+        if value is not None and value.type == "struct_expression":
+            return [(_text(pattern), named_type(_text(value.child_by_field_name("name"))))]
+        if value is not None and value.type == "call_expression" and value.child_by_field_name("function") is not None:
+            return [(_text(pattern), constructed(_text(value.child_by_field_name("function"))))]
+        return [(_text(pattern), "")] if kind == "let_declaration" else []
+    if family == "java":
+        stated = named_type(_text(get("type"))) if get("type") is not None else ""
+        if kind != "local_variable_declaration":
+            return [(_text(get("name")), stated)] if get("name") is not None else []
+        out = []
+        for declarator in node.children_by_field_name("declarator"):
+            value = declarator.child_by_field_name("value")
+            built = named_type(_text(value.child_by_field_name("type"))) if value is not None and value.type == "object_creation_expression" else ""
+            out.append((_text(declarator.child_by_field_name("name")), built if stated == "var" else stated))
+        return out
+    stated = named_type(_text(get("type"))) if get("type") is not None else ""       # C and C++
+    out = []
+    for declarator in node.children_by_field_name("declarator"):
+        name = declarator
+        while name is not None and name.type != "identifier":
+            name = name.child_by_field_name("declarator")
+        if name is not None:
+            out.append((_text(name), stated))
+    return out
+
+
+def _go_value(value: Node) -> str:
+    """The type of what a Go expression builds, where the expression says it: `T{}`, `&T{}`, `new(T)`, `NewT()`."""
+    if value.type == "unary_expression" and value.child_by_field_name("operand") is not None:
+        value = value.child_by_field_name("operand")
+    if value.type == "composite_literal":
+        return named_type(_text(value.child_by_field_name("type")))
+    if value.type == "call_expression":
+        function, arguments = value.child_by_field_name("function"), value.child_by_field_name("arguments")
+        if function is not None and _text(function) == "new" and arguments is not None and arguments.named_child_count == 1:
+            return named_type(_text(arguments.named_children[0]))
+        return constructed(_text(function)) if function is not None else ""
     return ""
 
 

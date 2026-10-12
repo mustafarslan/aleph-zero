@@ -38,7 +38,7 @@ from pathlib import Path
 from aleph_zero import lang, scip
 from aleph_zero.graph import FEATURES, MANIFESTS, FileFacts, Graph
 from aleph_zero.lang import parse
-from aleph_zero.lang.bindings import bases, bindings
+from aleph_zero.lang.bindings import bases, bindings, fields
 from aleph_zero.lang.calls import Call, calls
 from aleph_zero.lang.definitions import definitions
 
@@ -265,7 +265,7 @@ def aleph_graph(root: Path, features: frozenset[str] = FEATURES) -> Graph:
         data = file.read_bytes()
         tree = parse.tree(profile, data)
         facts[path] = FileFacts(profile.name, definitions(profile, tree, data), bindings(profile, tree, data),
-                                bases(profile, tree, data))
+                                bases(profile, tree, data), fields(profile, tree, data))
     return Graph(facts, manifests, features)
 
 

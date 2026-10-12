@@ -101,3 +101,26 @@ def test_what_a_type_is_built_on(name, source, expected):
     profile = lang.PROFILES[name]
     tree = parse.tree(profile, source.encode())
     assert bases(profile, tree, source.encode()) == expected
+
+
+@pytest.mark.parametrize("name,source,expected", [
+    ("go", "package a\ntype Gauge struct {\n\tg *generic.Gauge\n\tlvs, more lv.LabelValues\n\tname string\n\titems []Item\n\t*Base\n}\n",
+     [("Gauge", "g", "generic.Gauge"), ("Gauge", "lvs", "lv.LabelValues"), ("Gauge", "more", "lv.LabelValues"), ("Gauge", "name", "string")]),
+    ("rust", "pub struct S<'a> {\n    m: &'a Matcher,\n    pub(crate) sink: Box<Sink>,\n    count: usize,\n    list: Vec<Item>,\n}\n",
+     [("S", "m", "Matcher"), ("S", "sink", "Sink"), ("S", "count", "usize"), ("S", "list", "Vec")]),
+    ("java", "class A {\n  private final OwnerRepository owners;\n  Map<String, Pet> pets;\n  int n, m;\n  class Inner { Visit visit; }\n}\n",
+     [("A", "owners", "OwnerRepository"), ("A", "pets", "Map"), ("A", "n", "int"), ("A", "m", "int"), ("A.Inner", "visit", "Visit")]),
+    ("typescript", "class A {\n  private readonly logger = new Logger('A');\n  store: Store;\n  count = 0;\n"
+                   "  constructor(private readonly svc: Service, plain: Other, public repo?: Repo) { this.late = new Late(); this.kept = plain; }\n}\n",
+     [("A", "logger", "Logger"), ("A", "store", "Store"), ("A", "svc", "Service"), ("A", "repo", "Repo"), ("A", "late", "Late"),
+      ("A", "kept", "Other")]),
+    ("javascript", "class K {\n  constructor(options) { this.cache = new Cache(); this.options = options; }\n}\n", [("K", "cache", "Cache")]),
+    ("python", "class A:\n    limit: Limit\n    def __init__(self, store: Store, raw):\n        self.store = store\n        self.raw = raw\n"
+               "        self.engine = Engine()\n        self.note: Note = load()\n    def later(self):\n        self.cache = Cache(1)\n",
+     [("A", "limit", "Limit"), ("A", "store", "Store"), ("A", "engine", "Engine()"), ("A", "note", "Note"), ("A", "cache", "Cache()")]),
+])
+def test_the_types_a_type_declares_for_its_fields(name, source, expected):
+    from aleph_zero.lang.bindings import fields
+    profile = lang.PROFILES[name]
+    tree = parse.tree(profile, source.encode())
+    assert fields(profile, tree, source.encode()) == expected

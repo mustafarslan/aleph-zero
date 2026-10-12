@@ -30,7 +30,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from .lang.bindings import Binding
+from .lang.bindings import Binding, named_type
 from .lang.calls import Call
 from .lang.definitions import Definition
 
@@ -50,6 +50,7 @@ _PACKAGE_WIDE_TYPES = frozenset({"go", "rust"})   # a type's methods may be decl
 _ECMA_SUFFIXES = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs")
 _RUST_ROOTS = ("lib.rs", "main.rs")
 _SEGMENT = re.compile(r"^[A-Za-z_$][\w$]*$")
+_UNSTATED = "unstated"      # the source does not say what type a value has: the name is all there is to go on
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class FileFacts:
     definitions: list[Definition]
     bindings: list[Binding] = field(default_factory=list)
     bases: list[tuple[str, str]] = field(default_factory=list)
+    fields: list[tuple[str, str, str]] = field(default_factory=list)   # (type, field, the field's type as written)
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,8 @@ class Graph:
         self._packages: dict[tuple[str, str], list[str]] = {}     # (language group, package) -> its files
         self._bases: dict[tuple[str, str], list[str]] = {}        # (path, type) -> what it is built on, as written
         self._bases_named: dict[tuple[str, str], list[tuple[str, str]]] = {}  # (group, simple type) -> (path, base)
+        self._fields: dict[tuple[str, str], dict[str, str]] = {}  # (path, type) -> field -> its type as written
+        self._fields_named: dict[tuple[str, str], list[tuple[str, str, str]]] = {}  # (group, simple type) -> (path, field, type)
         self._dirs: dict[str, list[str]] = {}                     # directory -> its files
         self._python: dict[str, list[tuple[str, str]]] = {}       # 'a/b.py' -> (file, the directory it is rooted in)
         for path, facts in files.items():
@@ -146,6 +150,9 @@ class Graph:
         for kind, base in facts.bases:
             self._bases.setdefault((path, kind), []).append(base)
             self._bases_named.setdefault((group, kind.rsplit(".", 1)[-1]), []).append((path, base))
+        for kind, name, stated in facts.fields:
+            self._fields.setdefault((path, kind), {}).setdefault(name, stated)
+            self._fields_named.setdefault((group, kind.rsplit(".", 1)[-1]), []).append((path, name, stated))
         self._dirs.setdefault(_parent(path), []).append(path)
         if facts.family == "python":
             parts = path.split("/")
@@ -251,14 +258,24 @@ class Graph:
         owner = self._owner(facts, call)
         if owner is None:
             return self._by_name(path, facts, call, members=True, rule="name, on self outside a type")
-        if len(_segments(call.receiver) or ("", "")) != 1 and not call.receiver.startswith("super("):
-            return self._by_name(path, facts, call, members=True, rule="name, on a field")     # `self.store.save()`
+        segments = _segments(call.receiver)
+        if len(segments or ("", "")) != 1 and not call.receiver.startswith("super("):      # `self.store.save()`
+            if segments is not None and "receivers" in self.features:
+                typed = self._through(path, [(path, owner)], list(segments[1:]), call.name)
+                if typed is not _UNSTATED:
+                    return typed
+            return self._by_name(path, facts, call, members=True, rule="name, on a field")
         found = self._method((path, owner), call.name, above=call.head == "super")
         return self._edge(path, found, "own type") if found else None
 
     def _qualified(self, path: str, facts: FileFacts, call: Call) -> Edge | None:
         """`a.f()` and `a::f()` where `a` is not the method's own object."""
         segments = _segments(call.receiver)
+        if call.head == "local" and call.receiver_type and segments is not None and "receivers" in self.features:
+            kinds = self._value_type(path, call.receiver_type)
+            typed = _UNSTATED if kinds is None else self._through(path, kinds, list(segments[1:]), call.name) if kinds else None
+            if typed is not _UNSTATED:
+                return typed
         if call.head in ("local", "value") or segments is None:
             return self._by_name(path, facts, call, members=True, rule="name, on a value")
         head, rest, name = segments[0], list(segments[1:]), call.name
@@ -285,6 +302,11 @@ class Graph:
             return self._by_name(path, facts, call, members=True, rule="name, import not followed")
         if local_type:
             return self._by_name(path, facts, call, members=True, rule="name, type in file lacks it")
+        owner = self._owner(facts, call)
+        if owner and facts.family in _IMPLICIT_THIS and "receivers" in self.features and self._field((path, owner), head):
+            typed = self._through(path, [(path, owner)], list(segments), name)      # `owners.findAll()` is `this.owners.findAll()`
+            if typed is not _UNSTATED:
+                return typed
         nearby = self._nearby(path, facts, head)    # a type of the same package, written without an import
         if nearby and not rest:
             found = [target for kind in nearby for target in self._method((kind.path, kind.qualified), name)]
@@ -428,6 +450,99 @@ class Graph:
             return [(target.path, target.qualified) for target in targets if target.kind in _TYPES]
         return [(target.path, target.qualified) for target in self._nearby(path, facts, head)
                 if target.kind in _TYPES and len(segments) == 1]
+
+    # ---- values of a stated type -----------------------------------------------------------------
+
+    def _through(self, path: str, kinds: list[tuple[str, str]], fields: list[str], name: str) -> Edge | None | str:
+        """`name` called on a value of one of `kinds`, after going through `fields`: the edge, None when the
+        source states a type that is none of these files' (or one that lacks the callee), `_UNSTATED` when a
+        field on the way has no stated type."""
+        for step in fields:
+            below: list[tuple[str, str]] = []
+            for kind in kinds:
+                stated = self._field(kind, step)
+                found = self._value_type(*stated) if stated is not None else None
+                if found is None:
+                    return _UNSTATED
+                below += found
+            kinds = below
+            if not kinds:
+                return None
+        return self._edge(path, [target for kind in kinds for target in self._method(kind, name)], "stated type")
+
+    def _field(self, kind: tuple[str, str], name: str, seen: set[tuple[str, str]] | None = None) -> tuple[str, str] | None:
+        """(the file that declares it, its type as written) for a field of `kind`, its own or a base's."""
+        seen = seen if seen is not None else set()
+        if kind in seen or len(seen) > 64:
+            return None
+        seen.add(kind)
+        path, qualified = kind
+        own = self._fields.get(kind, {}).get(name)
+        if own:
+            return path, own
+        facts = self.files.get(path)
+        if facts is not None and facts.family in _PACKAGE_WIDE_TYPES:
+            for other, field_name, stated in self._fields_named.get((_group(facts.family), qualified.rsplit(".", 1)[-1]), []):
+                if field_name == name and stated and self._same_unit(path, other):
+                    return other, stated
+        for declared_in, base in self._bases_of(path, qualified):
+            for above in self._type(declared_in, base):
+                inherited = self._field(above, name, seen)
+                if inherited is not None:
+                    return inherited
+        return None
+
+    def _value_type(self, path: str, written: str) -> list[tuple[str, str]] | None:
+        """The types of these files that a type written in `path` stands for; [] when it is none of them;
+        None when it cannot be told (the result of a call that is not certainly a constructor of these files)."""
+        if not written.endswith("()"):
+            return self._type(path, written)
+        segments = _segments(written[:-2])
+        if segments is None:
+            return None
+        joined = "::" if "::" in written else "."
+        built = self.resolve(path, Call(segments[-1], joined.join(segments[:-1]), 0, 0, None,
+                                        "" if len(segments) == 1 else "path" if joined == "::" else "member"))
+        if built is None:
+            head = self._bound.get(path, {}).get(segments[0])
+            return [] if head else None     # built by something imported from outside: typed, and not one of ours
+        if not built.certain:
+            return None
+        target = built.targets[0]
+        if target.kind in _TYPES:
+            return [(target.path, target.qualified)]
+        returned = self._returned(target)
+        if not returned:
+            return None
+        if returned == "Self" and "." in target.qualified:
+            return [(target.path, target.qualified.rsplit(".", 1)[0])]
+        return self._type(target.path, returned)
+
+    def _returned(self, target: Target) -> str:
+        """The type a function's own signature says it returns, as a name; '' when it does not say."""
+        facts = self.files[target.path]
+        signature = next((definition.signature for definition in facts.definitions
+                          if definition.qualified == target.qualified and definition.start_line == target.start_line), "")
+        signature = signature.rstrip(" {:")
+        if facts.family in ("python", "rust"):
+            _, arrow, stated = signature.rpartition("->")
+            stated = stated.split(" where ")[0] if arrow else ""
+        elif facts.family in _ECMA:
+            closing = signature.rfind(")")
+            stated = signature[closing + 1:].lstrip(" :") if closing >= 0 and signature[closing + 1:].lstrip().startswith(":") else ""
+        elif facts.family == "go":
+            if signature.endswith(")"):                 # (T, error), or no result at all
+                opening = _matching_open(signature)
+                inside = signature[opening + 1:-1] if opening > 0 and signature[:opening].rstrip().endswith(")") else ""
+                stated = inside.split(",")[0].split()[-1] if inside.strip() else ""
+            else:
+                stated = signature[signature.rfind(")") + 1:]
+        elif facts.family == "java":
+            before = signature.split("(", 1)[0].split()
+            stated = before[-2] if len(before) >= 2 else ""
+        else:
+            stated = ""
+        return named_type(stated) if stated.strip() else ""
 
     # ---- through imports ------------------------------------------------------------------------
 
@@ -793,6 +908,19 @@ def _segments(receiver: str) -> tuple[str, ...] | None:
         return ("super",)
     parts = tuple(part for part in re.split(r"\.|::|->", text))
     return parts if parts and all(_SEGMENT.match(part) for part in parts) else None
+
+
+def _matching_open(text: str) -> int:
+    """Where the bracket that closes at the end of `text` opens; -1 when it does not."""
+    depth = 0
+    for index in range(len(text) - 1, -1, -1):
+        if text[index] == ")":
+            depth += 1
+        elif text[index] == "(":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
 
 
 def _parent(path: str) -> str:

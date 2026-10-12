@@ -2,7 +2,7 @@
 from aleph_zero import lang
 from aleph_zero.graph import FEATURES, FileFacts, Graph
 from aleph_zero.lang import parse
-from aleph_zero.lang.bindings import bases, bindings
+from aleph_zero.lang.bindings import bases, bindings, fields
 from aleph_zero.lang.calls import calls
 from aleph_zero.lang.definitions import definitions
 
@@ -19,7 +19,8 @@ def build(files: dict[str, str], features=FEATURES):
         profile = lang.profile_for_path(path)
         tree = parse.tree(profile, data)
         found = definitions(profile, tree, data)
-        facts[path] = FileFacts(profile.name, found, bindings(profile, tree, data), bases(profile, tree, data))
+        facts[path] = FileFacts(profile.name, found, bindings(profile, tree, data), bases(profile, tree, data),
+                                fields(profile, tree, data))
         sites[path] = calls(profile, tree, data, found)
     return Graph(facts, manifests, features), sites
 
@@ -227,3 +228,69 @@ def test_imports_that_lead_in_circles_end():
     assert answers(files, "a.py", "thing") is None
     files = {"src/lib.rs": "mod a;\nmod b;\n", "src/a.rs": "pub use crate::b::*;\nfn f() { g(); }\n", "src/b.rs": "pub use crate::a::*;\n"}
     assert answers(files, "src/a.rs", "g") is None
+
+
+TYPED_PY = {
+    "pkg/store.py": "class Store:\n    def save(self):\n        pass\n\nclass Cache(Store):\n    def load(self):\n        pass\n\nclass Other:\n    def save(self):\n        pass\n    def get(self):\n        pass\n    def append(self, x):\n        pass\n",
+    "pkg/use.py": ("from .store import Store, Cache\nfrom requests import Session\n\n"
+                   "def f(store: Store, session: Session, items: list, loose):\n    store.save()\n    session.get()\n    items.append(1)\n"
+                   "    made = Cache()\n    made.save()\n    made.load()\n    loose.load()\n\n"
+                   "class Service:\n    def __init__(self, store: Store):\n        self.store = store\n        self.cache = Cache()\n        self.session = Session()\n"
+                   "    def run(self):\n        self.store.save()\n        self.cache.load()\n        self.session.get()\n        self.unknown.save()\n"),
+}
+
+
+def test_a_call_on_a_value_of_a_declared_type_reaches_that_type_and_no_other():
+    path = "pkg/use.py"
+    assert answers(TYPED_PY, path, "save") == ("L1", "import-resolved", [("pkg/store.py", "Store.save")])
+    assert answers(TYPED_PY, path, "save", nth=1) == ("L1", "import-resolved", [("pkg/store.py", "Store.save")])   # Cache(), through its base
+    assert answers(TYPED_PY, path, "load") == ("L1", "import-resolved", [("pkg/store.py", "Cache.load")])
+    without = answers(TYPED_PY, path, "save", features=FEATURES - {"receivers"})
+    assert without[1] == "name" and len(without[2]) == 2                # without the types: two candidates, by name
+
+
+def test_a_declared_type_from_outside_these_files_gets_no_answer():
+    assert answers(TYPED_PY, "pkg/use.py", "get") is None               # requests.Session, though Other.get shares the name
+    assert answers(TYPED_PY, "pkg/use.py", "append") is None            # a list, though Other.append shares the name
+    assert answers(TYPED_PY, "pkg/use.py", "get", nth=1) is None        # self.session = Session()
+
+
+def test_a_value_of_no_declared_type_is_still_answered_by_name_and_says_so():
+    assert answers(TYPED_PY, "pkg/use.py", "load", nth=1) == ("L1", "name", [("pkg/store.py", "Cache.load")])
+    graph, sites = build(TYPED_PY)
+    assert edge(graph, sites, "pkg/use.py", "load", 1).certain is False     # one candidate, found by name: not certain
+    assert edge(graph, sites, "pkg/use.py", "load", 0).certain is True
+    assert answers(TYPED_PY, "pkg/use.py", "save", nth=3)[1] == "name"      # self.unknown.save(): the field has no stated type
+
+
+def test_a_call_through_a_field_follows_the_fields_type():
+    path = "pkg/use.py"
+    assert answers(TYPED_PY, path, "save", nth=2) == ("L1", "import-resolved", [("pkg/store.py", "Store.save")])
+    assert answers(TYPED_PY, path, "load", nth=2) == ("L1", "import-resolved", [("pkg/store.py", "Cache.load")])
+    go = {
+        "go.mod": "module example.com/kit\n",
+        "lv/lv.go": "package lv\n\ntype LabelValues []string\n\nfunc (lvs LabelValues) With(v ...string) LabelValues { return lvs }\n",
+        "generic/generic.go": "package generic\n\ntype Gauge struct{}\n\nfunc (g *Gauge) With(v ...string) {}\nfunc (g *Gauge) Set(v float64) {}\n",
+        "statsd/statsd.go": ("package statsd\n\nimport (\n\t\"example.com/kit/generic\"\n\t\"example.com/kit/lv\"\n\t\"sync\"\n)\n\n"
+                             "type Counter struct {\n\tlvs lv.LabelValues\n\tg   *generic.Gauge\n\tmu  sync.Mutex\n}\n\n"
+                             "func (c *Counter) With() { c.lvs.With(); c.g.With(); c.g.Set(1); c.mu.Lock() }\nfunc Lock() {}\ntype T struct{}\nfunc (t T) Lock() {}\n"),
+    }
+    assert answers(go, "statsd/statsd.go", "With") == ("L1", "import-resolved", [("lv/lv.go", "LabelValues.With")])
+    assert answers(go, "statsd/statsd.go", "With", nth=1) == ("L1", "import-resolved", [("generic/generic.go", "Gauge.With")])
+    assert answers(go, "statsd/statsd.go", "Lock") is None                  # sync.Mutex is outside; T.Lock is another type's
+    ts = {
+        "src/service.ts": "export class Service { handle() {} }\nexport class Other { handle() {} log() {} }\n",
+        "src/a.ts": ("import { Service } from './service';\nimport { Logger } from '@nestjs/common';\n"
+                     "export class A {\n  private readonly logger = new Logger('A');\n  constructor(private readonly svc: Service) {}\n"
+                     "  run() { this.svc.handle(); this.logger.log(); }\n}\n"),
+    }
+    assert answers(ts, "src/a.ts", "handle") == ("L1", "import-resolved", [("src/service.ts", "Service.handle")])
+    assert answers(ts, "src/a.ts", "log") is None
+    java = {
+        "a/Owners.java": "package a;\npublic class Owners {\n  void findAll() {}\n}\n",
+        "a/Other.java": "package a;\npublic class Other {\n  void findAll() {}\n}\n",
+        "a/Ctl.java": "package a;\npublic class Ctl {\n  private final Owners owners;\n  void list(Other other) { owners.findAll(); this.owners.findAll(); other.findAll(); }\n}\n",
+    }
+    assert answers(java, "a/Ctl.java", "findAll") == ("L1", "import-resolved", [("a/Owners.java", "Owners.findAll")])
+    assert answers(java, "a/Ctl.java", "findAll", nth=1) == ("L1", "import-resolved", [("a/Owners.java", "Owners.findAll")])
+    assert answers(java, "a/Ctl.java", "findAll", nth=2) == ("L1", "import-resolved", [("a/Other.java", "Other.findAll")])

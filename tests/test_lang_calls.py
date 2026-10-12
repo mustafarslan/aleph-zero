@@ -135,3 +135,38 @@ def test_python_says_what_the_first_name_of_a_call_is_bound_to():
 ])
 def test_the_other_languages_say_it_too(name, source, expected):
     assert shaped(name, source) == expected
+
+
+def typed(name: str, source: str):
+    """The calls on a local name whose type the function itself declares."""
+    profile = lang.PROFILES[name]
+    data = source.encode()
+    tree = parse.tree(profile, data)
+    return [(call.receiver + "|" + call.name, call.receiver_type)
+            for call in calls(profile, tree, data, definitions(profile, tree, data)) if call.receiver_type]
+
+
+@pytest.mark.parametrize("name,source,expected", [
+    ("python", "def f(a: Request, b: 'Client', c: Optional[Store], d: list[Item], e, g: Store | None = None):\n"
+               "    a.read(); b.send(); c.save(); d.append(1); e.go(); g.save()\n"
+               "    made = Engine(1)\n    made.run()\n    note: Note = load()\n    note.show()\n"
+               "    with Session() as s:\n        s.get()\n    made = other()\n",
+     [("a|read", "Request"), ("b|send", "Client"), ("c|save", "Store"), ("d|append", "list"), ("g|save", "Store"),
+      ("note|show", "Note"), ("s|get", "Session()")]),          # `made` is bound twice, to different things: not known
+    ("typescript", "function f(req: Request, opt?: Options, cb: () => void, n: Foo | null) {\n  req.end(); opt.get(); n.go();\n"
+                   "  const made = new Thing<string>();\n  made.run();\n  const typed: ns.Other = load();\n  typed.show();\n}\n",
+     [("req|end", "Request"), ("opt|get", "Options"), ("n|go", "Foo"), ("made|run", "Thing"), ("typed|show", "ns.Other")]),
+    ("go", "package a\nfunc f(g *generic.Gauge, n int, names ...string) {\n\tg.Set(1)\n\tv := &Gauge{}\n\tv.Add(1)\n\tw := Gauge{}\n\tw.Add(1)\n"
+           "\tvar x lv.Space\n\tx.Reset()\n\ty := new(Thing)\n\ty.Go()\n\tz := generic.NewGauge()\n\tz.Set(2)\n}\n",
+     [("g|Set", "generic.Gauge"), ("v|Add", "Gauge"), ("w|Add", "Gauge"), ("x|Reset", "lv.Space"), ("y|Go", "Thing"),
+      ("z|Set", "generic.NewGauge()")]),
+    ("rust", "fn f(s: &Searcher, m: &mut Matcher, b: Box<Sink>, o: Option<Thing>) {\n    s.run(); m.find(); b.write(); o.unwrap();\n"
+             "    let built = Builder::new();\n    built.build();\n    let c: Config = load();\n    c.check();\n    let lit = Point { x: 1 };\n    lit.len();\n}\n",
+     [("s|run", "Searcher"), ("m|find", "Matcher"), ("b|write", "Sink"), ("o|unwrap", "Option"), ("built|build", "Builder::new()"),
+      ("c|check", "Config"), ("lit|len", "Point")]),
+    ("java", "class A {\n  void m(Owner owner, final List<Pet> pets) {\n    owner.getName();\n    pets.add(null);\n    Pet pet = new Pet();\n    pet.setName(\"x\");\n"
+             "    var made = new Visit();\n    made.go();\n    for (Pet each : pets) { each.getName(); }\n  }\n}\n",
+     [("owner|getName", "Owner"), ("pets|add", "List"), ("pet|setName", "Pet"), ("made|go", "Visit"), ("each|getName", "Pet")]),
+])
+def test_a_call_on_a_local_name_carries_the_type_the_function_declares_for_it(name, source, expected):
+    assert typed(name, source) == expected

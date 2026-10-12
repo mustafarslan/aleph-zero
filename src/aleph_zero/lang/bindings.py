@@ -478,6 +478,216 @@ def _type_names(holder: Node) -> Iterator[str]:
             stack.extend(reversed(node.named_children))
 
 
+# ---- the types a type declares for its fields --------------------------------------------------
+
+_OWNERS: dict[str, frozenset[str]] = {
+    "python": frozenset({"class_definition"}),
+    "ecma": frozenset({"class_declaration", "class", "abstract_class_declaration"}),
+    "java": frozenset({"class_declaration", "interface_declaration", "enum_declaration", "record_declaration"}),
+    "go": frozenset({"type_spec"}),
+    "rust": frozenset({"struct_item"}),
+    "cpp": frozenset({"class_specifier", "struct_specifier"}),
+}
+_NAME = re.compile(r"^[A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)*$")
+_SEES_THROUGH = ("Box", "Rc", "Arc", "Optional")      # a call on one of these reaches what it holds
+_NOT_THERE = frozenset({"None", "null", "undefined"})
+
+
+def named_type(text: str) -> str:
+    """A type as written, as the one name a call on a value of it would be looked up under:
+    `*generic.Gauge` -> `generic.Gauge`, `Optional[Store]` -> `Store`, `&'a Matcher` -> `Matcher`,
+    `Map<String, Pet>` -> `Map`. '' when it is not one named type (`[]Item`, `() => void`, `A | B`)."""
+    kept = [part for part in _split_union(" ".join(text.split()).strip("\"'")) if part not in _NOT_THERE]
+    if len(kept) != 1:
+        return ""
+    name = kept[0]
+    for _ in range(4):
+        name = re.sub(r"^(?:[*&]+\s*|'\w+\s+|(?:mut|dyn|impl|final|const|readonly)\s+)+", "", name)
+        inside = re.match(r"^(\w+)\s*[<\[](.*)[>\]]$", name)
+        if inside is None or inside.group(1) not in _SEES_THROUGH:
+            break
+        name = inside.group(2).strip()
+    base = re.split(r"[<\[]", name, maxsplit=1)[0].strip()
+    return base if _NAME.match(base) else ""
+
+
+def constructed(callee: str) -> str:
+    """How a value built by a call is noted: `Engine()`. The graph decides whether `Engine` is a type."""
+    name = "".join(callee.split())
+    return name + "()" if _NAME.match(name) else ""
+
+
+def _split_union(text: str) -> list[str]:
+    parts, depth, start = [], 0, 0
+    for index, char in enumerate(text):
+        if char in "<[(":
+            depth += 1
+        elif char in ">])":
+            depth -= 1
+        elif char == "|" and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    return parts + [text[start:].strip()]
+
+
+def fields(profile: LanguageProfile, tree: Tree, data: bytes) -> list[tuple[str, str, str]]:
+    """(type, field, the field's type as `named_type` gives it), the type qualified within the file. Only
+    fields whose type the source states: a declaration, a constructor parameter kept as a field, or an
+    assignment from a constructor call or a typed parameter."""
+    family = "ecma" if profile.name in _ECMA else profile.name
+    kinds = _OWNERS.get(family)
+    if not kinds:
+        return []
+    out: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    stack: list[tuple[Node, str]] = [(tree.root_node, "")]
+    while stack:
+        node, prefix = stack.pop()
+        inner = prefix
+        own = node.child_by_field_name("name") if node.type in _NESTS or node.type in kinds else None
+        if node.type in kinds and own is not None:
+            for name, kind in _FIELD_READERS[family](node):
+                if name and kind and (prefix + _text(own), name) not in seen:
+                    seen.add((prefix + _text(own), name))
+                    out.append((prefix + _text(own), name, kind))
+        if node.type in _NESTS and own is not None:
+            inner = prefix + _text(own) + "."
+        stack.extend((child, inner) for child in reversed(node.children))
+    return out
+
+
+def _go_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("type")
+    if body is None or body.type != "struct_type":
+        return
+    for declared in _descend(body, "field_declaration"):
+        kind = declared.child_by_field_name("type")
+        for name in declared.children_by_field_name("name"):
+            yield _text(name), named_type(_text(kind))
+
+
+def _rust_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("body")
+    for declared in (_descend(body, "field_declaration") if body is not None else ()):
+        yield _text(declared.child_by_field_name("name")), named_type(_text(declared.child_by_field_name("type")))
+
+
+def _java_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("body")
+    for declared in (body.named_children if body is not None else ()):
+        if declared.type != "field_declaration":
+            continue
+        kind = named_type(_text(declared.child_by_field_name("type")))
+        for declarator in declared.children_by_field_name("declarator"):
+            yield _text(declarator.child_by_field_name("name")), kind
+
+
+def _cpp_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("body")
+    for declared in (body.named_children if body is not None else ()):
+        if declared.type != "field_declaration":
+            continue
+        kind = named_type(_text(declared.child_by_field_name("type")))
+        for declarator in declared.children_by_field_name("declarator"):
+            name = declarator
+            while name is not None and name.type != "field_identifier":
+                name = name.child_by_field_name("declarator")
+            if name is not None:
+                yield _text(name), kind
+
+
+def _annotation(node: Node | None) -> str:
+    """The type inside a TypeScript `: Type` annotation."""
+    if node is None:
+        return ""
+    return named_type(_text(node.named_children[0])) if node.type == "type_annotation" and node.named_children else named_type(_text(node))
+
+
+def _ecma_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("body")
+    for member in (body.named_children if body is not None else ()):
+        if member.type in ("public_field_definition", "field_definition"):
+            name = member.child_by_field_name("name") or member.child_by_field_name("property")
+            value = member.child_by_field_name("value")
+            kind = _annotation(member.child_by_field_name("type"))
+            if not kind and value is not None and value.type == "new_expression":
+                kind = named_type(_text(value.child_by_field_name("constructor")))
+            yield _text(name), kind
+        elif member.type == "method_definition":
+            typed: dict[str, str] = {}
+            parameters = member.child_by_field_name("parameters")
+            for parameter in (parameters.named_children if parameters is not None else ()):
+                pattern = parameter.child_by_field_name("pattern")
+                if pattern is None or pattern.type != "identifier":
+                    continue
+                kind = _annotation(parameter.child_by_field_name("type"))
+                typed[_text(pattern)] = kind
+                if any(child.type in ("accessibility_modifier", "readonly", "override_modifier") for child in parameter.children):
+                    yield _text(pattern), kind          # constructor(private readonly svc: Service)
+            for assigned in _descend_all(member.child_by_field_name("body"), "assignment_expression"):
+                left, right = assigned.child_by_field_name("left"), assigned.child_by_field_name("right")
+                if left is None or right is None or left.type != "member_expression":
+                    continue
+                holder, name = left.child_by_field_name("object"), left.child_by_field_name("property")
+                if holder is None or holder.type != "this" or name is None:
+                    continue
+                if right.type == "new_expression":
+                    yield _text(name), named_type(_text(right.child_by_field_name("constructor")))
+                elif right.type == "identifier" and typed.get(_text(right)):
+                    yield _text(name), typed[_text(right)]
+
+
+def _python_fields(node: Node) -> Iterator[tuple[str, str]]:
+    body = node.child_by_field_name("body")
+    for member in (body.named_children if body is not None else ()):
+        if member.type == "expression_statement" and member.named_children:
+            member = member.named_children[0]
+        if member.type == "assignment":
+            assigned = member
+            left, kind = assigned.child_by_field_name("left"), assigned.child_by_field_name("type")
+            if left is not None and left.type == "identifier" and kind is not None:
+                yield _text(left), named_type(_text(kind))
+            continue
+        method = member.child_by_field_name("definition") if member.type == "decorated_definition" else member
+        if method is None or method.type != "function_definition":
+            continue
+        parameters = method.child_by_field_name("parameters")
+        listed = parameters.named_children if parameters is not None else []
+        if not listed or listed[0].type != "identifier":
+            continue
+        receiver = _text(listed[0])
+        typed = {}
+        for parameter in listed[1:]:
+            if parameter.type in ("typed_parameter", "typed_default_parameter"):
+                name = parameter.child_by_field_name("name") or (parameter.named_children[0] if parameter.named_children else None)
+                typed[_text(name)] = named_type(_text(parameter.child_by_field_name("type")))
+        for assigned in _descend_all(method.child_by_field_name("body"), "assignment"):
+            left, right, kind = (assigned.child_by_field_name(field) for field in ("left", "right", "type"))
+            if left is None or left.type != "attribute" or _text(left.child_by_field_name("object")) != receiver:
+                continue
+            name = _text(left.child_by_field_name("attribute"))
+            if kind is not None:
+                yield name, named_type(_text(kind))
+            elif right is not None and right.type == "call":
+                yield name, constructed(_text(right.child_by_field_name("function")))
+            elif right is not None and right.type == "identifier" and typed.get(_text(right)):
+                yield name, typed[_text(right)]
+
+
+_FIELD_READERS = {"python": _python_fields, "ecma": _ecma_fields, "java": _java_fields, "go": _go_fields, "rust": _rust_fields,
+                  "cpp": _cpp_fields}
+
+
+def _descend_all(node: Node | None, kind: str) -> Iterator[Node]:
+    """Every node of that kind under `node`, in source order, nested ones included."""
+    stack = [node] if node is not None else []
+    while stack:
+        current = stack.pop()
+        if current.type == kind:
+            yield current
+        stack.extend(reversed(current.named_children))
+
+
 def _descend(node: Node, kind: str) -> Iterator[Node]:
     stack = [node]
     while stack:
