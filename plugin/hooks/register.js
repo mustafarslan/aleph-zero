@@ -29,6 +29,8 @@ let prompts = 0
 // takes that name and answers with the full one (`plugin:aleph-zero:aleph`), which is what
 // $.mcp.call wants. Found by trying: the short name is refused there.
 let server = null
+// Where the session was started, as session.start reports it.
+let sessionCwd = ''
 
 async function reach($, tool, args) {
   if (server === null) {
@@ -36,7 +38,9 @@ async function reach($, tool, args) {
     if (!connected || !connected.isConnected) return null
     server = connected.server
   }
-  return $.mcp.call(server, tool, args)
+  // The engine answers for the directory it is asked about; without one, for wherever its
+  // own process was started. The session may be in a subdirectory or another worktree.
+  return $.mcp.call(server, tool, sessionCwd ? { ...args, cwd: sessionCwd } : args)
 }
 
 // One call to the engine that can never hold up its hook: time inside a mods API call does
@@ -56,7 +60,7 @@ async function ask($, tool, args) {
 const CHAT_SETTINGS = 'aleph-zero.chat-settings'   // the pickers, kept between sessions
 const CHAT_USE = 'aleph-zero.chat-use'             // how often answers were cited and inserted
 const CHAT_ENGINE_MS = 2500                        // the chat may wait longer for the engine than a hook may
-const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: DEFAULTS.effort, tokens: 0, loaded: false, note: '' }
+const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: DEFAULTS.effort, tokens: 0, loaded: false, note: '', draft: '' }
 
 // One engine call for the chat: as in `ask`, never longer than its limit, and null for any failure.
 async function lookup($, tool, args) {
@@ -75,59 +79,83 @@ function symbolsOf(answer) {
 }
 
 async function count($, field) {
-  // Read just before writing: every session on the machine shares the store.
-  const kept = (await $.store.get(CHAT_USE)) || {}
-  await $.store.set(CHAT_USE, { ...kept, [field]: (kept[field] || 0) + 1 })
+  // A key of its own for each counter, read just before writing: every session on the machine
+  // shares the store. A count that cannot be kept must never cost the user an answer.
+  try {
+    const key = CHAT_USE + '.' + field
+    await $.store.set(key, Number((await $.store.get(key)) || 0) + 1)
+  } catch {
+    // the usefulness log is best effort
+  }
 }
 
-// One question: retrieval through the engine (no model), then one model call over the excerpts.
+function finish(turn, state, answer) {
+  turn.state = state
+  turn.answer = answer
+  if (chat.busy === turn) chat.busy = null
+}
+
+// One question: retrieval through the engine (no model), then one model call over the
+// excerpts. Whatever happens, the pane is left usable: the turn ends answered or failed.
 async function answerQuestion($, question) {
   const serial = chat.serial + 1
   chat.serial = serial
-  const turn = { question, answer: '', cited: [], tokens: 0, state: 'searching', seconds: 0 }
+  const turn = { question, answer: '', cited: [], tokens: 0, state: 'searching' }
   chat.turns.push(turn)
   chat.busy = turn
   chat.note = ''
   $.ui.invalidate('ui.render')
-  const previous = chat.turns.length > 1 ? chat.turns[chat.turns.length - 2].question : null
-  const wanted = plan(question, previous)
-  const [searched, ...named] = await Promise.all([
-    lookup($, 'search', { query: wanted.search, k: 6, detail: 'full' }),
-    ...wanted.symbols.map((name) => lookup($, 'symbol', { name, k: 3 })),
-  ])
-  if (chat.serial !== serial) return  // stopped, or a newer question took over
-  const found = excerpts(hitsOf(searched), named.flatMap(symbolsOf))
-  turn.state = 'thinking'
-  $.ui.invalidate('ui.render')
-  const asked = request(question, found, chat.turns.slice(0, -1).filter((earlier) => earlier.state === 'answered'))
-  const model = chat.model === 'session' ? await $.session.model() : chat.model
-  let reply
   try {
-    reply = await $.model.complete({
-      model,
-      effort: chat.effort,
-      prompt: [{ text: asked.rules, cache: true }, { text: asked.body }],
-      maxTokens: 1200,
-      timeoutMs: 90000,
-    })
+    const earlier = chat.turns.slice(0, -1).filter((past) => past.state === 'answered')
+    const wanted = plan(question, earlier.length ? earlier[earlier.length - 1].question : null)
+    const [searched, ...named] = await Promise.all([
+      lookup($, 'search', { query: wanted.search, k: 6 }),
+      ...wanted.symbols.map((name) => lookup($, 'symbol', { name, k: 3 })),
+    ])
+    if (chat.serial !== serial) return  // stopped
+    if (searched === null) {
+      // No model call for a question the index could not even be asked: it would cost
+      // tokens to be told that nothing was found, without saying why.
+      finish(turn, 'failed', 'The index did not answer. It may still be starting, or its tools are not allowed for the plugin: `/aleph check` says which.')
+      return
+    }
+    const found = excerpts(hitsOf(searched), named.flatMap(symbolsOf))
+    if (!found.length) {
+      finish(turn, 'failed', 'Nothing in the index matches that. Try the words the code would use, or a name.')
+      return
+    }
+    turn.state = 'thinking'
+    $.ui.invalidate('ui.render')
+    const asked = request(question, found, earlier)
+    let reply
+    try {
+      reply = await $.model.complete({
+        model: chat.model === 'session' ? await $.session.model() : chat.model,
+        effort: chat.effort,
+        prompt: [{ text: asked.rules, cache: true }, { text: asked.body }],
+        maxTokens: 1200,
+        timeoutMs: 90000,
+      })
+    } catch (error) {
+      reply = { isAnswered: false, reason: error && error.message ? error.message : String(error) }
+    }
+    turn.tokens = tokensOf(reply.usage)
+    chat.tokens += turn.tokens   // also for a question that was stopped: it was paid for
+    if (chat.serial !== serial) return
+    if (reply.isAnswered) {
+      turn.cited = citations(reply.text, found)
+      finish(turn, 'answered', reply.text)
+      await count($, 'answers')
+      if (turn.cited.length) await count($, 'cited')
+    } else {
+      finish(turn, 'failed', 'No answer: ' + (reply.reason || 'the model did not answer'))
+    }
   } catch (error) {
-    reply = { isAnswered: false, reason: error && error.message ? error.message : String(error) }
+    if (chat.serial === serial) finish(turn, 'failed', 'The question could not be answered: ' + (error && error.message ? error.message : String(error)))
+  } finally {
+    if (chat.busy === turn) chat.busy = null
+    $.ui.invalidate('ui.render')
   }
-  if (chat.serial !== serial) return
-  turn.tokens = tokensOf(reply.usage)
-  chat.tokens += turn.tokens
-  if (reply.isAnswered) {
-    turn.answer = reply.text
-    turn.cited = citations(reply.text, found)
-    turn.state = 'answered'
-    await count($, 'answers')
-    if (turn.cited.length) await count($, 'cited')
-  } else {
-    turn.answer = 'No answer: ' + (reply.reason || 'the model did not answer') + (searched === null ? ' (the engine did not answer either; `/aleph check` says why)' : '')
-    turn.state = 'failed'
-  }
-  chat.busy = null
-  $.ui.invalidate('ui.render')
 }
 
 function add(into, counted) {
@@ -163,6 +191,7 @@ export function register(on, options) {
   const pointer = !(options && options.grep_pointer === 'off')
 
   on('session.start', async ($, e, next) => {
+    if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
     await $.command.register({
       name: 'aleph',
       description: 'Aleph Zero: with no argument, opens the side chat about this repository. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
@@ -184,15 +213,23 @@ export function register(on, options) {
         }
         chat.loaded = true
       }
-      await $.ui.open({ id: PANE, title: 'Aleph side chat', focus: true, closeOnEscape: true, columns: 64 })
+      const opened = await $.ui.open({ id: PANE, title: 'Aleph side chat', focus: true, closeOnEscape: true, columns: 64 })
+      if (opened && opened.isPlaced === false) {
+        return { text: 'The side chat could not be opened here: ' + (opened.reason || 'this surface draws no panes') }
+      }
       return {}
     }
-    if (/\blast\b/.test(String(e.args || ''))) {
+    if (!['stats', 'stats last', 'check', 'check model'].includes(args)) {
+      // A question typed after the command would be answered with a report, and the row
+      // would enter the conversation. Questions go into the pane.
+      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `stats`, `stats last`, `check` and `check model`.' }
+    }
+    if (args === 'stats last') {
       // The session before this one (any session on this machine): a headless run cannot be asked afterwards.
       const kept = await $.store.get(LAST)
       return { text: kept ? 'last session · ' + report(kept.rung, kept.meter) : 'no session has been recorded yet' }
     }
-    if (/\bcheck\s+model\b/.test(args)) {
+    if (args === 'check model') {
       // One small real request in the shape the side chat sends (it costs a fraction of a cent):
       // says whether this build accepts it, without printing anything the model wrote.
       try {
@@ -212,7 +249,7 @@ export function register(on, options) {
         return { text: 'the side chat\'s request was refused: ' + (error && error.message ? error.message : String(error)) }
       }
     }
-    if (/\bcheck\b/.test(String(e.args || ''))) {
+    if (args === 'check') {
       // Can the mod reach the engine at all? Says what came back, or why nothing did.
       try {
         const answer = await reach($, 'search', { query: 'check', k: 1, format: 'json', timeout_ms: 2000 })
@@ -273,9 +310,7 @@ export function register(on, options) {
         key: 'stop', label: 'Stop', hotkey: 's', plain: true,
         onPress: () => {
           chat.serial += 1  // whatever comes back for the question in flight is dropped
-          chat.busy.state = 'failed'
-          chat.busy.answer = 'Stopped.'
-          chat.busy = null
+          if (chat.busy) finish(chat.busy, 'failed', 'Stopped.')
           $.ui.invalidate('ui.render')
         },
       }))
@@ -300,10 +335,22 @@ export function register(on, options) {
         ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
         ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
         Input({
-          key: 'question', label: 'Ask', placeholder: 'about this repository, then Enter', value: '', submitLabel: 'ask', autoFocus: true,
+          // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
+          // and a field drawn empty would wipe a half-typed question.
+          key: 'question', label: 'Ask', placeholder: 'about this repository, then Enter', value: chat.draft, submitLabel: 'ask', autoFocus: true,
+          onInput: (value) => {
+            chat.draft = String(value || '')
+          },
           onSubmit: async (value) => {
             const question = String(value || '').trim()
-            if (!question || chat.busy) return
+            if (!question) return
+            if (chat.busy) {
+              chat.draft = question
+              chat.note = 'The last question is still being answered. Press Stop, or wait, then Enter again.'
+              $.ui.invalidate('ui.render')
+              return
+            }
+            chat.draft = ''
             await answerQuestion($, question)
           },
         }),
