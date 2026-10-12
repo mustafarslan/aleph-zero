@@ -3,9 +3,28 @@
 Local code search for coding agents. Results always reflect the working tree,
 including uncommitted edits.
 
+## Install
+
+Aleph needs Python 3.13, git, and [uv](https://docs.astral.sh/uv/). From a checkout of this
+repository:
+
+    uv sync                                   # a development environment: use `uv run aleph ...`
+    uv tool install .                         # or: put `aleph` on your PATH
+
+What it fetches, and when:
+
+- **Grammars** for the languages it parses are downloaded the first time a file of that
+  language is read, into your cache directory. `aleph doctor --fetch-grammars` gets them
+  all at once; `aleph doctor` says which are missing.
+- **Search by meaning is optional** and off until you run `aleph embed setup`, which builds
+  a small local server and downloads a 310 MB model. Without it, search is by words and names.
+- Nothing else uses the network, and nothing about your code ever leaves the machine.
+
+The Claude Code plugin (`plugin/`) is part of the repository, not of the installed package:
+point Claude Code at a checkout (see below).
+
 ## Quick start
 
-    uv sync
     uv run aleph doctor                       # is everything in place?
     uv run aleph index                        # optional: the first search indexes too
     uv run aleph search "where are refresh tokens rotated"
@@ -20,6 +39,7 @@ Useful options for `search`: `--kind code|docs`, `--glob "src/api/*"`, `--lang p
 ## Use it from Claude Code
 
     claude mcp add aleph-zero -- /absolute/path/to/aleph-zero/.venv/bin/aleph serve
+    claude mcp add aleph-zero -- aleph serve          # if you installed it with `uv tool install`
 
 The server offers four tools for finding code. `search` is always loaded; `symbol`, `outline`
 and `status` load on demand. Each takes `cwd`, so one server answers for any worktree. Two
