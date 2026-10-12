@@ -24,6 +24,12 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **What it costs:** the benchmark harness needs an adapter for each set (the gold files are the files in the fix's patch); then, per language, fetching five to ten public repositories and some hours of GPU embedding.
 - **Status:** not started. C++ is next after the Python verdict, with the owner's go-ahead, since it is another GPU run.
 
+## 1c. Tuning runs that need the GPU for hours
+
+- **What:** two things the M2 plan lists and that were not run. (a) The split-threshold sweep of ADR-001: chunk at 96, 128, 192, 256 and 384 tokens and compare on Loc-Bench, with a signature-only control. (b) Re-tuning M1's starting values against Benchmark C: the column weights of the text index, the path and name rules, how many words a long query keeps.
+- **Why it waits:** every setting of (a) changes the chunks, so all 235 base commits must be re-indexed and re-embedded per setting: about 1.5 hours of GPU each, five settings. (b) needs no GPU for most settings but a re-index for the column weights.
+- **Status:** not started. Ranking and chunking run on the starting values, which passed the gate as they are.
+
 ## 2. Fifty hand-written questions for Benchmark C
 
 - **What:** the design asks for at least 50 questions in three categories (conceptual, exact identifier, mixed) on the owner's own repositories.
