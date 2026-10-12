@@ -33,6 +33,13 @@ FIELDS = (1.0, 1.0, 1.0)
 SUBJECT = 1.0
 RRF_K = 5               # small: with tens of records, first and second place must differ by more than 1/61 and 1/62
 NEAREST = 200           # chunks of the records asked of the vectors
+# How vectors take part. "rrf": the records in the order of their nearest chunk, fused by rank (measured: no better
+# than words). "convex": one vector per record, its cosine with the task and the BM25 score each scaled to 0..1 over
+# the records and added, `A` for the words; chosen on development pairs with each repository held out
+# (bench/eval/decisions_tune.py: +10 points of precision at 3 there). Off until it has run on oxn's pairs.
+FUSION = "rrf"
+A = 0.5
+CUT = 5000              # characters of a record, and of a task, that are embedded
 _NUMBERED = re.compile(r"(?:ADR[-_ ]?)?(\d+)[-_]", re.I)
 _TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 _VOWEL = re.compile(r"[aeiouy]")
@@ -131,6 +138,16 @@ def stem(word: str) -> str:
     return word[:-1] if word.endswith("e") and len(word) >= 4 else word
 
 
+def record_text(each: Decision) -> str:
+    """What is embedded for a whole record: what it is called, what it rules, then all of it from the start."""
+    return f"{each.title}\n\n{each.decision}\n\n{each.text}"[:CUT]
+
+
+def _scaled(values: list[float]) -> list[float]:
+    low, high = min(values), max(values)
+    return [(value - low) / (high - low) if high > low else 0.0 for value in values]
+
+
 class Records:
     """The decision records of one view, ready to be ranked."""
 
@@ -176,12 +193,22 @@ class Records:
                 scores[at] = scores.get(at, 0.0) + weight * frequency * (K1 + 1) / (frequency + norm)
         return sorted(scores.items(), key=lambda hit: (-hit[1], hit[0]))
 
-    def rank(self, task: str, by_vectors: list[str] | None = None, k: int = 7, rrf_k: int = RRF_K) -> list[DecisionHit]:
+    def rank(self, task: str, by_vectors: list[str] | None = None, k: int = 7, rrf_k: int = RRF_K,
+             nearness: dict[str, float] | None = None, a: float | None = None) -> list[DecisionHit]:
         """The `k` records for a task. `by_vectors`: the records' paths in the order of their nearest chunk,
-        when the worktree has vectors; the two orders are fused by reciprocal rank."""
+        when the worktree has vectors; the two orders are fused by reciprocal rank. `nearness`: instead, the
+        cosine of the task with every record's own vector, by path; scaled and added to the scaled word
+        scores, `a` for the words (`A`). A record no word names has a word score of 0 and can still be found."""
         if not task.strip():
             return [DecisionHit(each.path, each.number, each.title, each.status, 0.0, ()) for each in self.decisions[:k]]
         words = self.by_words(task)
+        if nearness is not None and self.decisions:
+            weight, named = A if a is None else a, dict(words)
+            by_words = _scaled([named.get(at, 0.0) for at in range(len(self.decisions))])
+            by_nearness = _scaled([nearness[each.path] for each in self.decisions])
+            total = [weight * word + (1 - weight) * near for word, near in zip(by_words, by_nearness)]
+            ordered = sorted(range(len(total)), key=lambda at: (-total[at], at))
+            return [self._hit(at, total[at], ("words", "vectors") if at in named else ("vectors",)) for at in ordered[:k]]
         if not by_vectors:
             return [self._hit(at, score, ("words",)) for at, score in words[:k]]
         place = {each.path: at for at, each in enumerate(self.decisions)}

@@ -61,3 +61,16 @@ def test_an_index_from_an_older_version_is_rebuilt_because_it_is_a_cache(tmp_pat
     assert conn.pragma("user_version") == SCHEMA_VERSION
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == [(0,)]
     assert conn.execute("SELECT count(*) FROM chunk_fts").fetchall() == [(0,)]
+
+
+def test_an_index_of_schema_9_gains_the_table_of_record_vectors_and_keeps_what_it_has(tmp_path):
+    path = tmp_path / "index.db"
+    conn = open_db(path)
+    conn.execute("INSERT INTO blobs VALUES ('abc', 'text', 'text', 1, 1, 0)")
+    conn.execute("DROP TABLE record_vectors")
+    conn.pragma("user_version", 9)
+    conn.close()
+    conn = open_db(path)
+    assert conn.pragma("user_version") == SCHEMA_VERSION == 10
+    assert conn.execute("SELECT count(*) FROM record_vectors").fetchall() == [(0,)]
+    assert conn.execute("SELECT count(*) FROM blobs").fetchall() == [(1,)]

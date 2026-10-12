@@ -27,7 +27,7 @@ from .chunking import CHUNKER_VERSION
 from .indexer import Index, collect_if_due
 from .lang.parse import forget_parsers
 from .search import search as run_search
-from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db, state_dir
+from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db, state_dir, transaction
 from .store import db as store_db
 from .view import View, build_view
 
@@ -39,6 +39,7 @@ GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for readi
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
+RECORD_EMBED_SECONDS = 5.0      # for the vectors of a view's decision records, made once and kept
 # A session's share of the machine-wide budget (ADR-005): four sessions and the worker's
 # 490 MB worst case inside 1,024 MB. A session usually holds 40 to 60 MB.
 SESSION_MEMORY_MB = 130
@@ -319,8 +320,13 @@ class Engine:
             cached = (view.fingerprint, decisions.Records(found), stated)
             self._records[view.root] = cached
         records = cached[1]
-        by_vectors, note = ([], "") if rrf_k == 0 or not task.strip() or not records.decisions else self._nearest_records(view, task, records)
-        hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k)
+        by_vectors, nearness, note = [], None, ""
+        if rrf_k != 0 and task.strip() and records.decisions:
+            if decisions.FUSION == "convex":
+                nearness, note = self._record_nearness(view, task, records)
+            else:
+                by_vectors, note = self._nearest_records(view, task, records)
+        hits = records.rank(task, by_vectors, k, decisions.RRF_K if rrf_k is None else rrf_k, nearness)
         if path is None or not str(path).strip():
             return decisions.Answer(task, hits, len(records.decisions), note, _elapsed(started))
         asked = _within(view.root, path)
@@ -365,6 +371,52 @@ class Engine:
         listed, counts, truncated = found
         return archfacts.Answer(kind, like, listed, counts, pending, left[0], late or left[0] > 0 and until is not None,
                                 _elapsed(started), truncated)
+
+    def _record_nearness(self, view: View, task: str, records: decisions.Records) -> tuple[dict[str, float] | None, str]:
+        """The cosine of the task with every record's own vector, by path, and how vectors took part. None when
+        they cannot: switched off by hand, no worker running (a query never starts one), or it did not answer in
+        time. All records or none: a ranking over some of them would be scaled wrongly. A record's vector is
+        made once and kept by its text; it does not wait for the worktree's chunks to be embedded, and does
+        not follow the verdict for the project's language, which is about searching code."""
+        if self.dense is False:
+            return None, ""
+        import hashlib
+
+        import numpy as np
+
+        from .embed import worker
+        from .embed.client import VECTOR_KIND, EmbedClient, EmbedPool, Unavailable
+
+        sock = worker.socket_path()
+        if not sock.exists():
+            return None, "the embedding worker is not running"
+        conn = self._index(view).conn
+        texts = [decisions.record_text(each) for each in records.decisions]
+        hashes = [hashlib.sha256(text.encode("utf-8", "replace")).hexdigest() for text in texts]
+        kept: dict[str, bytes] = {}
+        for start in range(0, len(hashes), 500):
+            some = hashes[start:start + 500]
+            kept.update(conn.execute(f"SELECT text_hash, vector FROM record_vectors WHERE kind = ? AND text_hash IN ({','.join('?' * len(some))})",
+                                     (VECTOR_KIND, *some)))
+        missing = [at for at, key in enumerate(hashes) if key not in kept]
+        try:
+            if missing:
+                pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots(), timeout=RECORD_EMBED_SECONDS)
+                try:
+                    made = pool.embed([texts[at] for at in missing], kind="document")
+                finally:
+                    pool.close()
+                rows = [(hashes[at], VECTOR_KIND, np.ascontiguousarray(row, dtype=np.float32).tobytes()) for at, row in zip(missing, made)]
+                with transaction(conn):
+                    conn.executemany("INSERT OR REPLACE INTO record_vectors(text_hash, kind, vector) VALUES (?, ?, ?)", rows)
+                kept.update((key, blob) for key, _, blob in rows)
+            if self._embedder is None or self._embedder.socket_path != sock:
+                self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
+            query = self._embedder.embed([task[:decisions.CUT]], kind="query")[0]
+        except Unavailable as exc:
+            return None, str(exc)
+        matrix = np.stack([np.frombuffer(kept[key], dtype=np.float32) for key in hashes])
+        return dict(zip((each.path for each in records.decisions), (matrix @ query).tolist())), "used"
 
     def _nearest_records(self, view: View, task: str, records: decisions.Records) -> tuple[list[str], str]:
         """The records' paths in the order of their nearest chunk to the task, and how vectors took part."""

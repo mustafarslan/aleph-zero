@@ -118,14 +118,11 @@ def best(table: dict[int, dict[str, list[dict]]], names: list[str]) -> int:
 
 # ---- vectors -------------------------------------------------------------------------------------------
 
-CUT, PASSAGE = 5000, 1000
+CUT, PASSAGE = records_of.CUT, 1000
 VARIANTS = ("record", "passages")
 WEIGHTS = (0.9, 0.8, 0.7, 0.6, 0.5)
 DENSE = [{"variant": variant, "a": a} for variant in VARIANTS for a in WEIGHTS]
-
-
-def record_text(each) -> str:
-    return f"{each.title}\n\n{each.decision}\n\n{each.text}"[:CUT]
+record_text = records_of.record_text       # one definition: what the engine embeds for a record is what was measured
 
 
 def passages(each) -> list[str]:
@@ -193,18 +190,62 @@ def scaled(values: list[float]) -> list[float]:
     return [(value - low) / (high - low) if high > low else 0.0 for value in values]
 
 
-def fused_orders(corpus: dict, near: list[list[float]], a: float) -> list[list[int]]:
+def fused(corpus: dict, near: list[list[float]], a: float) -> list[tuple[list[int], list[str], dict[str, float]]]:
+    """Per pair: the records' numbers in fused order, their paths in that order, and each path's fused score."""
     ranker = records_of.Records(corpus["parsed"], stems=False, b=0.75, fields=(1.0, 1.0, 1.0), subject=1.0)
-    numbers = [each.number for each in ranker.decisions]
+    numbers, paths = [each.number for each in ranker.decisions], [each.path for each in ranker.decisions]
     place = {each.path: at for at, each in enumerate(corpus["parsed"])}        # `near` is in the order of `parsed`
     out = []
     for pair, cosines in zip(corpus["pairs"], near):
         words = dict(ranker.by_words(pair["task"]))
         by_words = scaled([words.get(at, 0.0) for at in range(len(numbers))])
-        by_nearness = scaled([cosines[place[each.path]] for each in ranker.decisions])
+        by_nearness = scaled([cosines[place[path]] for path in paths])
         total = [a * w + (1 - a) * n for w, n in zip(by_words, by_nearness)]
-        out.append([numbers[at] for at in sorted(range(len(numbers)), key=lambda at: (-total[at], numbers[at]))])
+        ordered = sorted(range(len(numbers)), key=lambda at: (-total[at], at))     # the records' own order: by number, then path
+        out.append(([numbers[at] for at in ordered], [paths[at] for at in ordered], dict(zip(paths, total))))
     return out
+
+
+def fused_orders(corpus: dict, near: list[list[float]], a: float) -> list[list[int]]:
+    return [order for order, _, _ in fused(corpus, near, a)]
+
+
+# Two records whose fused scores are nearer than this may stand either way round. The worker's vectors change in
+# their last digits with how texts are batched (measured: up to 1.3e-4 in the cosine of a task with a record,
+# batch against one at a time), and scaling to 0..1 stretches that. First set at 1e-5, before the noise was measured.
+TIE = 1e-3
+
+
+def check_engine(workdir: Path, labels: dict, corpora: dict, near: dict) -> dict:
+    """Whether the engine, with the fusion switched on, ranks every development pair as this script does."""
+    import tempfile
+
+    from aleph_zero import engine as engine_module
+    from aleph_zero.engine import Engine
+
+    engine_module.QUERY_EMBED_SECONDS = 30.0        # a busy worker must not turn a check of the fusion into a check of words
+    records_of.FUSION = "convex"
+    same = ties = different = unused = first_three = 0
+    examples = []
+    with tempfile.TemporaryDirectory(prefix="aleph-decisions-") as scratch:
+        for name, spec in labels["corpora"].items():
+            where = harness.scratch_repository(workdir / name, spec["sha"], spec["records"], Path(scratch) / name)
+            engine = Engine(where)
+            for pair, (_, order, total) in zip(corpora[name]["pairs"], fused(corpora[name], near[name]["record"], records_of.A)):
+                answer = engine.decisions(pair["task"], k=len(order))
+                unused += answer.vectors != "used"
+                theirs = [hit.path for hit in answer.decisions]
+                first_three += theirs[:3] == order[:3]
+                if theirs == order:
+                    same += 1
+                elif sorted(theirs) == sorted(order) and all(one == other or abs(total[one] - total[other]) < TIE for one, other in zip(theirs, order)):
+                    ties += 1
+                else:
+                    different += 1
+                    examples.append({"corpus": name, "sha": pair["sha"][:10], "engine": theirs[:5], "script": order[:5], "vectors": answer.vectors})
+            engine.close()
+    return {"pairs": same + ties + different, "the same order": same, "the same but for ties": ties, "different": different,
+            "the same first three": first_three, "answered without vectors": unused, "examples": examples[:5]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -212,10 +253,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--labels", default="labels-pub.json")
     parser.add_argument("--dense", action="store_true", help="the ten settings with vectors instead of the 48 by words (needs the embed worker)")
+    parser.add_argument("--check-engine", action="store_true",
+                        help="whether the engine, with the fusion switched on, gives this script's order on every pair (needs the embed worker)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    corpora = load(args.workdir, json.loads((args.workdir / args.labels).read_text()))
+    labels = json.loads((args.workdir / args.labels).read_text())
+    corpora = load(args.workdir, labels)
     global SETTINGS
+    if args.check_engine:
+        vectors = Vectors(args.workdir)
+        found = check_engine(args.workdir, labels, corpora, {name: nearness(corpus, vectors) for name, corpus in corpora.items()})
+        print(json.dumps(found, indent=2))
+        return 0 if not found["different"] and not found["answered without vectors"] else 1
     if args.dense:
         vectors = Vectors(args.workdir)
         near = {name: nearness(corpus, vectors) for name, corpus in corpora.items()}

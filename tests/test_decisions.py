@@ -218,3 +218,84 @@ def test_the_first_line_of_a_task_can_be_made_to_count_more_than_the_rest():
     assert [hit.number for hit in decisions.Records(records).rank(task)] == [1, 2]              # the body's many words win
     assert [hit.number for hit in decisions.Records(records, subject=4.0).rank(task)] == [2, 1]  # what the commit is about wins
     assert (decisions.FIELDS, decisions.SUBJECT) == ((1.0, 1.0, 1.0), 1.0)                       # both are off unless asked for
+
+
+def _three():
+    from aleph_zero import decisions
+
+    return [decisions.parse(f"docs/adr/000{n}-x.md", n, text) for n, text in enumerate((
+        "# 1. Responses are cached at the edge\n\n## Decision\n\nWe cache responses.\n",
+        "# 2. Queues carry the work\n\nA queue per kind of work.\n",
+        "# 3. Events invalidate what is kept\n\nNothing here shares a word with the task below.\n"), 1)]
+
+
+def test_words_and_nearness_are_scaled_and_added_and_a_record_no_word_names_can_still_be_found():
+    """The fusion that was chosen on development pairs (bench/eval/decisions_tune.py): for one task, the BM25 scores
+    and the cosines are each scaled to 0..1 over all the records and added with a weight."""
+    from aleph_zero import decisions
+
+    records = decisions.Records(_three())
+    task = "cache responses"
+    assert [hit.number for hit in records.rank(task)] == [1]                           # by words: only the first shares one
+    near = {"docs/adr/0001-x.md": 0.2, "docs/adr/0002-x.md": 0.1, "docs/adr/0003-x.md": 0.9}
+    fused = records.rank(task, nearness=near, a=0.5)
+    # words scaled: 1, 0, 0; nearness scaled: 0.125, 0, 1  ->  0.5625, 0, 0.5
+    assert [(hit.number, hit.score, hit.sources) for hit in fused] == [(1, 0.5625, ("words", "vectors")), (3, 0.5, ("vectors",)), (2, 0.0, ("vectors",))]
+    assert [hit.number for hit in records.rank(task, nearness=near, a=0.3)] == [3, 1, 2]       # nearness counts for more
+    assert [hit.number for hit in records.rank(task, nearness={path: 0.4 for path in near}, a=0.5)] == [1, 2, 3]   # equal: the records' own order
+    assert [hit.number for hit in records.rank(task, nearness=near, a=0.5, k=1)] == [1]
+    assert (decisions.FUSION, decisions.A, decisions.CUT) == ("rrf", 0.5, 5000)       # off until it has run on oxn's pairs
+
+
+def test_what_is_embedded_for_a_record_is_its_title_its_decision_and_then_its_text():
+    from aleph_zero import decisions
+
+    record = _three()[0]
+    assert decisions.record_text(record).startswith("Responses are cached at the edge\n\nWe cache responses.")
+    assert decisions.record_text(record).endswith(record.text) and decisions.record_text(record).count("We cache responses.") == 2
+    long = decisions.parse("docs/adr/0009-x.md", 9, "# 9. Long\n\n" + "word " * 5000)
+    assert len(decisions.record_text(long)) == decisions.CUT
+
+
+def test_with_the_fusion_switched_on_the_engine_ranks_by_words_and_record_vectors(repo, fake_worker, monkeypatch):
+    from aleph_zero import decisions
+    from aleph_zero.embed import worker
+    from aleph_zero.embed.client import EmbedClient
+
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(decisions, "FUSION", "convex")
+    engine = project(repo)
+    task = "publish the order events on the bus"
+    answer = engine.decisions(task)
+    assert answer.vectors == "used" and len(answer.decisions) == 4                         # every record has a place, by words or by nearness
+    assert all("vectors" in hit.sources for hit in answer.decisions)
+    # the same order as the fusion worked out by hand from the same texts and the same worker
+    client = EmbedClient(fake_worker, capacity=worker.capacity_tokens())
+    kept = decisions.Records([hit for hit in engine._records[repo.root][1].decisions])
+    vectors = client.embed([decisions.record_text(each) for each in kept.decisions], kind="document")
+    query = client.embed([task[:decisions.CUT]], kind="query")[0]
+    near = {each.path: float(vectors[at] @ query) for at, each in enumerate(kept.decisions)}
+    assert [hit.number for hit in answer.decisions] == [hit.number for hit in kept.rank(task, nearness=near, a=decisions.A)]
+    alone = engine.decisions(task, rrf_k=0)
+    assert alone.vectors == "" and all(hit.sources == ("words",) for hit in alone.decisions)   # asked for words alone: words alone
+    # the records' vectors are kept: a second engine does not make them again
+    count = lambda: engine._index(engine._view(None)).conn.execute("SELECT count(*) FROM record_vectors").fetchone()[0]  # noqa: E731
+    assert count() == 4
+    repo.write("docs/adr/0012-use-an-event-bus.md", BUS + "\nAmended.\n")
+    assert engine.decisions(task).vectors == "used" and count() == 5                       # one record changed: one vector more
+
+
+def test_without_a_worker_or_switched_off_by_hand_the_fused_ranker_is_words_alone_and_says_so(repo, fake_worker, monkeypatch):
+    from pathlib import Path
+
+    from aleph_zero import decisions
+    from aleph_zero.embed import worker
+
+    monkeypatch.setattr(decisions, "FUSION", "convex")
+    monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
+    project(repo)
+    answer = Engine(repo.root).decisions("publish the order events on the bus")
+    assert all(hit.sources == ("words",) for hit in answer.decisions) and "not running" in answer.vectors
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    off = Engine(repo.root, dense=False).decisions("publish the order events on the bus")
+    assert all(hit.sources == ("words",) for hit in off.decisions) and off.vectors == ""

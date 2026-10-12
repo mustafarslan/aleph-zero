@@ -156,9 +156,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--dense", action="store_true", help="with vectors (needs the embed worker); default: words and names alone")
     parser.add_argument("--reference", action="store_true", help="oxn's own ranker over the same candidates: calibrates this harness")
-    parser.add_argument("--ranker", choices=("words", "fused5", "fused60", "stems", "length", "stems+length"),
+    parser.add_argument("--ranker", choices=("words", "fused5", "fused60", "stems", "length", "stems+length", "convex"),
                         help="Aleph's ranker for decisions (`Engine.decisions`): by words alone, fused with vectors at that k, "
-                             "or one of Task 2b's candidates: words reduced to stems, b = 0.4, both")
+                             "one of Task 2b's candidates (words reduced to stems, b = 0.4, both), or `convex`: words and one "
+                             "vector per record, scaled and added (needs the embed worker)")
     parser.add_argument("--fields", help="with --ranker: how much a word counts in a record's title, its Decision section and "
                                          "elsewhere, as T,D,R (1,1,1 is the ranking that was measured)")
     parser.add_argument("--subject", type=float, help="with --ranker: how much a word of the task's first line counts against the rest")
@@ -176,13 +177,20 @@ def main(argv: list[str] | None = None) -> int:
         decision_records.SUBJECT = args.subject
     if args.b is not None:
         decision_records.B = args.b
+    if args.ranker == "convex":
+        from aleph_zero import engine as engine_module
+
+        decision_records.FUSION = "convex"
+        engine_module.QUERY_EMBED_SECONDS = 30.0    # a busy worker must not turn a run of the fusion into a run of words
     labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []
     notes: dict[str, str] = {}
+    without = 0         # answers of the fused ranker in which vectors took no part: they are words alone, and must be none
     with tempfile.TemporaryDirectory(prefix="aleph-decisions-") as scratch:
         for name, spec in labels["corpora"].items():
             root = args.workdir / name
-            numbers = decisions(root, spec["sha"], spec["adr_dir"])
+            # A development set says which records its pairs were drawn against; oxn's 100 are read as oxn's protocol reads them.
+            numbers = spec["records"] if "records" in spec else decisions(root, spec["sha"], spec["adr_dir"])
             where = scratch_repository(root, spec["sha"], numbers, Path(scratch) / name)
             if args.reference:
                 texts = {path: (where / path).read_text(errors="replace") for path in numbers}
@@ -199,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             for pair in spec["pairs"]:
                 query = task_text(root, pair["sha"])
                 if args.ranker:
-                    answer = engine.decisions(query, k=len(numbers), rrf_k={"fused5": 5, "fused60": 60}.get(args.ranker, 0))
+                    answer = engine.decisions(query, k=len(numbers), rrf_k=None if args.ranker == "convex" else {"fused5": 5, "fused60": 60}.get(args.ranker, 0))
+                    without += args.ranker == "convex" and answer.vectors != "used"
                     order, tokens = [hit.number for hit in answer.decisions], estimate_tokens(decision_records.text(
                         decision_records.Answer(query, answer.decisions[:7], answer.known)))
                 else:
@@ -215,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         "not written by an agent": score([row for row in rows if not row["agent_authored"]]),
         "per corpus": {name: score([row for row in rows if row["corpus"] == name]) for name in labels["corpora"]},
         "mean tokens of the answer": round(sum(row["tokens"] for row in rows) / max(1, len(rows))),
+        "answered without vectors": without,
         "notes": notes,
         "misses_at_3": [{"corpus": row["corpus"], "sha": row["sha"][:10], "gold": sorted(row["gold"]), "first": row["order"][:5]}
                         for row in rows if not any(number in row["gold"] for number in row["order"][:3])],

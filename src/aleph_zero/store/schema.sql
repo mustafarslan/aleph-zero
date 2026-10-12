@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS arch_facts (
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
+-- One vector for a whole decision record (`aleph decisions`), by the text that was embedded: its title, its
+-- Decision section and its body, cut. Keyed by that text, so a record that did not change is not embedded again
+-- and one that did leaves its old row behind (a few hundred bytes; an index is a cache and is rebuilt whole).
+CREATE TABLE IF NOT EXISTS record_vectors (
+    text_hash TEXT NOT NULL,      -- sha256 of the embedded text
+    kind      TEXT NOT NULL,      -- the model, prefix version and width the vector was made with
+    vector    BLOB NOT NULL,      -- float32, unit length
+    PRIMARY KEY (text_hash, kind)
+) WITHOUT ROWID;
+
 -- Compiler-grade indexes (SCIP) made elsewhere and imported (M9). One row per document: the blob
 -- it is taken to have been made from, the documents it depends on, and its references to
 -- definitions inside the tree. Believed in a view only while those blobs are the view's

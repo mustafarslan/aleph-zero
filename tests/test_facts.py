@@ -169,7 +169,7 @@ def test_an_index_of_the_schema_before_gets_the_table_in_place(repo):
     conn.pragma("user_version", 8)
     conn.close()
     conn = open_db(index_path(repo.root))
-    assert conn.pragma("user_version") == SCHEMA_VERSION == 9
+    assert conn.pragma("user_version") == SCHEMA_VERSION
     assert conn.execute("SELECT count(*) FROM graph_facts").fetchall() == read and read != [(0,)]
     assert Engine(repo.root).facts().counts["route"] == 5
 
