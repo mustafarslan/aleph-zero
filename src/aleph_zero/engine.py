@@ -106,14 +106,14 @@ class Engine:
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
 
     def embed(self, cwd: Path | str | None = None, budget_seconds: float = float("inf"), batch: int | None = None,
-              stop=None, progress=None):
+              stop=None, progress=None, sync_seconds: float = SYNC_SECONDS):
         """Give the chunks of this worktree their vectors (slow: about a hundred a second).
         Starts the worker if needed. Returns an embedder.EmbedReport."""
         from . import embedder
         from .embed import worker
         from .embed.client import EmbedPool, Unavailable
 
-        index, view, _, _ = self._ready(cwd, time.monotonic(), None)
+        index, view, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=sync_seconds)
         store = self._store(index, view)
         try:
             sock = worker.ensure()

@@ -135,7 +135,8 @@ class _Background:
                 cwd = self._wanted.get()
             while not self._stopping.is_set():
                 try:
-                    report = self._engine.embed(cwd, budget_seconds=self.ROUND_SECONDS, stop=self._stopping.is_set)
+                    report = self._engine.embed(cwd, budget_seconds=self.ROUND_SECONDS, stop=self._stopping.is_set,
+                                                sync_seconds=0.0)  # indexing is the foreground's job
                 except Exception:  # noqa: BLE001 - not a repository any more, a locked index: try again on the next call
                     break
                 if report.remaining == 0 or not self._wanted.empty():

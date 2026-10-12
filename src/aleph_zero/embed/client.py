@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +26,7 @@ QUERY_PREFIX = "task: code retrieval | query: "
 DOCUMENT_PREFIX = "title: none | text: "
 FULL_WIDTH = 768
 TRUNCATION_MARGIN = 8            # room for the special tokens the server adds back
+CONNECT_BACKOFF = (0.01, 0.02, 0.05, 0.1, 0.2)   # seconds between tries when a connection is refused
 
 
 class Unavailable(Exception):
@@ -36,9 +39,21 @@ class _UnixConnection(http.client.HTTPConnection):
         self._path = path
 
     def connect(self) -> None:
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(self._path)
+        # A server whose queue of waiting connections is full refuses the next one at once
+        # (macOS does not make it wait). A pool opens several together, and two sessions
+        # may do so at the same moment, so a refusal is retried briefly while the socket
+        # file is there. No file means no worker: that fails immediately.
+        for pause in (*CONNECT_BACKOFF, None):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            try:
+                self.sock.connect(self._path)
+                return
+            except ConnectionRefusedError:
+                self.sock.close()
+                if pause is None or not os.path.exists(self._path):
+                    raise
+                time.sleep(pause)
 
 
 class EmbedPool:

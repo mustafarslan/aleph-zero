@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
-    request_queue_size = 64  # the default of 5 refuses some of a pool's eight simultaneous connections
+    request_queue_size = 5   # as small as the real server's: a full queue refuses a connection at once
 
 
 if __name__ == "__main__":
