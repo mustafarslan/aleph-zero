@@ -89,7 +89,7 @@ def test_garbage_collection_drops_old_content_but_never_the_current_view(repo):
     index.sync(build_view(repo.root))
     assert _total(index, "blobs") == 4
     removed = collect_garbage(index.conn, max_age_days=0, now=2_000_000_000)
-    assert removed == {"blobs_removed": 1, "chunks_removed": 1}
+    assert removed == {"blobs_removed": 1, "chunks_removed": 1, "finished": True}
     assert _total(index, "blobs") == 3
     assert index.sync(build_view(repo.root)).indexed == 0
 
@@ -408,3 +408,64 @@ def test_reading_gives_one_state_for_several_statements(repo):
         index.narrow(view, "code", lambda path: path.startswith("src/"), key="src")  # temp tables still work
     assert _total(index, "blobs") == 0
     assert not index.undisturbed()
+
+
+# ---- collection that runs by itself (M3) ------------------------------------------------------------------
+
+def _replace_and_age(repo, index, days=40):
+    """Leave one blob that no view uses any more, last seen `days` ago."""
+    repo.write("src/billing/invoice.py", "replaced = True\n")
+    repo.commit("replace")
+    index.sync(build_view(repo.root))
+    index.conn.execute("UPDATE blobs SET last_seen_at = ? WHERE (blob_oid, family) NOT IN "
+                       "(SELECT blob_oid, family FROM temp.view_blobs)", (int(time.time() - days * 86400),))
+
+
+def test_collection_within_a_time_limit_stops_and_says_it_has_not_finished(repo):
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    _replace_and_age(repo, index)
+    report = collect_garbage(index.conn, max_age_days=30, budget_seconds=0.0)
+    assert report["finished"] is False and _total(index, "blobs") == 4
+    report = collect_garbage(index.conn, max_age_days=30, budget_seconds=5.0)
+    assert report == {"blobs_removed": 1, "chunks_removed": 1, "finished": True}
+
+
+def test_old_content_is_collected_by_itself_once_a_day_after_a_sync_that_stored_something(repo):
+    from aleph_zero import indexer
+
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    assert indexer.collect_if_due(index.conn) is None            # a new index was "collected" when it was made
+    _replace_and_age(repo, index)
+    assert _total(index, "blobs") == 4
+    index.conn.execute("UPDATE meta SET value = value - 90000 WHERE key = 'collected_at'")   # a day and an hour ago
+    report = indexer.collect_if_due(index.conn)
+    assert report["blobs_removed"] == 1 and _total(index, "blobs") == 3
+    assert indexer.collect_if_due(index.conn) is None            # not again today
+
+
+def test_only_one_session_collects_when_it_is_due(repo):
+    from aleph_zero import indexer
+
+    first, second = _index(repo), _index(repo)
+    first.sync(build_view(repo.root))
+    assert indexer.collect_if_due(first.conn) is None   # the index is new
+    _replace_and_age(repo, first)
+    first.conn.execute("UPDATE meta SET value = value - 90000 WHERE key = 'collected_at'")
+    reports = [indexer.collect_if_due(first.conn), indexer.collect_if_due(second.conn)]
+    assert [report is not None for report in reports] == [True, False]
+
+
+def test_content_last_seen_within_the_age_is_kept_whoever_collects(repo):
+    """Another session's view is protected by how recently it was seen, not by being this
+    session's view."""
+    from aleph_zero import indexer
+
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    assert indexer.collect_if_due(index.conn) is None
+    _replace_and_age(repo, index, days=2)       # used two days ago by some other worktree
+    index.conn.execute("UPDATE meta SET value = value - 90000 WHERE key = 'collected_at'")
+    assert indexer.collect_if_due(index.conn)["blobs_removed"] == 0
+    assert _total(index, "blobs") == 4

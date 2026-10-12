@@ -20,7 +20,7 @@ import apsw
 from . import dense_policy, gitio, lang, render, sources, symbols
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
-from .indexer import Index
+from .indexer import Index, collect_if_due
 from .search import search as run_search
 from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db
 from .store import db as store_db
@@ -248,9 +248,11 @@ class Engine:
     def _vector_status(self, index: Index, view: View) -> dict:
         from .embed.client import VECTOR_KIND
 
-        have, total = self._store(index, view).coverage(index)
+        store = self._store(index, view)
+        have, total = store.coverage(index)
         enabled, why = self._dense_decision(index)
-        return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total}
+        return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total,
+                **store.rows()}
 
     def _dense_decision(self, index: Index) -> tuple[bool, str]:
         """Whether vectors take part for the worktree this index is synced to, and why."""
@@ -321,6 +323,13 @@ class Engine:
         report = index.sync(view, budget_seconds=budget, stop=self._stop.is_set)
         if self._stop.is_set():
             raise Cancelled
+        if until is None and (report.indexed or report.skipped):
+            # New content was stored, so old content may be due to go. Not under a caller's
+            # time limit, and never an error for the query that happens to trigger it.
+            try:
+                collect_if_due(index.conn)
+            except apsw.BusyError:
+                pass
         return index, view, report.pending, until is not None and report.pending > 0
 
 

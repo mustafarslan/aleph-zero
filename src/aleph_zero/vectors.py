@@ -7,9 +7,11 @@ are written at their own offset and flushed to disk *inside* the index's write
 transaction, before it commits. A row the database can see therefore always has its
 bytes, in every process, and after a crash.
 
-Rows are never moved and never reused: another session has the file mapped. Garbage
-collection only removes the database entry (it goes with its chunk). Search reads
-just the rows of the current view, so dead rows cost disk space, not time.
+Rows are never moved: another session has the file mapped. When a chunk is collected its
+database entry goes and its row is put on a free list; a later chunk is given that row
+before the file is extended. Search reads only the rows of chunks in its view, so a free
+row is read by nobody. The file therefore stops growing, but it does not shrink: a
+session may have its tail mapped.
 """
 from __future__ import annotations
 
@@ -71,20 +73,29 @@ class VectorStore:
             if not new:
                 return 0
             first = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
-            start = first[0][0] if first else 0
+            end = first[0][0] if first else 0
+            free = [row[0] for row in self.conn.execute(
+                "SELECT row FROM vector_free WHERE kind = ? ORDER BY row LIMIT ?", (self.kind, len(new)))]
+            grown = len(new) - len(free)
+            rows = [*free, *range(end, end + grown)]
             self.conn.execute(
-                "INSERT INTO vector_files(kind, next_row) VALUES (?, ?) "
-                "ON CONFLICT(kind) DO UPDATE SET next_row = excluded.next_row", (self.kind, start + len(new)))
-            payload = half[[position for position, _ in new]].tobytes()
+                "INSERT INTO vector_files(kind, next_row, writes) VALUES (?, ?, 1) "
+                "ON CONFLICT(kind) DO UPDATE SET next_row = excluded.next_row, writes = writes + 1",
+                (self.kind, end + grown))
+            self.conn.executemany("DELETE FROM vector_free WHERE kind = ? AND row = ?", ((self.kind, row) for row in free))
+            payload = half[[position for position, _ in new]]
             descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
-                os.pwrite(descriptor, payload, start * ROW_BYTES)
+                for offset, row in enumerate(free):  # rows of collected chunks, wherever they are
+                    os.pwrite(descriptor, payload[offset].tobytes(), row * ROW_BYTES)
+                if grown:
+                    os.pwrite(descriptor, payload[len(free):].tobytes(), end * ROW_BYTES)
                 os.fsync(descriptor)  # on disk before the database says the rows exist
             finally:
                 os.close(descriptor)
             self.conn.executemany(
                 "INSERT INTO chunk_vectors(chunk_id, kind, row) VALUES (?, ?, ?)",
-                ((chunk_id, self.kind, start + offset) for offset, (_, chunk_id) in enumerate(new)))
+                ((chunk_id, self.kind, row) for (_, chunk_id), row in zip(new, rows)))
         return len(new)
 
     # ---- reading ---------------------------------------------------------------------------
@@ -112,9 +123,19 @@ class VectorStore:
         return self._coverage[1]
 
     def _stored(self) -> int:
-        """How many rows were ever given out for this kind: changes whenever a vector is added."""
-        found = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
+        """Changes whenever a vector of this kind is added, in a new row or a used-again one."""
+        found = self.conn.execute("SELECT writes FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
         return found[0][0] if found else 0
+
+    def rows(self) -> dict[str, int]:
+        """The file in numbers: its rows, how many belong to no chunk, and its size."""
+        found = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
+        free = self.conn.execute("SELECT count(*) FROM vector_free WHERE kind = ?", (self.kind,)).fetchall()[0][0]
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            size = 0
+        return {"rows": found[0][0] if found else 0, "free_rows": free, "file_bytes": size}
 
     def search(self, index: Index, query: np.ndarray, limit: int, scoped: bool = False) -> list[tuple[int, float]]:
         """(chunk id, cosine similarity) of the nearest chunks of the view, best first.

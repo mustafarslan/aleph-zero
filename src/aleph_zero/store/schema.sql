@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS imports (
 ) WITHOUT ROWID;
 
 -- Which row of a vector file holds a chunk's embedding. One file per kind of vector
--- (model, prefix version, width); a row is never moved or reused (vectors.py).
+-- (model, prefix version, width). A row is never moved; when its chunk is collected it
+-- goes on the free list and is given to a later chunk (vectors.py).
 CREATE TABLE IF NOT EXISTS chunk_vectors (
     chunk_id INTEGER NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
     kind     TEXT NOT NULL,
@@ -77,14 +78,30 @@ CREATE TABLE IF NOT EXISTS chunk_vectors (
     PRIMARY KEY (chunk_id, kind)
 ) WITHOUT ROWID;
 
+-- No two chunks share a row, whatever a session does.
+CREATE UNIQUE INDEX IF NOT EXISTS chunk_vectors_by_row ON chunk_vectors(kind, row);
+
+-- Rows of the vector file that belong to no chunk any more.
+CREATE TABLE IF NOT EXISTS vector_free (
+    kind TEXT NOT NULL,
+    row  INTEGER NOT NULL,
+    PRIMARY KEY (kind, row)
+) WITHOUT ROWID;
+
+CREATE TRIGGER IF NOT EXISTS chunk_vectors_freed AFTER DELETE ON chunk_vectors
+BEGIN
+    INSERT OR IGNORE INTO vector_free(kind, row) VALUES (old.kind, old.row);
+END;
+
 CREATE TABLE IF NOT EXISTS vector_files (
     kind     TEXT PRIMARY KEY,
-    next_row INTEGER NOT NULL,     -- only ever grows
+    next_row INTEGER NOT NULL,     -- the file's length in rows; only ever grows
     writes   INTEGER NOT NULL DEFAULT 0   -- goes up with every change to the rows of this kind
 ) WITHOUT ROWID;
 
--- Counters every session can see. 'collections' goes up whenever content is removed from
+-- Numbers every session can see. 'collections' goes up whenever content is removed from
 -- the index, so a session knows its list of chunks may name rows that are gone.
+-- 'collected_at' is when garbage was last collected (unix seconds).
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL

@@ -232,6 +232,8 @@ class Run:
         self.memory_mb: dict[str, float] = {}
         self.collected = {"runs": 0, "blobs_removed": 0, "chunks_removed": 0}
         self.env = {**os.environ, "ALEPH_DENSE": "1", "ALEPH_SEEN_REFRESH_SECONDS": str(SEEN_REFRESH_SECONDS),
+                    # The sessions' own collection, with a day shortened to ten seconds.
+                    "ALEPH_GC_EVERY_SECONDS": "10", "ALEPH_GC_AGE_DAYS": repr(COLLECT_AGE_SECONDS / 86400),
                     "ALEPH_WORKER_IDLE_EXIT_SECONDS": "3600"}
         if not args.real_worker:
             self.env["XDG_CACHE_HOME"] = str(self.work / "cache")
@@ -433,6 +435,10 @@ class Run:
                 raise Failure("two chunks share a row of the vector file")
             if max(taken) >= limit or limit * ROW_BYTES > size:
                 raise Failure(f"vector rows up to {max(taken)}, next_row {limit}, file holds {size // ROW_BYTES}")
+            free = [row[0] for row in one("SELECT row FROM vector_free")]
+            if set(free) & set(taken) or len(free) + len(taken) != limit:
+                raise Failure(f"{len(taken)} rows owned and {len(free)} free do not make up the file's {limit} rows")
+            report["vector_rows_free"] = len(free)
             report.update(vector_rows_in_file=size // ROW_BYTES, vector_kind=kind)
             if not self.args.real_worker:
                 from aleph_zero.embed import worker

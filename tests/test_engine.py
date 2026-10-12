@@ -179,3 +179,26 @@ def test_a_collection_that_lands_between_the_check_and_the_search_does_not_cost_
     assert fired and fired[0]["blobs_removed"] == 3
     assert [hit.path for hit in answer.hits][:1] == ["src/billing/invoice.py"]
     assert engine.symbol("refresh_token").symbols[0].path == "src/auth/token_store.py"
+
+
+def test_the_engine_collects_old_content_after_indexing_when_it_is_due(repo):
+    import time
+
+    engine = Engine(repo.root)
+    engine.search("refresh token")
+    index = next(iter(engine._indexes.values()))
+    repo.write("src/billing/invoice.py", "replaced = True\n")
+    repo.commit("replace")
+    engine.search("replaced")
+    index.conn.execute("UPDATE blobs SET last_seen_at = ? WHERE (blob_oid, family) NOT IN "
+                       "(SELECT blob_oid, family FROM temp.view_blobs)", (int(time.time() - 40 * 86400),))
+    index.conn.execute("UPDATE meta SET value = value - 90000 WHERE key = 'collected_at'")
+    before = index.conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0]
+    engine.search("replaced")                    # nothing was stored: no collection
+    assert index.conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0] == before
+    repo.write("src/new_file.py", "def brand_new():\n    return 1\n")
+    engine.search("brand_new", timeout_ms=5000)  # stored something, but the caller set a time limit
+    assert index.conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0] == before + 1
+    repo.write("src/newer_file.py", "def even_newer():\n    return 1\n")
+    assert engine.search("even_newer").hits      # stored something, no limit: old content goes
+    assert index.conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0] == before + 1

@@ -428,21 +428,81 @@ class Index:
         return True
 
 
-def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | None = None) -> dict[str, int]:
+COLLECT_EVERY_SECONDS = 86400   # collection by itself: at most once a day per index
+COLLECT_AGE_DAYS = 30.0
+COLLECT_SECONDS = 0.5           # what one round may take; it runs after a query's indexing
+COLLECT_RETRY_SECONDS = 60      # before the next round when one did not finish
+_BLOB_BATCH = 500
+_CHUNK_BATCH = 2000
+
+
+def collect_garbage(conn: apsw.Connection, max_age_days: float, now: float | None = None,
+                    budget_seconds: float | None = None) -> dict:
     """Drop blobs no view has used for `max_age_days`, then the chunks nothing refers to.
-    Blobs of the connection's current view are always kept."""
+    Blobs of the connection's current view are always kept. Works in short transactions,
+    so other sessions are never locked out for long, and stops at the time limit:
+    'finished' says whether everything due was removed."""
     cutoff = int((time.time() if now is None else now) - max_age_days * 86400)
-    with transaction(conn):
-        conn.execute(
-            "DELETE FROM blobs WHERE last_seen_at < ? "
-            "AND (blob_oid, family) NOT IN (SELECT blob_oid, family FROM temp.view_blobs)",
-            (cutoff,),
-        )
-        blobs = conn.changes()
-        orphans = [row[0] for row in conn.execute(
-            "SELECT chunk_id FROM chunks WHERE chunk_id NOT IN (SELECT chunk_id FROM blob_chunks)")]
-        conn.executemany("DELETE FROM chunk_fts WHERE rowid = ?", ((cid,) for cid in orphans))
-        conn.executemany("DELETE FROM chunks WHERE chunk_id = ?", ((cid,) for cid in orphans))
-        if blobs or orphans:
-            _removed_content(conn)
-    return {"blobs_removed": blobs, "chunks_removed": len(orphans)}
+    deadline = None if budget_seconds is None else time.monotonic() + budget_seconds
+    late = lambda: deadline is not None and time.monotonic() >= deadline  # noqa: E731
+    blobs = chunks = 0
+    finished = True
+    while True:
+        if late():
+            finished = False
+            break
+        with transaction(conn):
+            batch = conn.execute(
+                "SELECT blob_oid, family FROM blobs WHERE last_seen_at < ? "
+                "AND (blob_oid, family) NOT IN (SELECT blob_oid, family FROM temp.view_blobs) LIMIT ?",
+                (cutoff, _BLOB_BATCH)).fetchall()
+            if batch:
+                conn.executemany("DELETE FROM blobs WHERE blob_oid = ? AND family = ?", batch)
+                _removed_content(conn)
+        if not batch:
+            break
+        blobs += len(batch)
+    while finished:
+        if late():
+            finished = False
+            break
+        with transaction(conn):  # looked for inside the transaction: a chunk another session has just reused is not one
+            orphans = [row[0] for row in conn.execute(
+                "SELECT chunk_id FROM chunks WHERE chunk_id NOT IN (SELECT chunk_id FROM blob_chunks) LIMIT ?",
+                (_CHUNK_BATCH,))]
+            if orphans:
+                conn.executemany("DELETE FROM chunk_fts WHERE rowid = ?", ((cid,) for cid in orphans))
+                conn.executemany("DELETE FROM chunks WHERE chunk_id = ?", ((cid,) for cid in orphans))
+                _removed_content(conn)
+        if not orphans:
+            break
+        chunks += len(orphans)
+    return {"blobs_removed": blobs, "chunks_removed": chunks, "finished": finished}
+
+
+def collect_if_due(conn: apsw.Connection, budget_seconds: float = COLLECT_SECONDS) -> dict | None:
+    """Collect garbage if this index has not been collected for a day. Returns the report,
+    or None when it was not due or another session has just taken the turn.
+
+    The ages are far apart on purpose: content in use is marked at least every 65 minutes
+    (`_touch`), and content is collected after 30 days without a mark."""
+    every = float(os.environ.get("ALEPH_GC_EVERY_SECONDS", COLLECT_EVERY_SECONDS))
+    age_days = float(os.environ.get("ALEPH_GC_AGE_DAYS", COLLECT_AGE_DAYS))
+    now = int(time.time())
+    last = conn.execute("SELECT value FROM meta WHERE key = 'collected_at'").fetchall()
+    if last and now < last[0][0] + every:
+        return None  # the usual answer, without taking the write lock
+    with transaction(conn):  # only one session takes the turn
+        last = conn.execute("SELECT value FROM meta WHERE key = 'collected_at'").fetchall()
+        conn.execute("INSERT INTO meta(key, value) VALUES ('collected_at', ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (now,))
+        if not last:
+            return None  # a new index: nothing in it can be old
+        if now < last[0][0] + every:
+            return None
+    report = collect_garbage(conn, age_days, budget_seconds=budget_seconds)
+    if not report["finished"]:
+        with transaction(conn):  # come back soon for the rest
+            conn.execute("UPDATE meta SET value = ? WHERE key = 'collected_at'",
+                         (int(now - every + COLLECT_RETRY_SECONDS),))
+    return report

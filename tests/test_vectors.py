@@ -91,7 +91,7 @@ def test_vectors_written_by_another_process_are_seen_by_one_that_already_mapped_
     assert store.missing(index) == []
 
 
-def test_garbage_collection_drops_the_row_table_entry_and_no_row_is_ever_reused(repo):
+def test_garbage_collection_drops_the_row_table_entry_and_frees_its_row(repo):
     index, store, chunk_ids = ready(repo)
     store.add(chunk_ids, unit(9, len(chunk_ids)))
     highest = index.conn.execute("SELECT max(row) FROM chunk_vectors").fetchall()[0][0]
@@ -106,7 +106,10 @@ def test_garbage_collection_drops_the_row_table_entry_and_no_row_is_ever_reused(
     new = store.missing(index)
     store.add(new, unit(10, len(new)))
     rows = [row[0] for row in index.conn.execute("SELECT row FROM chunk_vectors WHERE chunk_id IN (%s)" % ",".join("?" * len(new)), new)]
-    assert min(rows) > highest                                     # another session may still have the old rows mapped
+    # The freed row is used again: nobody reads a row whose chunk is gone, and the file must
+    # not grow for ever. (Until M3 a row was never reused.)
+    assert min(rows) <= highest
+    assert index.conn.execute("SELECT count(*), count(DISTINCT row) FROM chunk_vectors").fetchall()[0] == (kept + len(new),) * 2
 
 
 def test_a_file_shorter_than_the_row_table_loses_those_rows_and_they_are_embedded_again(repo):
@@ -162,3 +165,82 @@ def test_a_vector_is_not_stored_for_a_chunk_id_that_now_holds_other_content(repo
     claimed = [hashes[chunk_ids[0]], "the hash of what this id held when its text was read"]
     assert store.add(chunk_ids[:2], unit(31, 2), hashes=claimed) == 1   # the second id was collected and reissued meanwhile
     assert [row[0] for row in index.conn.execute("SELECT chunk_id FROM chunk_vectors")] == [chunk_ids[0]]
+
+
+# ---- rows of collected chunks are used again (M3) ------------------------------------------------------
+
+def _collect_everything_but_the_view(index):
+    return collect_garbage(index.conn, max_age_days=0, now=time.time() + 10)
+
+
+def test_the_row_of_a_collected_chunk_is_used_again_and_the_file_does_not_grow(repo):
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids, unit(20, len(chunk_ids)))
+    size = store.path.stat().st_size
+    rows_before = dict(index.conn.execute("SELECT chunk_id, row FROM chunk_vectors"))
+    repo.write("src/billing/invoice.py", "def replaced_one():\n    return 1\n\n\ndef replaced_two():\n    return 2\n")
+    index.sync(build_view(repo.root))
+    removed = _collect_everything_but_the_view(index)["chunks_removed"]
+    assert removed >= 1
+    freed = sorted(row[0] for row in index.conn.execute("SELECT row FROM vector_free"))
+    assert len(freed) == removed and set(freed) <= set(rows_before.values())
+    new = store.missing(index)
+    assert len(new) == 2
+    store.add(new, unit(21, 2))
+    taken = sorted(row[0] for row in index.conn.execute(
+        "SELECT row FROM chunk_vectors WHERE chunk_id IN (?, ?)", new))
+    assert taken[0] == freed[0]                               # the freed row first
+    assert store.path.stat().st_size <= size + vectors.ROW_BYTES * max(0, 2 - removed)
+    counted = index.conn.execute("SELECT count(*), count(DISTINCT row) FROM chunk_vectors").fetchall()[0]
+    assert counted[0] == counted[1]
+
+
+def test_two_chunks_can_never_be_given_the_same_row(repo):
+    import apsw
+    import pytest
+
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids[:1], unit(22, 1))
+    with pytest.raises(apsw.ConstraintError):
+        index.conn.execute("INSERT INTO chunk_vectors(chunk_id, kind, row) VALUES (?, ?, 0)", (chunk_ids[1], KIND))
+
+
+def test_a_reader_with_a_remembered_row_list_sees_a_vector_written_into_a_used_again_row(repo):
+    """The reader's list of rows is remembered between queries. A row that was freed and
+    given to a new chunk must be read as the new chunk's, not skipped and not misattributed."""
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids, unit(23, len(chunk_ids)))
+    reader_index = Index(open_db(index_path(repo.root)))
+    reader = VectorStore(reader_index.conn, index_path(repo.root).parent, KIND)
+    reader_index.sync(build_view(repo.root))
+    assert len(reader.search(reader_index, unit(23, len(chunk_ids))[0], limit=50)) == len(chunk_ids)
+    repo.write("src/billing/invoice.py", "def replaced_one():\n    return 1\n")
+    view = build_view(repo.root)
+    index.sync(view)
+    _collect_everything_but_the_view(index)
+    new = store.missing(index)
+    fresh = unit(24, len(new))
+    store.add(new, fresh)
+    reader_index.sync(view)
+    best = reader.search(reader_index, fresh[0], limit=3)
+    assert best[0][0] == new[0] and best[0][1] > 0.99
+    assert reader.coverage(reader_index) == store.coverage(index)
+
+
+def test_free_rows_are_listed_for_an_index_upgraded_from_the_previous_schema(repo):
+    """Before schema 5 nothing recorded which rows were dead. The upgrade works it out."""
+    index, store, chunk_ids = ready(repo)
+    store.add(chunk_ids, unit(25, len(chunk_ids)))
+    conn = index.conn
+    dead = conn.execute("SELECT row FROM chunk_vectors ORDER BY row LIMIT 1").fetchall()[0][0]
+    conn.execute("DELETE FROM chunk_vectors WHERE row = ?", (dead,))
+    conn.execute("DROP TRIGGER chunk_vectors_freed")
+    conn.execute("DROP INDEX chunk_vectors_by_row")
+    conn.execute("DROP TABLE vector_free")
+    conn.execute("DROP TABLE meta")
+    conn.execute("ALTER TABLE vector_files DROP COLUMN writes")
+    conn.pragma("user_version", 4)
+    conn.close()
+    upgraded = open_db(index_path(repo.root))
+    assert upgraded.execute("SELECT kind, row FROM vector_free").fetchall() == [(KIND, dead)]
+    assert upgraded.execute("SELECT count(*) FROM chunk_vectors").fetchall() == [(len(chunk_ids) - 1,)]

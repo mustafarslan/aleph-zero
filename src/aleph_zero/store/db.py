@@ -14,12 +14,6 @@ import apsw
 from .. import gitio
 
 SCHEMA_VERSION = 5
-# Versions that are brought up to date where they are. Anything older is a cache of a
-# different shape and is rebuilt; these hold vectors that took GPU time to make.
-_UPGRADES = {
-    4: ("ALTER TABLE vector_files ADD COLUMN writes INTEGER NOT NULL DEFAULT 0;"
-        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;"),
-}
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -187,6 +181,23 @@ def transaction(conn: apsw.Connection):
     conn.execute("COMMIT")
 
 
+def _upgrade_4(conn: apsw.Connection) -> None:
+    """Schema 4 to 5: a write counter, shared counters, and the free list of the vector
+    file, worked out once from the rows no chunk owns. Nothing indexed or embedded is lost."""
+    conn.execute("ALTER TABLE vector_files ADD COLUMN writes INTEGER NOT NULL DEFAULT 0")
+    conn.execute(_SCHEMA.read_text())  # every statement is IF NOT EXISTS: this adds what is new
+    for kind, next_row in conn.execute("SELECT kind, next_row FROM vector_files").fetchall():
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 0 WHERE ? > 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < ?) "
+            "INSERT OR IGNORE INTO vector_free(kind, row) SELECT ?, i FROM n "
+            "WHERE i NOT IN (SELECT row FROM chunk_vectors WHERE kind = ?)", (next_row, next_row, kind, kind))
+
+
+# Versions that are brought up to date where they are. Anything older is a cache of a
+# different shape and is rebuilt; these hold vectors that took GPU time to make.
+_UPGRADES = {4: _upgrade_4}
+
+
 def _retry_while_busy(action, seconds: float = 10.0):
     """Two sessions can open a brand-new index at the same instant. Switching to WAL
     needs a moment of exclusive access and fails at once instead of waiting, so retry."""
@@ -240,7 +251,7 @@ def _open(path: Path) -> apsw.Connection:
         with transaction(conn):
             found = conn.pragma("user_version")  # checked under the write lock
             while found in _UPGRADES:
-                conn.execute(_UPGRADES[found])
+                _UPGRADES[found](conn)
                 found += 1
                 conn.pragma("user_version", found)
             if 0 < found < SCHEMA_VERSION:
