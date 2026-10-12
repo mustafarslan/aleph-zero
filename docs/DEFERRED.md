@@ -2,6 +2,23 @@
 
 Things that are not being done now on purpose. Each entry says what it is, why it waits, and how to start it. Newest decisions first. Remove an entry when it is done.
 
+## 0. The A/B run that decides whether v1 ships (spends Claude plan usage)
+
+- **What:** `bench/ab/run.py` runs Claude Code headless on Loc-Bench issues with and without the plugin and compares tokens, tool calls and whether the right files were named (ADR-011). The design's gate: the best rung gives at least 20% fewer tokens or tool calls than no plugin, with no drop in hit rate.
+- **Why it waits:** every session spends your plan usage. A pilot was run to prove the harness and to measure cost and noise (figures in ADR-011). The full run is yours to size and start.
+- **Decisions that are yours:**
+  1. *The baseline.* The gate says "than no plugin"; the design's ladder calls L0 "the engine without the mod". `none` answers whether Aleph helps at all, L0 what the steering adds.
+  2. *The shape.* Four rungs at 30 tasks each cannot read a 20% gate (run-to-run noise is about a factor of two; ADR-011). Two arms with 60 tasks, or 30 tasks twice, come closer for the same number of sessions.
+  3. *The model.* The pilot used the cheap and the mid model. The gate should be read on the model you work with.
+  4. *The ten tasks from your own repositories* that the design asks for need your questions (as entry 2 below).
+- **How to start it** (example: no plugin against rung 1, 30 tasks, the mid model, at most 60 sessions):
+
+      uv run --group bench python bench/ab/run.py run bench/data/benchc --arms none,L1 --count 30 --model sonnet --max-sessions 60
+
+  Results are appended to `bench/data/results/ab/`, one line per session, so a run can be stopped and its report made from what is there: `bench/ab/run.py report <file>`.
+- **Also yours, one minute:** run `claude --plugin-dir plugin` once in this repository, interactively. Claude Code then writes the type declarations for your build into `plugin/.claude-plugin/types/`; the mod was written without them (ADR-011). And allow the engine's tools (`"mcp__plugin_aleph-zero_aleph__*"` in `permissions.allow`), or rungs 2 and 3 add nothing.
+- **Status:** harness and pilot done; full run not started.
+
 ## 1. The long GPU run for Benchmark C (decides whether semantic search is on by default)
 
 - **What:** embed the large Loc-Bench repositories so the Python benchmark has about 400 questions instead of 235. This decides Python only (see 1b for the other languages). The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.
@@ -71,5 +88,5 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 ## 8. Carried to later milestones (recorded in the design)
 
-- M4: the Claude Code plugin manifest (with the mod); the 2026 MCP handshake.
+- M4, still open: the 2026 MCP handshake (the engine still relies on the client's fallback to `initialize`); L4 of the steering ladder, if the measurement leaves a gap.
 - M2, still open: whether one query prefix serves both code and documentation (needs questions whose answers are documentation).
