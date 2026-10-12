@@ -264,3 +264,53 @@ def test_a_query_with_no_results_does_not_echo_five_thousand_words(client):
     client.start()
     text = client.text("search", query=" ".join(f"zzqword{i}" for i in range(5000)))
     assert text.startswith('no results for "zzqword0 ') and estimate_tokens(text) < 100
+
+
+def test_with_semantic_search_on_the_server_makes_vectors_in_the_background(repo):
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    cache = Path(tempfile.mkdtemp(prefix="az-", dir="/tmp"))
+    home = cache / "aleph-zero" / "worker"
+    (home / "bin").mkdir(parents=True)
+    (home / "models").mkdir()
+    fake = Path(__file__).parent / "fake_worker.py"
+    (home / "bin" / "llama-server").write_text(f"#!/bin/sh\nexec {sys.executable} {fake} \"$@\"\n")
+    (home / "bin" / "llama-server").chmod(0o755)
+    (home / "models" / "embeddinggemma-2-Q8_0.gguf").write_bytes(b"not a real model")
+    env = {**os.environ, "XDG_CACHE_HOME": str(cache), "ALEPH_DENSE": "1", "ALEPH_WORKER_POLL_SECONDS": "0.2",
+           "ALEPH_WORKER_IDLE_EXIT_SECONDS": "4", "ALEPH_WORKER_LOAD_SECONDS": "10"}
+    client = Client.__new__(Client)
+    client.proc = subprocess.Popen([sys.executable, "-m", "aleph_zero.cli", "--cwd", str(repo.root), "serve"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    client.next_id = 0
+    try:
+        client.start()
+        first = json.loads(client.text("search", query="render_invoice", format="json"))
+        assert first["hits"][0]["path"] == "src/billing/invoice.py"      # answered at once, before any vector exists
+        assert first["dense"].startswith("no chunk of this worktree has a vector yet")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            vectors = json.loads(client.text("status", format="json"))["vectors"]
+            if vectors["chunks"] and vectors["with_vector"] == vectors["chunks"]:
+                break
+            time.sleep(0.2)
+        assert vectors["with_vector"] == vectors["chunks"] > 0 and vectors["enabled"] is True
+        assert json.loads(client.text("search", query="render_invoice", format="json"))["dense"] == "used"
+        repo.write("src/new_module.py", "def freshly_added():\n    return 1\n")   # a new chunk gets its vector too
+        client.text("search", query="freshly_added")
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            vectors = json.loads(client.text("status", format="json"))["vectors"]
+            if vectors["with_vector"] == vectors["chunks"]:
+                break
+            time.sleep(0.2)
+        assert vectors["with_vector"] == vectors["chunks"]
+        assert client.close() == 0
+    finally:
+        if client.proc.poll() is None:
+            client.proc.kill()
+        subprocess.run([sys.executable, "-m", "aleph_zero.cli", "embed", "stop"], env=env, capture_output=True)
+        shutil.rmtree(cache, ignore_errors=True)

@@ -104,8 +104,49 @@ class _BadArguments(ValueError):
     """The caller's arguments do not fit the tool's schema."""
 
 
+class _Background:
+    """Makes vectors for whatever worktree was last asked about, on its own thread and with
+    its own engine and database connections, so it never holds up a call. Only started
+    when semantic search is on."""
+
+    ROUND_SECONDS = 10     # one stretch of embedding before checking whether to go on
+    RETRY_SECONDS = 60     # after the worker was unavailable or another session was embedding
+
+    def __init__(self, default_cwd) -> None:
+        self._engine = Engine(default_cwd, dense=True)
+        self._wanted: queue.Queue = queue.Queue()
+        self._stopping = threading.Event()
+        self._thread = threading.Thread(target=self._work, name="aleph-embed", daemon=True)
+        self._thread.start()
+
+    def note(self, cwd) -> None:
+        """A call was just answered for `cwd`: its chunks may need vectors."""
+        self._wanted.put(cwd)
+
+    def stop(self) -> None:
+        self._stopping.set()
+        self._wanted.put(None)
+        self._thread.join(timeout=5)
+
+    def _work(self) -> None:
+        while not self._stopping.is_set():
+            cwd = self._wanted.get()
+            while not self._wanted.empty():  # only the latest matters
+                cwd = self._wanted.get()
+            while not self._stopping.is_set():
+                try:
+                    report = self._engine.embed(cwd, budget_seconds=self.ROUND_SECONDS, stop=self._stopping.is_set)
+                except Exception:  # noqa: BLE001 - not a repository any more, a locked index: try again on the next call
+                    break
+                if report.remaining == 0 or not self._wanted.empty():
+                    break
+                if report.reason and self._stopping.wait(self.RETRY_SECONDS):
+                    break
+
+
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     """Answer requests from `incoming` on `outgoing` until the input closes."""
+    background = _Background(engine.default_cwd) if engine.dense else None
     write_lock = threading.Lock()
     state = threading.Lock()      # guards the three names below
     calls: queue.Queue = queue.Queue()
@@ -135,6 +176,8 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 running[0] = ident
             try:
                 result = _call(engine, name, arguments)
+                if background is not None:
+                    background.note(arguments.get("cwd") if isinstance(arguments, dict) else None)
             except Cancelled:
                 result = None  # a cancelled request is not answered
             except BaseException as exc:  # noqa: BLE001 - nothing may end this thread: later calls would hang
@@ -199,6 +242,8 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     engine.cancel()  # the client is gone: whatever is running has no reader
     calls.put(None)
     worker.join(timeout=5)
+    if background is not None:
+        background.stop()
     return 0
 
 
