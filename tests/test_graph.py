@@ -651,3 +651,22 @@ def test_a_rust_function_beside_an_import_of_something_that_is_not_a_function_st
     outside = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod run;\n",
                "src/run.rs": "#[cfg(unix)]\nuse libc::getpid;\n\n#[cfg(not(unix))]\nfn getpid() -> i32 {\n    0\n}\n\nfn go() {\n    getpid();\n}\n"}
     assert certainty(outside, "src/run.rs", "getpid") == (["getpid"], False)           # the other one is outside these files: still not certain
+
+
+def test_a_method_given_to_a_built_in_type_is_not_certainly_what_its_own_call_reaches():
+    """Found on rayon: `impl ChunkBySlice<T> for &[T] { fn chunk_by(self, …) { self.chunk_by(…) } }`. A slice has a
+    `chunk_by` of its own, and a type's own method comes before a trait's: the call reaches the standard library, not
+    the method it stands in. The built-in type's methods are not among these files, so the answer is not certain."""
+    rust = {"Cargo.toml": '[package]\nname = "demo"\n',
+            "src/lib.rs": ("trait ChunkBy<T> {\n    fn chunk_by(self, size: usize) -> usize;\n    fn halves(self) -> usize;\n}\n\n"
+                           "impl<T> ChunkBy<T> for &[T] {\n    fn chunk_by(self, size: usize) -> usize {\n        self.chunk_by(size)\n    }\n"
+                           "    fn halves(self) -> usize {\n        self.chunk_by(2)\n    }\n}\n\n"
+                           "impl<T> ChunkBy<T> for &mut [T] {\n    fn chunk_by(self, size: usize) -> usize {\n        size\n    }\n"
+                           "    fn halves(self) -> usize {\n        self.chunk_by(2)\n    }\n}\n\n"
+                           "impl ChunkBy<u8> for u64 {\n    fn chunk_by(self, size: usize) -> usize {\n        size\n    }\n"
+                           "    fn halves(self) -> usize {\n        self.chunk_by(2)\n    }\n}\n\n"
+                           "struct Mine;\nimpl Mine {\n    fn step(&self) {}\n    fn run(&self) {\n        self.step()\n    }\n}\n")}
+    for nth in range(4):                             # in the slice's impl (twice), the mutable slice's and the integer's
+        found, certain = certainty(rust, "src/lib.rs", "chunk_by", nth)
+        assert len(found) == 1 and found[0].endswith(".chunk_by") and certain is False, nth
+    assert certainty(rust, "src/lib.rs", "step") == (["Mine.step"], True)               # a type of these files: as before

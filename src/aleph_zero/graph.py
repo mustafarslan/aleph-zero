@@ -266,6 +266,10 @@ class Edge:
         return len(self.targets) == 1 and self.provenance != "name" and not self.doubt
 
 
+# A Rust type that no file declares: a reference, a slice or an array, a tuple, a pointer, or a primitive by its name.
+_RUST_BUILT_IN = re.compile(r"^(?:[&*\[(]|(?:str|bool|char|[iu](?:8|16|32|64|128|size)|f(?:32|64))(?:\b|$))")
+
+
 class Graph:
     def __init__(self, source: Source | dict[str, FileFacts], manifests: dict[str, bytes] | None = None,
                  features: frozenset[str] | set[str] = FEATURES) -> None:
@@ -499,7 +503,11 @@ class Graph:
                     return typed
             return self._by_name(path, facts, call, members=True, rule="name, on a field")
         found = self._method((path, owner), call.name, above=call.head == "super", arity=call.arity)
-        return self._edge(path, found, "own type") if found else None
+        built = self._edge(path, found, "own type") if found else None
+        if built is not None and facts.family == "rust" and _RUST_BUILT_IN.match(owner):
+            # `impl Trait for &[T]`: a slice's own method of this name comes before the trait's, and is not among these files.
+            return replace(built, doubt=built.doubt or "a method given to a built-in type: the type's own method of this name comes first")
+        return built
 
     def _qualified(self, path: str, facts: FileFacts, call: Call) -> Edge | None:
         """`a.f()` and `a::f()` where `a` is not the method's own object."""
