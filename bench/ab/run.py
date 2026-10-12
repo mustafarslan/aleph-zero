@@ -313,7 +313,7 @@ def control_directory(target: Path) -> tuple[Path | None, str]:
     """Where the files that steer an A/B run are, from what was named: the directory of the results, or a results
     file in it. (None, why) when what is there is not an A/B run's: `run` takes the Benchmark C work directory,
     where a pause would hold the GPU job instead."""
-    directory = target.parent if target.is_file() else target
+    directory = target if target.is_dir() else target.parent      # a results file, also one its first session has yet to write
     job = longrun.job_of(directory)
     if job is None:
         return None, f"no A/B run has written its status in {directory}: name the directory of the results file (bench/data/results/ab)"
@@ -359,7 +359,12 @@ def main(argv: list[str] | None = None) -> int:
     if any(arm not in ARMS for arm in arms):
         parser.error(f"arms are {', '.join(ARMS)}")
     out = args.take_up or args.out or ROOT / "bench" / "data" / "results" / "ab" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.model}.jsonl"
-    before = [json.loads(line) for line in out.read_text().splitlines() if line.strip()] if args.take_up and out.exists() else []
+    if args.take_up and not out.is_file():
+        parser.error(f"--take-up: no such results file as {out} (a run started without it would do, and spend, every session again)")
+    if (out.parent / longrun.PAUSE).exists():
+        parser.error(f"a pause is asked for in {out.parent} (left from before?): the run would start and wait at once; "
+                     f"`python bench/tools/longrun.py resume {out.parent}` takes it away")
+    before = [json.loads(line) for line in out.read_text().splitlines() if line.strip()] if args.take_up else []
     wanted = set(sessions_left(chosen, arms, before)) if args.take_up else None
     other = foreign_tasks(chosen, before)
     if other:

@@ -357,3 +357,25 @@ def test_prepare_does_not_start_over_a_left_over_pause_and_away_never_raises_the
     assert benchmark_c.main(["prepare", str(work), "--away", "--temp-limit", "80"]) == 0
     assert seen["limit"] == 80.0 and seen["temp_stop"] == 97.0 and seen["max_pauses"] == 6
     assert benchmark_c.main(["prepare", str(work), "--away"]) == 0 and seen["limit"] == 85.0
+
+
+def test_a_repository_that_could_not_be_fetched_is_not_called_done(tmp_path, fake_worker, monkeypatch, capsys):
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(benchmark_c.worker, "slots", lambda: 1)
+    monkeypatch.setattr(benchmark_c.worker, "capacity_tokens", lambda: 4096)
+    real = benchmark_c.fetch
+
+    def offline_for_the_first(workdir, row):
+        if row is rows[0]:
+            raise subprocess.CalledProcessError(128, "git fetch")        # as when the network is away for a while
+        return real(workdir, row)
+
+    monkeypatch.setattr(benchmark_c, "fetch", offline_for_the_first)
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "ended"
+    assert "1 not fetched" in status(work)["why"] and "again" in longrun.describe(work)
+    monkeypatch.setattr(benchmark_c, "fetch", real)
+    assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "done"       # the same command gets it
+    assert benchmark_c.prepare(work, rows, max_chunks=1, guard=cool) == "done"          # left out for its size on purpose: still done

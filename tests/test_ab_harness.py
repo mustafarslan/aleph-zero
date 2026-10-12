@@ -190,3 +190,31 @@ def test_taking_up_counts_and_runs_only_what_is_missing(tmp_path, monkeypatch, c
     with pytest.raises(SystemExit):
         ab.main(["run", str(tmp_path), "--take-up", str(other)])
     assert "another" in capsys.readouterr().err and len(asked) == 3
+
+
+def test_a_run_can_be_stopped_before_its_first_session_has_written_the_results_file(tmp_path):
+    import longrun
+
+    results = tmp_path / "results"
+    longrun.Control(results, "A/B run into x.jsonl", total=2, say=lambda text: None)
+    assert not (results / "x.jsonl").exists()
+    assert ab.main(["stop", str(results / "x.jsonl")]) == 0 and (results / longrun.STOP).exists()
+
+
+def test_a_run_does_not_start_afresh_on_a_mistyped_take_up_or_wait_on_a_pause_left_over(tmp_path, monkeypatch, capsys):
+    import longrun
+    import pytest
+
+    monkeypatch.setattr(ab, "tasks", lambda *_: [{"id": "c"}])
+    asked = []
+    monkeypatch.setattr(ab, "run_one", lambda workdir, task, arm, *_: asked.append(arm) or _row(task["id"], arm, 100, 3, True))
+    out = tmp_path / "ab" / "run.jsonl"
+    with pytest.raises(SystemExit):
+        ab.main(["run", str(tmp_path), "--take-up", str(out)])        # no such file: not "nothing is done yet, run it all"
+    assert "no such" in capsys.readouterr().err and asked == []
+    longrun.pause(out.parent) if out.parent.exists() else (out.parent.mkdir(), longrun.pause(out.parent))
+    with pytest.raises(SystemExit):
+        ab.main(["run", str(tmp_path), "--out", str(out)])
+    assert "pause" in capsys.readouterr().err and asked == []
+    longrun.resume(out.parent)
+    assert ab.main(["run", str(tmp_path), "--out", str(out)]) == 0 and sorted(asked) == ["L1", "none"]

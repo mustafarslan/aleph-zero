@@ -174,7 +174,7 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float 
     if isinstance(cool, Guard):
         cool.while_waiting = job.cooling
     try:
-        finished = _prepare(workdir, rows, max_chunks, job, counts := {"done": 0, "partial": 0})
+        finished = _prepare(workdir, rows, max_chunks, job, counts := {"done": 0, "partial": 0, "unfetched": 0})
     except TooHot as hot:
         say(f"given up for heat: {hot}. Nothing is lost: the same command takes it up where it was")
         return job.finish(why=str(hot))
@@ -183,9 +183,11 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float 
           f"{len(rows) - done - partial} skipped, not fetched or not reached", flush=True)
     if hasattr(cool, "highest"):
         print(f"chip temperature: highest {cool.highest:.0f} C, paused {cool.pauses} times to cool", flush=True)
-    # Not "done" while a repository is partly embedded: `run` would measure it with vectors missing.
-    return job.finish(done=finished and not partial,
-                      why=f"{partial} left partly embedded: the same command finishes them" if finished and partial else "")
+    # Not "done" while a repository is partly embedded or was not fetched (the network was away): `run` would measure
+    # the one with vectors missing and leave the other out. One left out for its size is left out on purpose.
+    owed = [f"{count} {what}" for count, what in ((partial, "left partly embedded"), (counts["unfetched"], "not fetched")) if count]
+    return job.finish(done=finished and not owed,
+                      why=f"{', '.join(owed)}: the same command does them again" if finished and owed else "")
 
 
 def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Control, counts: dict) -> bool:
@@ -200,6 +202,8 @@ def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Cont
             clone = fetch(workdir, row)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             print(f"{number:4}/{len(rows)} {row['instance_id']:40} fetch failed: {str(exc)[:80]}", flush=True)
+            counts["unfetched"] += 1
+            job.note(not_fetched=counts["unfetched"])
             continue
         view = view_at(clone, row["base_commit"])
         index = Index(open_db(index_file(view.common_dir)))
