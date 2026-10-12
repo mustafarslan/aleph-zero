@@ -88,3 +88,14 @@ def test_the_name_a_symbol_ends_in():
     assert gg.constructed_type("scip-python python demo 0.1 pkg/a/helper().") == ""
     truth = gg.Truth("a.py", 10, "__init__", "Client")
     assert gg.is_correct(gg.Candidate("a.py", "Client", 5, 40), truth) and gg.is_correct(gg.Candidate("a.py", "__init__", 10, 14), truth)
+
+
+def test_an_answer_at_another_place_the_index_defines_the_same_symbol_is_counted_apart():
+    """scip-python names a function inside a function without the function around it: two of them in one class
+    share a symbol. The protocol's truth is the first; an answer at the second is wrong by it and counted here."""
+    truth = gg.Truth("t.py", 4, "generate", also=(("t.py", 18),))
+    first, second, neither = gg.Candidate("t.py", "generate", 5, 7), gg.Candidate("t.py", "generate", 19, 22), gg.Candidate("t.py", "generate", 40, 41)
+    assert gg.is_correct(first, truth) and not gg.is_correct(second, truth)       # the protocol does not change
+    assert not gg.at_another_definition(first, truth) and gg.at_another_definition(second, truth)
+    assert not gg.at_another_definition(neither, truth)
+    assert not gg.at_another_definition(gg.Candidate("t.py", "other", 19, 22), truth)

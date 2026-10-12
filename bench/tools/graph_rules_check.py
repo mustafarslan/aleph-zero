@@ -13,6 +13,8 @@ from pathlib import Path
 target = Path("src/aleph_zero/graph.py")
 original = target.read_text()
 mutations = {
+    "inner functions unanswered": ('        if call.head in ("inner", "inner-var"):', '        if False:'),
+    "a name assigned again is certain": ('            if call.head == "inner-var":', '            if False:'),
     "local names answered": ('        if call.head == "local":\n            return None     # a parameter', '        if False:\n            return None     # a parameter'),
     "outside imports guessed (plain)": ("            if not reached:\n                return None     # imported from outside", "            if False:\n                return None     # imported from outside"),
     "outside imports guessed (qualified)": ("            if not reached:\n                return None     # `np.array()`", "            if False:\n                return None     # `np.array()`"),

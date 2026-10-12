@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from aleph_zero import lang, scip
@@ -68,6 +68,7 @@ class Truth:
     line: int         # 0-based line of the definition's name, as SCIP gives it
     name: str         # '' for a symbol local to its file, whose name SCIP does not carry
     owner: str = ""   # for a constructor, the type it constructs: a call writes one name or the other
+    also: tuple[tuple[str, int], ...] = ()   # further places the index defines this same symbol (path, 0-based line)
 
     def names(self) -> tuple[str, ...]:
         return tuple(name for name in (self.name, self.owner) if name)
@@ -89,6 +90,10 @@ class Grade:
     certain_answered: int = 0       # graded sites answered with Aleph's own "certain" stamp
     certain_correct: int = 0
     outside_certain: int = 0        # outside sites answered with that stamp: wrong, every one
+    # Wrong by the protocol, at a further place the index defines the very symbol it names at the call (an
+    # indexer that gives two functions one symbol): reported apart, and changing no figure above.
+    confident_elsewhere: int = 0
+    certain_elsewhere: int = 0
     packages: set[str] = field(default_factory=set)   # the packages this index defines symbols of
     disagreements: list[str] = field(default_factory=list)
     unanswered: list[str] = field(default_factory=list)
@@ -114,6 +119,8 @@ class Grade:
             "certain_answered": self.certain_answered, "outside_certain": self.outside_certain,
             "certain_precision_all_sites": ratio(self.certain_correct, self.certain_answered + self.outside_certain),
             "certain_recall": ratio(self.certain_answered, self.graded),
+            "confident_wrong_at_another_definition_of_the_same_symbol": self.confident_elsewhere,
+            "certain_wrong_at_another_definition_of_the_same_symbol": self.certain_elsewhere,
             "by_how": {how: {"answered": answered, "correct": correct, "precision": ratio(correct, answered)}
                        for how, (answered, correct) in sorted(self.by_how.items())},
         }
@@ -156,13 +163,24 @@ def _written(call: Call) -> str:
 def definition_sites(index: scip.ScipIndex) -> dict[tuple[str, str], Truth]:
     """Where each symbol is defined in the tree. A symbol local to a file is keyed with its file."""
     found: dict[tuple[str, str], Truth] = {}
+    further: dict[tuple[str, str], list[tuple[str, int]]] = {}
     for document in index.documents:
         for occurrence in document.definitions():
             scope = document.relative_path if occurrence.symbol.startswith("local ") else ""
-            found.setdefault((scope, occurrence.symbol),
-                             Truth(document.relative_path, occurrence.start_line, descriptor_name(occurrence.symbol),
-                                   constructed_type(occurrence.symbol)))
+            if (scope, occurrence.symbol) in found:     # the protocol's truth is the first; the others are remembered
+                further.setdefault((scope, occurrence.symbol), []).append((document.relative_path, occurrence.start_line))
+                continue
+            found[(scope, occurrence.symbol)] = Truth(document.relative_path, occurrence.start_line, descriptor_name(occurrence.symbol),
+                                                      constructed_type(occurrence.symbol))
+    for key, places in further.items():
+        found[key] = replace(found[key], also=tuple(places))
     return found
+
+
+def at_another_definition(candidate: Candidate, truth: Truth) -> bool:
+    """Whether an answer the protocol calls wrong names a further place the index defines the same symbol."""
+    return (not truth.name or candidate.name in truth.names()) and any(
+        candidate.path == path and candidate.start_line - 1 <= line <= candidate.end_line - 1 for path, line in truth.also)
 
 
 def is_correct(candidate: Candidate, truth: Truth) -> bool:
@@ -218,12 +236,15 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
         right = is_correct(candidates[0], truth)
         grade.correct += right
         confident = len(candidates) == 1
+        elsewhere = not right and at_another_definition(candidates[0], truth)
         if candidates[0].certain:
             grade.certain_answered += 1
             grade.certain_correct += right
+            grade.certain_elsewhere += elsewhere
         if confident:
             grade.confident_answered += 1
             grade.confident_correct += right
+            grade.confident_elsewhere += elsewhere
         counts = grade.by_how.setdefault(f"{candidates[0].how or 'unsaid'}, {'confident' if confident else 'several'}", [0, 0])
         counts[0] += 1
         counts[1] += right
