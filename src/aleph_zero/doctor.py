@@ -9,7 +9,7 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, indexer, indexers, lang
+from . import gitio, indexer, indexers, lang, plain
 from .chunking import CHUNKER_VERSION
 from .lang import parse
 from .store import SCHEMA_VERSION, index_file, state_reason
@@ -29,6 +29,8 @@ def check(cwd: Path) -> list[Row]:
     rows = [_git(), _sqlite(), _tree_sitter(), _grammars(), _worker(), _compiler_indexes()]
     try:
         info = gitio.repo_info(cwd)
+    except gitio.NoRepository:
+        return rows + _plain_directory(cwd)
     except gitio.GitError:
         rows.append(Row("note", "repository", "not inside a git repository: nothing to check for this directory"))
         return rows
@@ -99,6 +101,20 @@ def _tree_sitter() -> Row:
     if version.startswith("0.26."):
         return Row("FAIL", "tree-sitter", f"tree-sitter {version} crashes on large files; this project needs 0.25.x (run `uv sync`)")
     return Row("ok", "tree-sitter", f"tree-sitter {version}")
+
+
+def _plain_directory(cwd: Path) -> list[Row]:
+    """A directory that is not a repository: whether it is searched, what of it is not, and where its index is."""
+    try:
+        view = build_view(cwd)
+    except gitio.NotARepository as exc:
+        return [Row("note", "repository", f"{exc}")]
+    inside = f"; {view.inner_repositories} repositories inside it are not searched from here" if view.inner_repositories else ""
+    return [Row("note", "repository", f"{view.root} is not a git repository: its {len(view.files)} files are searched as they are on "
+                                      f"disk, this directory and below only. Not searched: {plain.WHAT_IS_LEFT_OUT}{inside}. "
+                                      f"`git init` makes it a repository, where a `.gitignore` decides"),
+            _index(index_file(view.common_dir)),
+            Row("note", "index location", "the index is kept in the cache directory: nothing is written into a directory that is not a repository")]
 
 
 def _grammars() -> Row:

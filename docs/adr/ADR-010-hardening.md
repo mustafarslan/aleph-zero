@@ -48,7 +48,7 @@ A view is what git tracks in this worktree, as it is on disk now.
 | Blob git does not have | Counted as `unreadable`, asked for again once a minute, never waited for | It used to count as pending for ever, and every answer under a time limit was marked incomplete |
 | Shallow clone, clone without trees | Nothing special: they work (test) | |
 | Submodule | Not searched; `status` and `doctor` list them with `aleph source add <path>` | The linked-source mechanism already serves a checked-out submodule |
-| Not a repository | One sentence saying so and `git init`; exit status 2; the server stays up | Listing, hashing and watching files without git is its own feature (M10) |
+| Not a repository | Until M10: one sentence saying so and `git init`. Since M10 (below): searched as it is on disk, unless it is a directory that must not be walked, which gets that sentence; exit status 2; the server stays up | Listing, hashing and watching files without git was its own feature |
 
 The design note said to keep files outside a sparse checkout and mark them. That is reversed here. The cost: an agent does not find a shared definition that lives outside its cone.
 
@@ -115,10 +115,28 @@ What the gate does not show: more than three worktrees or four sessions; a repos
 
 ## Not done, on purpose
 
-Searching a directory that is not a repository; what needs Linux to verify (file names that are not valid UTF-8, the Linux branches of the memory and filesystem checks); two installed versions with different chunkers sharing one index; shrinking the vector file; a trigram index for text written without spaces. Each is in `docs/DEFERRED.md` with its reason.
+What needs Linux to verify (file names that are not valid UTF-8, the Linux branches of the memory and filesystem checks); two installed versions with different chunkers sharing one index; shrinking the vector file; a trigram index for text written without spaces. Each is in `docs/DEFERRED.md` with its reason.
 
 ## Views consulted
 
 - **Advisor:** build the stress harness first and use it to find faults; verify what exists with a test instead of rebuilding it; decide the non-repository directory and submodules as rulings; ask agy three named questions rather than for a review.
 - **Independent review of the branch (a fresh reviewer, most capable model):** found the stale mapping of a replaced vector file and the session left behind on a set-aside index (both reproduced, both fixed), the background thread's unbounded connections, the over-eager object-literal keys, and two weaknesses of the stress harness (its collector spared one worktree; the asking session was not counted). It checked the transaction logic of search against five interleavings and found it sound.
 - **agy (no boost):** against file generations for the vector file, for reuse in place (adopted); four stress invariants (adopted: content of a live view is never collected by another session, foreign keys, text-index rows equal chunks, the write-ahead log can be emptied at the end); agreed with leaving files outside a sparse checkout out and with linking submodules by hand, and named the cost of each; warned that a clone without trees breaks the listing (checked: it does not, with a checkout) and that an unreadable blob stays pending for ever (confirmed and fixed).
+
+## A directory that is not a repository (M10, 2026-10-12)
+
+**What it is.** A view is a map from path to blob id and a way to read each path; a file that differs from HEAD was already read from disk and hashed. A directory outside any repository becomes a view in which every file is such a file. The index, the chunks and the vectors are the same; they live in the cache directory, because Aleph writes nothing into a directory that is not a repository. The path is taken only when git itself says the directory is in no repository: git missing, a bare repository, a repository git cannot read are the errors they were.
+
+**The rule about what is walked**, fixed in the plan before any code, because a repository says what belongs to it and a directory does not:
+
+- *Refused before anything is read:* the top of a disk and the directories directly in it, the system's temporary directory itself, the home directory, and whatever holds the home directory.
+- *Refused after counting, with nothing indexed:* more than 20,000 files that would be searched, or more than 200,000 entries looked at to find them. The walk stops at the limit.
+- *Left out:* everything whose name begins with a dot (without a `.gitignore`, nothing else says `.env` is not source), `node_modules`, `__pycache__`, `venv`, a directory marked with `CACHEDIR.TAG`, symbolic links, and repositories inside it (counted, and named in `status` and `doctor`). `build` and `dist` are searched: such a directory may be source.
+- A folder that holds only repositories is refused with a sentence saying so. The directory searched is the one named, never a parent: unlike in a repository, `src/` searches `src/`.
+
+**What was hashed is remembered** in a file beside the index (size, modification time, change time and blob id for each file; replaced whole by a rename). A file is hashed again when any of the three differs, or when its change time is not older than the walk that remembered it: so a file rewritten to the same size with its modification time put back is still seen, and a file edited in the very tick it was hashed is hashed once more on the next query.
+
+**Measured** (`bench/eval/plain_directory.py`; 5,000 files, 62 MB, copied out of airflow with no `.git`; medians of 9): the first search, from a new process, hashes and indexes everything in 5.3 s. After that a new process answers in 149 ms with nothing changed and 161 ms after an edit, hashing no file whose size and times are as remembered; an open engine answers in 49 ms and 75 ms. The walk alone takes 38 ms there and 72 ms over 20,000 small files, the limit. The conditions set beforehand hold (an open engine within 150 ms on an unchanged directory; a new process hashes nothing unchanged; the walk at the limit under 100 ms). oxn has no figure to compare: it walks the directory on every run and has no rule about where.
+
+**What it does not do.** Compiler indexes and linked sources need a repository and say so. Nothing watches the directory: every query walks it (the 38 ms above), as every query in a repository asks git.
+

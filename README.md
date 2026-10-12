@@ -190,12 +190,28 @@ file is in and what that layer may depend on. Aleph reads these; it enforces not
 
 Like `references`, the matching tools are offered to the agent only with `ALEPH_GRAPH=1`.
 
+## Without git
+
+Aleph also searches a directory that is not inside a git repository: the files as they are
+on disk, this directory and below (in a repository it is always the whole repository).
+Nothing says what belongs to such a directory, so some things are left out: every file and
+directory whose name begins with a dot, `node_modules`, `__pycache__`, `venv`, directories
+marked with a `CACHEDIR.TAG`, symbolic links, and git repositories inside it (run Aleph in
+those). `aleph status` and `aleph doctor` say so.
+
+It refuses, with one sentence, where walking would be a mistake: your home directory or
+anything that holds it, the top of a disk, and a directory of more than 20,000 files. For
+those, `git init` and a `.gitignore` are the way to say what belongs to the project.
+
 ## Where things are
 
 The index lives in `<git-common-dir>/aleph-zero/index.db` and is shared by every
 worktree of the repository. It is a cache: deleting it is always safe. When git's
 directory cannot be written, or is on a network filesystem, it lives in
 `~/.cache/aleph-zero/index/` instead; `aleph status` says where and why.
+
+In a directory that is not a git repository the index always lives in `~/.cache/aleph-zero/index/`:
+Aleph writes nothing into such a directory.
 
 What is searched is what git tracks in this worktree, as it is on disk now:
 

@@ -100,7 +100,8 @@ def test_text_shown_once_in_a_session_is_pointed_to_the_second_time(repo):
     assert "changed body" in engine.render(engine.search("render_invoice"))  # new text is new
 
 
-def test_outside_a_repository_is_an_error_the_caller_can_show(tmp_path):
+def test_a_directory_that_is_not_walked_is_an_error_the_caller_can_show(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     with pytest.raises(gitio.GitError):
         Engine(default_cwd=tmp_path).search("anything")
 

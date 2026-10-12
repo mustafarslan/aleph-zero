@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
-from . import filters, gitio
+from . import filters, gitio, plain
 
 _TREE_CACHE: dict[tuple[str, str], tuple[dict[str, str], tuple[str, ...]]] = {}
 _TREE_CACHE_SIZE = 8
@@ -44,6 +44,8 @@ class View:
     mounted: frozenset[str] = frozenset()  # the paths of `files` that come from a linked source
     outside_checkout: int = 0              # tracked files a sparse checkout leaves out; they are not searched
     submodules: tuple[str, ...] = ()       # paths of submodules; their content is not searched
+    plain: bool = False                    # a directory that is not a repository: every file is read from disk
+    inner_repositories: int = 0            # repositories inside such a directory; they are not searched from here
 
     @cached_property
     def fingerprint(self) -> str:
@@ -195,10 +197,15 @@ class Worktree:
     dirty: frozenset[str]          # the paths whose content was taken from the working copy
     outside_checkout: int = 0
     submodules: tuple[str, ...] = ()
+    inner_repositories: int = 0
 
 
 def read_worktree(cwd: Path) -> Worktree:
-    info = gitio.repo_info(cwd)
+    try:
+        info = gitio.repo_info(cwd)
+    except gitio.NoRepository:      # git's own word, and nothing less: a repository git cannot read is not walked
+        root, kept, files, inner = plain.read(Path(cwd))
+        return Worktree(gitio.RepoInfo(root, "sha1", kept, None, None, plain=True), files, frozenset(files), inner_repositories=inner)
     root, fmt, tree = info.root, info.object_format, info.tree
     submodules: tuple[str, ...] = ()
     files: dict[str, str] = {}
@@ -254,4 +261,4 @@ def build_view(cwd: Path) -> View:
                     dirty.add(path)
         dirty = frozenset(dirty)
     return View(info.root, info.common_dir, info.object_format, info.tree, files, dirty, mounts, frozenset(mounted),
-                worktree.outside_checkout, worktree.submodules)
+                worktree.outside_checkout, worktree.submodules, info.plain, worktree.inner_repositories)

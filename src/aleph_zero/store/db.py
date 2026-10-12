@@ -86,6 +86,17 @@ def _cache_dir(common_dir: Path) -> Path:
     return base / "aleph-zero" / "index" / key
 
 
+def cache_dir_for(directory: Path) -> Path:
+    """Where the state of a directory that is not a repository is kept: always in the cache, never beside its
+    files. Used as that directory's `common_dir`, so nothing that asks where state lives can answer otherwise."""
+    cache = _cache_dir(directory)
+    cache.mkdir(parents=True, exist_ok=True)
+    label = cache / "repository"
+    if not label.exists():
+        label.write_text(f"{directory}\n")
+    return cache
+
+
 def _decide(common_dir: Path) -> tuple[Path, str]:
     beside = common_dir / "aleph-zero"
     if not is_local(common_dir):

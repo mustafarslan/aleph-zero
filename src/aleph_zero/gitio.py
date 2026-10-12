@@ -24,6 +24,10 @@ class NotARepository(GitError):
     """The directory is not inside a git repository. Aleph searches what git tracks."""
 
 
+class NoRepository(NotARepository):
+    """Git itself says the directory is in no repository (and not: git is missing, or cannot read one)."""
+
+
 class GitTimeout(GitError):
     """Work on the repository ran past the caller's deadline."""
 
@@ -78,6 +82,7 @@ class RepoInfo:
     common_dir: Path      # shared by every worktree of the repository
     tree: str | None      # HEAD's tree, or None before the first commit
     git_dir: Path | None = None  # this worktree's own git directory (its index, its sparse-checkout file)
+    plain: bool = False          # not a repository at all: a directory read as it is on disk (plain.py)
 
 
 def repo_info(cwd: Path) -> RepoInfo:
@@ -92,7 +97,7 @@ def repo_info(cwd: Path) -> RepoInfo:
         if not Path(cwd).is_dir():
             raise NotARepository(f"{cwd} does not exist or is not a directory")
         if "not a git repository" in detail:
-            raise NotARepository(
+            raise NoRepository(
                 f"{cwd} is not inside a git repository. Aleph searches what git tracks: run `git init` there "
                 f"(and commit or just add files), or start it inside a repository.")
         raise GitError(f"git could not describe the repository at {cwd}: {detail}")

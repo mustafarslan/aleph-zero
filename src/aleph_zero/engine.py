@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import archfacts, architecture, callgraph, decisions, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
+from . import archfacts, architecture, callgraph, decisions, plain, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -390,6 +390,7 @@ class Engine:
         from, because a document is believed only where the view still holds that blob (ADR-004).
         Raises scipstore.NotAnIndex for a file that cannot be read as one."""
         view = self._view(cwd)
+        _needs_repository(view)
         index = self._index(view)
         if tree is None and not worktree and view.dirty:
             # Stamped with HEAD, an index made from an uncommitted edit would be believed the day that edit is undone.
@@ -413,6 +414,7 @@ class Engine:
         when the language is import-only, the indexer is absent, it was stopped, or the worktree changed
         while it ran (an index of files that have moved on is not stamped as if it were of these)."""
         view = self._view(cwd)
+        _needs_repository(view)
         index = self._index(view)
         named = language is not None
         if language is None:
@@ -474,7 +476,11 @@ class Engine:
             **({"submodules_note": "submodules are not searched; link one as a source with "
                                    f"`aleph source add {view.submodules[0]}`"} if view.submodules else {}),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
-            "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
+            "sqlite": apsw.sqlite_lib_version(),
+            "untracked_cache": False if view.plain else gitio.untracked_cache_enabled(view.root),
+            # A directory that is not a repository is searched as it is on disk, without what nothing vouches for.
+            "repository": not view.plain, "inner_repositories": view.inner_repositories,
+            **({"left_out": plain.WHAT_IS_LEFT_OUT} if view.plain else {}),
             "sources": linked, **({"sources_error": problem} if problem else {}),
             "main_language": next(iter(shares), None),
             "language_share": {name: round(share, 3) for name, share in shares.items()},
@@ -731,6 +737,12 @@ _LOCATION = re.compile(r"(.+?):(\d+)(?:-(\d+))?\Z")
 def _limits(timeout_ms: int | None) -> tuple[float, float | None]:
     started = time.monotonic()
     return started, (None if timeout_ms is None else started + max(timeout_ms, 1) / 1000)
+
+
+def _needs_repository(view: View) -> None:
+    if view.plain:
+        raise indexers.CannotRun(f"{view.root} is not a git repository: a compiler index is believed only while the files are "
+                                 f"what it was made from, and without git there is no saying what that was. Run `git init` there")
 
 
 def _within(root: Path, path: Path | str) -> str:

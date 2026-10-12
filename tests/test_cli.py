@@ -30,7 +30,8 @@ def test_status_reports_the_view(repo, capsys):
     assert (status["files_in_view"], status["dirty"], status["pending"]) == (4, 1, 1)
 
 
-def test_outside_a_repository_is_an_error_message_not_a_traceback(tmp_path, capsys):
+def test_a_directory_that_is_not_walked_is_an_error_message_not_a_traceback(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))       # outside a repository, a home directory is refused
     assert cli.main(["--cwd", str(tmp_path), "status"]) == 2
     assert "aleph:" in capsys.readouterr().err
 

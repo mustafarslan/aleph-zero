@@ -37,7 +37,7 @@ def test_a_damaged_index_fails_the_check(repo, capsys):
 
 def test_outside_a_repository_the_tools_are_still_checked(tmp_path, capsys):
     code, out = run(capsys, "--cwd", str(tmp_path), "doctor")
-    assert code == 0 and "ok    git " in out and "note  not inside a git repository" in out
+    assert code == 0 and "ok    git " in out and "is not a git repository: its 0 files are searched as they are on disk" in out
 
 
 def test_a_missing_grammar_fails_and_fetching_is_offered(repo, capsys, monkeypatch):
