@@ -46,6 +46,9 @@ RUNS = {
     "python-httpx": ("python", None),
     "go-kit": ("go", ["go", "mod", "download"]),
     "typescript-nest": ("typescript", ["npm", "ci", *_NPM]),
+    # nest's dependencies do not install (`npm ci` ends in a resolution error). On the owner's word a corpus of my choosing
+    # stands in: rxjs 7.8.2, 757 TypeScript files, in a workdir of its own (bench/data/graph-heldout).
+    "typescript-rxjs": ("typescript", ["npm", "ci", *_NPM]),
     "javascript-eslint": ("javascript", ["npm", "install", "--no-package-lock", *_NPM]),
     "rust-ripgrep": ("rust", ["cargo", "fetch", "--locked"]),
     "java-spring-petclinic": ("java", None),

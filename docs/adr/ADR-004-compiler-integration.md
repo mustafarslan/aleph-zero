@@ -50,7 +50,7 @@ The protocol and the limit were written into the plan before the first run; thre
 | Go | scip-go 0.2.7 | go-kit | 948 MB, 18 processes | 6.8 s | 3.2 MB | on request |
 | Rust | rust-analyzer (2026-10-04) | ripgrep | 1,499 MB, 44 processes | 7.3 s | 8.3 MB | on request |
 | JavaScript | scip-typescript 0.4.0 | eslint | 2,295 MB | 19 s | 55.6 MB | over the limit: not run by default; run once the owner names a limit |
-| TypeScript | scip-typescript 0.4.0 | nest | not measured | | | not run by default; run once the owner names a limit |
+| TypeScript | scip-typescript 0.4.0 | rxjs 7.8.2 (757 files; nest's dependencies do not install) | 694 MB | 4.4 s | 15.7 MB | on request (measured 2026-10-13) |
 
 **Revised 2026-10-12.** `ALEPH_SCIP_MEMORY_MB` was written here as the way to raise the limit for a run, but a language measured over the default limit was refused before the limit was read. It now runs when it is asked for twice over: the language is named (`--lang`; it is never picked as the worktree's main language) and that variable names a limit above the default (a variable set to lower the ceiling on a small machine asks for nothing). It is then watched and stopped above the limit like the others (eslint: 17.6 s, peak 2,332 MB of 3,072 allowed, 1,470 documents). A `tsconfig.json` the indexer infers at the root of the worktree is removed again; one that was already there is left. The default limit did not move.
 
@@ -89,6 +89,6 @@ An independent reviewer reproduced, and the fix pass closed with a failing test 
 
 ### Answered and still open
 
-- *Peak memory of each indexer on a mid-size project, and the limit:* five of six answered; TypeScript waits for a corpus whose dependencies install.
+- *Peak memory of each indexer on a mid-size project, and the limit:* answered for all six. TypeScript was measured last (2026-10-13), on a corpus the owner let me choose because nest's dependencies do not install: rxjs 7.8.2, 694 MB, so it runs on request. rxjs is a library of small files; an application of the same size may need more, and the limit is watched on every run in any case. Tried end to end: `aleph scip run --lang typescript` on rxjs took 6 s and 624 MB and kept 759 documents; `aleph callers` then answers from it.
 - *Whether Java and Rust are import-only in practice:* neither, once the machine holds their dependencies (Maven's local repository, cargo's registry). Gradle was not measured and is import-only.
 - Not handled: a file added after the index was made that changes what an import resolves to (the rule checks the files the index knew). Two indexers covering one path: the newer import wins. A symbol defined in two documents (TypeScript declaration merging) depends on the first only. scip-java fetches its compiler plugin on first use, so its first run on a machine is not offline.

@@ -156,7 +156,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 ## 11. Compiler indexes (M9): what is left for you
 
-- **TypeScript is not measured** *(2026-10-12: your yes covers cloning a public TypeScript repository of my choosing whose dependencies install; to be done)*.** nest's dependencies do not install (`npm ci` ends in a dependency-resolution error, with or without the network), and I tried no other flags. Another TypeScript repository whose dependencies install would settle it: name one, or allow `--legacy-peer-deps` for nest.
+- **TypeScript is measured and runs on request** *(done 2026-10-13 on your yes; ADR-004)*. nest's dependencies still do not install, so the corpus is one I chose: rxjs 7.8.2 (757 TypeScript files, a `package-lock.json`). scip-typescript: 694 MB against the 2,048 MB limit, 4 seconds. `aleph scip run --lang typescript` now works when the project's dependencies are installed. (agy's two suggestions, today's rxjs and typeorm, both turned out to use pnpm.)
 - **JavaScript is not run by default.** scip-typescript took 2,295 MB on eslint against the 2,048 MB registered beforehand; I did not move the limit after seeing the figure. It runs when you name the limit: `ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. (Until 2026-10-12 this line said so and the code refused anyway; fixed, ADR-004.)
 - **The trust rule is decided** (you asked agy and the advisor): it stays as strict as ADR-004 wrote it, with a hint how to refresh. agy also wanted a weaker stamp for out-of-date answers; measured on Flask it would add 4 calls in 100, so it is not built. ADR-004 has the three views and the figures.
 - **Like M7, off for the agent** unless `ALEPH_GRAPH=1`.

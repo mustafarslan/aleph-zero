@@ -177,3 +177,12 @@ def test_a_file_that_appears_during_the_run_and_is_not_what_the_indexer_infers_i
         except indexers.CannotRun:
             pass        # a file of the owner's that appeared makes the run's result unusable; it must still be there
         assert (repo.root / "tsconfig.json").exists() is stays, content
+
+
+def test_the_languages_run_on_request_are_those_measured_under_the_limit():
+    """ADR-004's table, as the code has it: TypeScript since its indexer was measured (694 MB on rxjs); JavaScript was over."""
+    on_request = {language for language, indexer in indexers.INDEXERS.items() if indexer.on_demand}
+    assert on_request == {"python", "go", "rust", "java", "typescript"}
+    typescript = indexers.INDEXERS["typescript"]
+    assert typescript.needs == "tsconfig.json" and "installed" in typescript.note and not typescript.why_not
+    assert "2,295 MB" in indexers.INDEXERS["javascript"].why_not
