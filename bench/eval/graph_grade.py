@@ -23,15 +23,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from aleph_zero import lang, scip
+from aleph_zero.graph import FileFacts, Graph
 from aleph_zero.lang import parse
 from aleph_zero.lang.calls import Call, calls
 from aleph_zero.lang.definitions import definitions
+from aleph_zero.lang.imports import extract_imports
 
 CORPORA = {
     "python-httpx": "python", "go-kit": "go", "rust-ripgrep": "rust", "typescript-nest": "typescript",
@@ -176,11 +179,40 @@ def grade_corpus(root: Path, index: scip.ScipIndex, language: str,
     return grade
 
 
+def tracked_files(root: Path) -> list[str]:
+    """The corpus as Git sees it: what a view of it would hold."""
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True).stdout
+    return [name for name in listed.decode("utf-8", "surrogateescape").split("\0") if name]
+
+
+def aleph_graph(root: Path) -> Graph:
+    """Aleph's graph of a corpus on disk, from the same facts the index would hold per file."""
+    facts: dict[str, FileFacts] = {}
+    for path in tracked_files(root):
+        profile = lang.profile_for_path(path)
+        file = root / path
+        if profile is None or not file.is_file() or file.is_symlink():
+            continue
+        data = file.read_bytes()
+        tree = parse.tree(profile, data)
+        facts[path] = FileFacts(profile.name, definitions(profile, tree, data), extract_imports(tree.root_node, profile))
+    return Graph(facts)
+
+
+def aleph_answer(graph: Graph) -> Callable[[str, Call], list[Candidate]]:
+    def answer(path: str, call: Call) -> list[Candidate]:
+        edge = graph.resolve(path, call)
+        return [] if edge is None else [Candidate(t.path, t.name, t.start_line, t.end_line) for t in edge.targets]
+    return answer
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("workdir", type=Path, help="holds <corpus>/ and <corpus>.scip for each corpus")
     parser.add_argument("--corpus", action="append", choices=sorted(CORPORA))
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--population", action="store_true", help="report the population alone, with no answers")
+    parser.add_argument("--disagreements", type=int, default=0, help="print this many wrong answers per corpus")
     args = parser.parse_args(argv)
     report = {}
     for name in args.corpus or sorted(CORPORA):
@@ -189,12 +221,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name}: not prepared under {args.workdir} (the corpus or its .scip is missing)", file=sys.stderr)
             continue
         index = scip.load_index(index_file)
-        report[name] = {**grade_corpus(root, index, CORPORA[name]).as_dict(), "documents": len(index.documents),
-                        "oxn_confident_recall": BARS.get(CORPORA[name])}
+        answer = None if args.population else aleph_answer(aleph_graph(root))
+        grade = grade_corpus(root, index, CORPORA[name], answer)
+        report[name] = {**grade.as_dict(), "documents": len(index.documents), "oxn_confident_recall": BARS.get(CORPORA[name])}
         row = report[name]
         print(f"{name:24} graded {row['graded_call_sites']:6}  excluded {row['excluded_untrustworthy']:5} "
-              f"({row['excluded_share']:.1%})  recall {row['recall']:.1%}  confident precision {row['confident_precision']:.1%} "
-              f"confident recall {row['confident_recall']:.1%}", flush=True)
+              f"({row['excluded_share']:.1%})  recall {row['recall']:.1%}  precision {row['precision']:.1%}  "
+              f"confident precision {row['confident_precision']:.1%}  confident recall {row['confident_recall']:.1%}", flush=True)
+        for line in grade.disagreements[:args.disagreements]:
+            print("   ", line)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2) + "\n")
