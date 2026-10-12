@@ -337,5 +337,9 @@ def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
         assert "src/billing/use.py:4  in bill  render_invoice()" in text
         as_json = json.loads(on.text("references", name="render_invoice", direction="callers", format="json"))
         assert as_json["callers"][0]["certain"] is True and as_json["graph_pending"] == 0
+        repo.write("docs/adr/0003-invoices-are-rendered-server-side.md", "# 3. Invoices are rendered on the server\n\n## Status\n\nAccepted\n")
+        assert tools["decisions"]["inputSchema"]["required"] == ["task"]
+        assert on.text("decisions", task="render the invoice in the browser instead").startswith(
+            "docs/adr/0003-invoices-are-rendered-server-side.md  ADR 3  Invoices are rendered on the server  [Accepted]")
     finally:
         on.close()

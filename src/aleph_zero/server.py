@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict
 from typing import IO
 
-from . import callgraph, gitio, outline, render
+from . import callgraph, decisions, gitio, outline, render
 from .engine import Cancelled, Engine
 from .store import StoreError
 
@@ -131,6 +131,15 @@ GRAPH_TOOL = {
         "k": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
         **_COMMON, **_TIMEOUT}},
 }
+DECISIONS_TOOL = {
+    "name": "decisions",
+    "description": "The decision records (ADRs) of this repository that govern a task, best first: path, number, "
+                   "title, status. Give the task in plain words or as a commit message. Read the record before changing what it decides.",
+    "inputSchema": {"type": "object", "required": ["task"], "properties": {
+        "task": {"type": "string"},
+        "k": {"type": "integer", "minimum": 1, "maximum": 30, "default": 7},
+        **_COMMON}},
+}
 GRAPH_SECONDS = 20.0     # how long a first graph question may spend reading files when the caller sets no limit
 
 
@@ -140,10 +149,10 @@ def graph_enabled() -> bool:
 
 def tools() -> list[dict]:
     """The tools offered to this session."""
-    return TOOLS + [GRAPH_TOOL] if graph_enabled() else TOOLS
+    return TOOLS + [GRAPH_TOOL, DECISIONS_TOOL] if graph_enabled() else TOOLS
 
 
-_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL]}
+_SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL, DECISIONS_TOOL]}
 _JSON_TYPES = {"string": str, "integer": int}
 
 
@@ -411,6 +420,9 @@ def _run(engine: Engine, name: str, args: dict) -> str:
         if found.pending:
             lines.append(f"note: {found.pending} files are not indexed yet; results may be incomplete")
         return "\n".join(lines)
+    if name == "decisions":
+        found = engine.decisions(args["task"], k=args.get("k", 7), cwd=cwd)
+        return json.dumps(asdict(found)) if as_json else decisions.text(found)
     if name == "references":
         found = engine.references(args["name"], direction=args.get("direction", "both"), k=args.get("k", 50), cwd=cwd,
                                   timeout_ms=args.get("timeout_ms"),
