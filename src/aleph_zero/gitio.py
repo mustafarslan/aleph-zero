@@ -251,11 +251,35 @@ def _git_bytes(cwd: Path, args: list[bytes]) -> bytes:
 
 
 def untracked_cache_enabled(cwd: Path) -> bool:
-    """True if git keeps its untracked cache for this repository."""
+    """True if git keeps its untracked cache for this repository: because its configuration says so, or because
+    the cache is in the repository's index (`git update-index --untracked-cache` puts it there and changes no
+    configuration; git then keeps and uses it)."""
     try:
-        return git(cwd, "config", "--bool", "--get", "core.untrackedCache").strip() == b"true"
+        if git(cwd, "config", "--bool", "--get", "core.untrackedCache").strip() == b"true":
+            return True
     except GitError:
+        pass
+    try:
+        index = Path(git(cwd, "rev-parse", "--path-format=absolute", "--git-dir").decode().strip()) / "index"
+        return _has_extension(index.read_bytes(), b"UNTR")
+    except (GitError, OSError):
         return False
+
+
+def _has_extension(index: bytes, signature: bytes) -> bool:
+    """Whether a git index file carries an extension. Extensions follow the entries, each a four-letter name
+    and a length, up to the checksum at the end; a name found by chance inside an entry does not lead there."""
+    for checksum in (20, 32):
+        end = len(index) - checksum
+        at = index.find(signature)
+        while at != -1:
+            here = at
+            while here + 8 <= end and index[here:here + 4].isalpha():
+                here += 8 + int.from_bytes(index[here + 4:here + 8], "big")
+                if here == end:
+                    return True
+            at = index.find(signature, at + 1)
+    return False
 
 
 def hash_blob(data: bytes, fmt: str = "sha1") -> str:

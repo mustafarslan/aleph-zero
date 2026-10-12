@@ -24,7 +24,8 @@ with another repository added, or after an interruption, works out only what is 
 `prepare` watches the chip's temperature by itself: it waits when it is at `--temp-limit`,
 and gives the job up at `--temp-stop` or when it has had to wait `--max-pauses` times within
 half an hour. `--away` sets these for a machine nobody is sitting at (85, 97, 6), and
-`--hours 19-7` keeps the work to those hours. To start it so that it outlives the connection:
+`--hours 19-7` keeps the work to those hours. It does not start with less than 20 GB of
+free disk or on battery, and it waits while the machine is on battery. To start it so that it outlives the connection:
 
     caffeinate -i nohup uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR --away ... > WORKDIR/prepare.log 2>&1 &
 
@@ -158,14 +159,15 @@ class ResultCache:
 
 
 def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float = 95.0, guard=None,
-            temp_stop: float | None = None, max_pauses: int | None = None, hours: tuple[int, int] | None = None) -> str:
+            temp_stop: float | None = None, max_pauses: int | None = None, hours: tuple[int, int] | None = None,
+            mains=None) -> str:
     """Index and embed every instance's commit. Returns how it ended: 'done', 'stopped', 'stopped for heat'."""
     done = partial = 0
     say = lambda text: print(text, flush=True)  # noqa: E731
     # Hours of GPU work: after every batch the chip's temperature is looked at (at most every
     # 15 s), and embedding waits while it is at the limit or macOS reports thermal pressure.
     cool = guard or Guard(limit=temp_limit, resume=temp_limit - 15, say=say, stop_at=temp_stop, max_pauses=max_pauses)
-    job = longrun.Control(workdir, "prepare", total=len(rows), guard=cool, say=say, hours=hours)
+    job = longrun.Control(workdir, "prepare", total=len(rows), guard=cool, say=say, hours=hours, mains=mains)
     if isinstance(cool, Guard):
         cool.while_waiting = job.cooling
     try:
@@ -412,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="prepare: nobody is at the machine: wait at 85 C, give up at 97 C or after 6 waits in half an hour")
     parser.add_argument("--hours", help="prepare: only work in these hours of the day, as FIRST-LAST (19-7: from 19:00 to 7:00)")
     parser.add_argument("--no-cache", action="store_true", help="run: work every question out again")
+    parser.add_argument("--no-preflight", action="store_true", help="prepare: start although the disk is nearly full or the machine is on battery")
     parser.add_argument("--no-bm25", action="store_true")
     parser.add_argument("--k", type=int, default=10,
                         help="run: results asked of Aleph per question. The product's default is 8; 10 is the "
@@ -436,8 +439,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "prepare":
         hours = tuple(int(part) for part in args.hours.split("-")) if args.hours else None
         limit, stop_at, pauses = (85.0, 97.0, 6) if args.away else (args.temp_limit, None, None)
+        problems = [] if args.no_preflight else longrun.preflight(workdir)
+        if problems:
+            print("not started:\n  " + "\n  ".join(problems) + "\n(--no-preflight starts it anyway)", file=sys.stderr)
+            return 2
         ended = prepare(workdir, rows, args.max_chunks, limit, temp_stop=args.temp_stop or stop_at,
-                        max_pauses=args.max_pauses or pauses, hours=hours)
+                        max_pauses=args.max_pauses or pauses, hours=hours, mains=longrun.on_mains)
         return 0 if ended == "done" else 3
     else:
         if args.min_pool:

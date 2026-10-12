@@ -93,3 +93,21 @@ def test_doctor_describes_the_vector_file(repo, fake_worker, monkeypatch, capsys
     index.conn.close()
     code, out = run(capsys, "--cwd", str(repo.root), "doctor")
     assert "2 rows in use, 0 free to be used again" in out
+
+
+def test_the_untracked_cache_switched_on_in_the_index_alone_is_seen_and_offered(repo, capsys):
+    """`git update-index --untracked-cache` keeps the cache in this repository's index and changes no configuration."""
+    from aleph_zero import gitio
+
+    code, out = run(capsys, "--cwd", str(repo.root), "doctor")
+    assert "git update-index --untracked-cache" in out and "no configuration" in out      # the way that changes none
+    assert gitio.untracked_cache_enabled(repo.root) is False
+    repo.git("update-index", "--untracked-cache")
+    repo.git("status")
+    import subprocess
+    assert subprocess.run(["git", "-C", str(repo.root), "config", "--get", "core.untrackedCache"], capture_output=True).returncode != 0   # nothing was configured
+    assert gitio.untracked_cache_enabled(repo.root) is True
+    code, out = run(capsys, "--cwd", str(repo.root), "doctor")
+    assert "ok    git's untracked cache is on" in out
+    repo.git("update-index", "--no-untracked-cache")
+    assert gitio.untracked_cache_enabled(repo.root) is False

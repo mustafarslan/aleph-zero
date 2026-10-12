@@ -190,3 +190,22 @@ def test_prepare_can_be_stopped_and_taken_up_again_without_embedding_anything_tw
     assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "done"
     assert status(work)["state"] == "done" and status(work)["unit"] == 3
     assert embedded[1] == 0 and sum(embedded) == 3 * first      # the first repository again: nothing left to embed
+
+
+def test_a_job_checks_power_and_disk_before_it_starts_and_waits_while_on_battery(tmp_path, monkeypatch):
+    assert longrun.preflight(tmp_path, need_gb=0.001, mains=lambda: True) == []
+    problems = longrun.preflight(tmp_path, need_gb=10**9, mains=lambda: False)
+    assert len(problems) == 2 and "GB free" in problems[0] and "battery" in problems[1]
+    assert longrun.preflight(tmp_path, need_gb=0.001, mains=lambda: None) == []        # a machine with no battery to ask about
+    plugged = [False]
+    job = control(tmp_path, mains=lambda: plugged[0])
+    passed = threading.Event()
+    waiting = threading.Thread(target=lambda: (job(1, 1), passed.set()))
+    waiting.start()
+    time.sleep(0.1)
+    assert not passed.is_set() and status(tmp_path)["state"] == "waiting for mains power"
+    plugged[0] = True
+    waiting.join(timeout=5)
+    assert passed.is_set() and status(tmp_path)["state"] == "running"
+    if sys.platform == "darwin":
+        assert longrun.on_mains() in (True, False, None)

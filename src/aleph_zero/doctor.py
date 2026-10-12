@@ -195,7 +195,9 @@ def _untracked_cache(root: Path) -> Row:
     return Row("note", "untracked cache",
                f"git's untracked cache is off; looking at the worktree took {took:.0f} ms, on every query. "
                "It is usually two to three times faster with `git config core.untrackedCache true` "
-               "(your choice: it changes this repository's git configuration)")
+               "(your choice: it changes this repository's git configuration), or with "
+               "`git update-index --untracked-cache`, which keeps the cache in this repository's index and "
+               "changes no configuration")
 
 
 def text(rows: list[Row]) -> str:

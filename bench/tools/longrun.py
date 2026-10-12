@@ -23,6 +23,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -39,12 +41,33 @@ def in_hours(hours: tuple[int, int] | None, hour: int) -> bool:
     return first <= hour < last if first < last else hour >= first or hour < last
 
 
+def on_mains() -> bool | None:
+    """Whether the machine runs on mains power; None when that cannot be told (no battery, not a Mac)."""
+    try:
+        said = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return True if "AC Power" in said else False if "Battery Power" in said else None
+
+
+def preflight(workdir: Path, need_gb: float = 20.0, mains=on_mains) -> list[str]:
+    """What stands in the way of hours of unattended work: each as one sentence. Empty when nothing does."""
+    problems = []
+    free = shutil.disk_usage(workdir if Path(workdir).exists() else Path(workdir).parent).free / 1e9
+    if free < need_gb:
+        problems.append(f"{free:.0f} GB free where {workdir} is, and the run may need {need_gb:.0f}: it would end in the middle of a fetch")
+    if mains() is False:
+        problems.append("the machine is on battery: plug it in (the run waits while it is on battery, and a laptop that sleeps ends it)")
+    return problems
+
+
 class Control:
     """What a long job asks after every batch: may I go on? And what it tells anyone who asks."""
 
     def __init__(self, workdir: Path, job: str, total: int, guard=None, say=print, hours: tuple[int, int] | None = None,
-                 poll: float = 5.0, clock=lambda: time.localtime().tm_hour) -> None:
+                 poll: float = 5.0, clock=lambda: time.localtime().tm_hour, mains=None) -> None:
         self.workdir, self.guard, self.say, self.hours, self.poll, self.clock = Path(workdir), guard, say, hours, poll, clock
+        self.mains, self._mains_at, self._plugged = mains, 0.0, True     # asked at most once a minute: it starts a process
         self.workdir.mkdir(parents=True, exist_ok=True)
         (self.workdir / STOP).unlink(missing_ok=True)       # a stop was for the run before; a pause is kept
         self._started = time.time()
@@ -68,12 +91,13 @@ class Control:
         waited = time.time()
         while not self.stop_wanted():
             state = "paused" if (self.workdir / PAUSE).exists() else \
-                "waiting for its hours" if not in_hours(self.hours, self.clock()) else ""
+                "waiting for its hours" if not in_hours(self.hours, self.clock()) else \
+                "waiting for mains power" if self._on_battery() else ""
             if not state:
                 break
             if self.found["state"] != state:
-                self.say(f"{state}" + (f" ({self.hours[0]}:00 to {self.hours[1]}:00)" if state.startswith("waiting") else
-                                       ": `longrun.py resume` lets it go on"))
+                self.say(state + (f" ({self.hours[0]}:00 to {self.hours[1]}:00)" if state == "waiting for its hours" else
+                                  ": `longrun.py resume` lets it go on" if state == "paused" else ""))
                 self.found["state"] = state
                 self._write()
             time.sleep(self.poll)
@@ -114,6 +138,13 @@ class Control:
         return state
 
     # ---- inside ------------------------------------------------------------------------------------
+
+    def _on_battery(self) -> bool:
+        if self.mains is None:
+            return False
+        if not self._plugged or time.time() - self._mains_at > 60:
+            self._plugged, self._mains_at = self.mains() is not False, time.time()
+        return not self._plugged
 
     def _heat(self) -> None:
         for field, attribute in (("highest_c", "highest"), ("heat_pauses", "pauses")):
