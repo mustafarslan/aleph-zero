@@ -84,9 +84,9 @@ def reference_document(text: str) -> str | None:
     if text.startswith("---"):
         front, marker, body = text.partition("---")[2].partition("\n---")
         if marker:
-            try:
-                import yaml
+            import yaml     # oxn's own reader; here by way of the bench group. Missing must be said, not taken for "no header"
 
+            try:
                 data = yaml.safe_load(front)
             except Exception:  # noqa: BLE001 - as oxn: a broken header is no header
                 data = None

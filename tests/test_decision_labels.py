@@ -67,6 +67,7 @@ def test_a_record_written_where_the_records_used_to_be_is_not_work_it_governs(hi
 
 
 def test_the_reference_ranker_reads_a_record_with_a_header_as_oxn_does():
+    pytest.importorskip("yaml")      # oxn's reader of a header; installed with the bench group
     import decisions as harness
 
     texts = {"adr/adr006-avoid-fc.md": "---\nid: adrs-adr006\ntitle: 'ADR006: Avoid the FC helper'\ntags: [react, typing]\n---\n\n## Context\n\nComponents.\n",
