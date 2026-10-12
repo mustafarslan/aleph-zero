@@ -58,7 +58,21 @@ On Django (7,000 files) this takes a query from about 80 ms to about 30 ms.
 ## Where things are
 
 The index lives in `<git-common-dir>/aleph-zero/index.db` and is shared by every
-worktree of the repository. It is a cache: deleting it is always safe.
+worktree of the repository. It is a cache: deleting it is always safe. When git's
+directory cannot be written, or is on a network filesystem, it lives in
+`~/.cache/aleph-zero/index/` instead; `aleph status` says where and why.
+
+What is searched is what git tracks in this worktree, as it is on disk now:
+
+- In a sparse checkout, files outside it are not searched. `status` says how many.
+- Submodules are not searched. `status` and `doctor` list them; link one as a source
+  with `aleph source add path/to/submodule`.
+- Shallow and partial clones work. Nothing is ever fetched to answer a query.
+- A directory that is not a git repository is not searched: run `git init` there.
+
+Content no worktree has used for 30 days is dropped by itself; `aleph gc --days N`
+does it on request. A damaged index file is set aside (kept as `index.db.damaged-…`)
+and built again.
 Supported languages: Python, TypeScript, JavaScript, Go, Rust, Java, C++, C, plus
 Markdown and reStructuredText. Other text files are searched as plain text.
 
