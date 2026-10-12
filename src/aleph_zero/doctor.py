@@ -174,6 +174,13 @@ def _vector_file(index: Path) -> str:
     if not found:
         return ""
     size = sum(path.stat().st_size for path in found)
+    held = sum(path.stat().st_blocks * 512 for path in found)
+    if held < size * 0.9:       # blocks of free rows were given back: as long as before, smaller on disk
+        return _vector_rows(index, f"; vectors {size / 1e6:.1f} MB long, {held / 1e6:.1f} MB on disk")
+    return _vector_rows(index, f"; vectors {size / 1e6:.1f} MB")
+
+
+def _vector_rows(index: Path, said: str) -> str:
     try:
         conn = apsw.Connection(str(index), flags=apsw.SQLITE_OPEN_READONLY)
         try:
@@ -182,8 +189,8 @@ def _vector_file(index: Path) -> str:
         finally:
             conn.close()
     except apsw.Error:
-        return f"; vectors {size / 1e6:.1f} MB"
-    return f"; vectors {size / 1e6:.1f} MB, {used} rows in use, {free} free to be used again"
+        return said
+    return f"{said}, {used} rows in use, {free} free to be used again"
 
 
 def _untracked_cache(root: Path) -> Row:

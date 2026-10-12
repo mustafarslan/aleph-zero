@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from aleph_zero import vectors
+from aleph_zero import vectorfile, vectors
 from aleph_zero.indexer import Index, collect_garbage
 from aleph_zero.store import index_path, open_db
 from aleph_zero.vectors import VectorStore
@@ -372,3 +372,135 @@ def test_the_scan_gives_the_same_scores_however_the_rows_lie_and_however_many_th
             else:       # split otherwise among threads, a few products round their last bit the other way
                 assert np.allclose(found, plain(rows), rtol=1e-5, atol=0)
                 assert list(np.argsort(-found, kind="stable")[:20]) == list(np.argsort(-plain(rows), kind="stable")[:20])
+
+
+def _store_of(tmp_path, count):
+    """A store with `count` vectors in rows 0 to count-1, without a repository."""
+    conn = open_db(tmp_path / "aleph-zero" / "index.db")
+    store = VectorStore(conn, tmp_path / "aleph-zero", KIND)
+    conn.execute("BEGIN")
+    conn.executemany("INSERT INTO chunks(chunk_id, chunk_hash, kind, symbol, signature, breadcrumb, text) VALUES (?, ?, 'function', '', '', '', '')",
+                     ((i, f"h{i}") for i in range(1, count + 1)))
+    conn.execute("INSERT INTO temp.view_chunks(chunk_id) SELECT chunk_id FROM chunks")
+    conn.execute("COMMIT")
+    matrix = unit(40, count)
+    assert store.add(list(range(1, count + 1)), matrix) == count
+    index = Index(conn)
+    index._view_epoch = 1
+    return conn, store, index, matrix
+
+
+def _free(conn, first, last):
+    """Collect the chunks whose vectors lie in rows first..last, as garbage collection does."""
+    conn.execute("BEGIN")
+    conn.execute("DELETE FROM temp.view_chunks WHERE chunk_id IN (SELECT chunk_id FROM chunk_vectors WHERE row BETWEEN ? AND ?)", (first, last))
+    conn.execute("DELETE FROM chunk_vectors WHERE row BETWEEN ? AND ?", (first, last))
+    conn.execute("COMMIT")
+
+
+def test_the_blocks_of_free_rows_are_given_back_and_no_row_in_use_is_touched(tmp_path):
+    import pytest
+
+    block = 4096 // vectors.ROW_BYTES                # 8 rows to a 4 KB block
+    conn, store, index, matrix = _store_of(tmp_path, 64 * block)
+    before = np.fromfile(store.path, dtype=np.float16).reshape(-1, vectors.WIDTH).copy()
+    mapped = np.memmap(store.path, dtype=np.float16, mode="r", shape=before.shape)      # as another session has it
+    first, last = block * 10 + 5, block * 50 + 2     # a run whose two ends share their blocks with rows in use
+    _free(conn, first, last)
+    found = vectorfile.give_back(conn, store.path.parent)
+    if found.get("unsupported"):
+        pytest.skip(f"this file system gives nothing back: {found['unsupported']}")
+    after = np.fromfile(store.path, dtype=np.float16).reshape(-1, vectors.WIDTH)
+    whole = range(block * 11, block * 50)            # the blocks that hold free rows only
+    assert found["bytes"] == len(whole) * vectors.ROW_BYTES and found["kinds"] == 1
+    assert not after[whole.start:whole.stop].any()                                       # given back: they read as nothing
+    in_use = [row for row in range(len(before)) if row < first or row > last]
+    assert np.array_equal(after[in_use], before[in_use])                                # every row in use, to the bit
+    assert np.array_equal(after[first:whole.start], before[first:whole.start])          # free, but beside rows in use: left
+    assert np.array_equal(np.asarray(mapped)[in_use], before[in_use])                    # also through a mapping made before
+    assert store.path.stat().st_size == before.nbytes                                    # no row moved, the length stays
+    assert store.path.stat().st_blocks * 512 <= before.nbytes - found["bytes"] + 16 * 4096
+    index._view_epoch = 2
+    expected = before[in_use].astype(np.float32) @ matrix[3]                             # what the rows in use scored before
+    best = store.search(index, matrix[3], limit=5)
+    assert [chunk_id - 1 for chunk_id, _ in best] == [in_use[at] for at in np.argsort(-expected, kind="stable")[:5]]
+    assert np.allclose([score for _, score in best], np.sort(expected)[::-1][:5], atol=1e-6)
+    assert vectorfile.give_back(conn, store.path.parent)["bytes"] == 0                       # again: nothing new, nothing harmed
+    assert np.array_equal(np.fromfile(store.path, dtype=np.float16).reshape(-1, vectors.WIDTH)[in_use], before[in_use])
+
+
+def test_a_row_given_back_is_used_again_and_holds_what_is_written_into_it(tmp_path):
+    block = 4096 // vectors.ROW_BYTES
+    conn, store, index, matrix = _store_of(tmp_path, 32 * block)
+    _free(conn, block * 4, block * 20 - 1)
+    vectorfile.give_back(conn, store.path.parent)
+    count = 32 * block
+    conn.execute("BEGIN")
+    conn.executemany("INSERT INTO chunks(chunk_id, chunk_hash, kind, symbol, signature, breadcrumb, text) VALUES (?, ?, 'function', '', '', '', '')",
+                     ((i, f"n{i}") for i in range(count + 1, count + 4)))
+    conn.execute("INSERT INTO temp.view_chunks(chunk_id) VALUES (?), (?), (?)", (count + 1, count + 2, count + 3))
+    conn.execute("COMMIT")
+    fresh = unit(41, 3)
+    assert store.add([count + 1, count + 2, count + 3], fresh) == 3
+    assert sorted(row[0] for row in conn.execute("SELECT row FROM chunk_vectors WHERE chunk_id > ?", (count,))) == [block * 4, block * 4 + 1, block * 4 + 2]
+    index._view_epoch = 3
+    best = store.search(index, fresh[1], limit=1)
+    assert best[0][0] == count + 2 and best[0][1] > 0.99
+    assert store.path.stat().st_size == count * vectors.ROW_BYTES
+
+
+def test_a_file_system_that_gives_nothing_back_is_said_and_harms_nothing(tmp_path, monkeypatch):
+    block = 4096 // vectors.ROW_BYTES
+    conn, store, index, matrix = _store_of(tmp_path, 16 * block)
+    before = store.path.read_bytes()
+    _free(conn, block * 2, block * 10 - 1)
+
+    def refuses(descriptor, offset, length):
+        raise OSError(45, "Operation not supported")
+
+    monkeypatch.setattr(vectorfile, "_punch", refuses)
+    found = vectorfile.give_back(conn, store.path.parent)
+    assert "not supported" in found["unsupported"].lower() and found["bytes"] == 0 and store.path.read_bytes() == before
+    assert vectorfile.give_back(open_db(tmp_path / "other" / "index.db"), tmp_path / "other") == {"kinds": 0, "bytes": 0}     # no vectors at all
+
+
+def test_only_rows_whose_freeing_is_committed_are_given_back(tmp_path):
+    """A hole cannot be taken back. Rows freed inside a transaction that is then rolled back are still in use."""
+    block = 4096 // vectors.ROW_BYTES
+    conn, store, index, matrix = _store_of(tmp_path, 16 * block)
+    before = store.path.read_bytes()
+    conn.execute("BEGIN")
+    conn.execute("DELETE FROM chunk_vectors WHERE row BETWEEN ? AND ?", (block * 2, block * 10 - 1))
+    conn.execute("ROLLBACK")
+    assert vectorfile.give_back(conn, store.path.parent)["bytes"] == 0 and store.path.read_bytes() == before
+
+
+def test_a_session_that_collects_garbage_gives_the_freed_blocks_back(repo, monkeypatch):
+    """The engine collects when it has stored new content and a day has passed; what that frees is given back then."""
+    from aleph_zero import engine as engine_module
+    from aleph_zero.engine import Engine
+
+    asked = []
+    monkeypatch.setattr(engine_module, "collect_if_due", lambda conn: {"chunks_removed": 3, "finished": True})
+    monkeypatch.setattr(vectorfile, "give_back", lambda conn, directory: asked.append(directory) or {"kinds": 1, "bytes": 0})
+    engine = Engine(repo.root)
+    engine.search("render_invoice")                  # the first search stores content: a collection is due to be asked for
+    assert asked == [index_path(repo.root).parent]
+    monkeypatch.setattr(engine_module, "collect_if_due", lambda conn: None)       # not due: nothing to give back
+    repo.write("src/new.py", "def another():\n    return 1\n")
+    engine.search("another")
+    assert len(asked) == 1
+    monkeypatch.setattr(engine_module, "collect_if_due", lambda conn: {"chunks_removed": 1, "finished": True})
+    monkeypatch.setattr(vectorfile, "give_back", lambda conn, directory: (_ for _ in ()).throw(OSError("the disk is gone")))
+    repo.write("src/newer.py", "def one_more():\n    return 2\n")
+    assert engine.search("one_more").hits               # never an error for the query that happens to trigger it
+
+
+def test_gc_says_what_it_gave_back(repo, capsys):
+    import json
+
+    from aleph_zero import cli
+
+    assert cli.main(["--cwd", str(repo.root), "gc", "--days", "0"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["given_back"] == {"kinds": 0, "bytes": 0}

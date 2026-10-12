@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources
+from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources, vectorfile
 from .engine import Engine
 from .indexer import Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -246,7 +246,10 @@ def _memory(args) -> int:
 def _gc(args) -> int:
     index, view = _open(args.cwd)
     index.sync(view, budget_seconds=0.0)
-    print(json.dumps(collect_garbage(index.conn, args.days)))
+    report = collect_garbage(index.conn, args.days)
+    # The rows of what was collected are free; the disk under them goes back to the file system (the file keeps its length).
+    report["given_back"] = vectorfile.give_back(index.conn, index_file(view.common_dir).parent)
+    print(json.dumps(report))
     return 0
 
 

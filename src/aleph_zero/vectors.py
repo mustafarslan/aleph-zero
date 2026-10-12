@@ -10,13 +10,18 @@ bytes, in every process, and after a crash.
 Rows are never moved: another session has the file mapped. When a chunk is collected its
 database entry goes and its row is put on a free list; a later chunk is given that row
 before the file is extended. Search reads only the rows of chunks in its view, so a free
-row is read by nobody. The file therefore stops growing, but it does not shrink: a
+row is read by nobody. The file therefore stops growing, but it does not get shorter: a
 session may have its tail mapped.
+
+What it does give back is the disk under rows nobody owns (`vectorfile.give_back`): the blocks that
+hold free rows only are handed to the file system, which keeps the file's length and every
+row's place, so no session notices. After a large branch is abandoned its rows lie together
+and nearly all of their space returns. Free rows scattered among rows in use (eight rows
+share a block) stay as they are.
 """
 from __future__ import annotations
 
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,9 +30,8 @@ import numpy as np
 
 from .indexer import Index
 from .store import transaction
+from .vectorfile import ROW_BYTES, WIDTH, file_of
 
-WIDTH = 256
-ROW_BYTES = WIDTH * 2       # float16
 _BLOCK = 16_384             # rows converted to float32 at a time: 16 MB of scratch, whatever the view's size
 _THREADS = 4                # that share the scan of a large view
 _THREADED_FROM = 200_000    # rows from which they do: below, starting them costs more than they save
@@ -77,7 +81,7 @@ class VectorStore:
     def __init__(self, conn: apsw.Connection, directory: Path, kind: str) -> None:
         self.conn = conn
         self.kind = kind
-        self.path = Path(directory) / f"vectors.{re.sub(r'[^A-Za-z0-9._-]+', '_', kind)}.f16"
+        self.path = file_of(directory, kind)
         self._map: np.memmap | None = None
         self._map_inode = 0                 # which file the mapping is of: the path can come to name another
         # The index file this connection has open. If the path comes to name another file

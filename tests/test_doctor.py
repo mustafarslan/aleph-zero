@@ -111,3 +111,18 @@ def test_the_untracked_cache_switched_on_in_the_index_alone_is_seen_and_offered(
     assert "ok    git's untracked cache is on" in out
     repo.git("update-index", "--no-untracked-cache")
     assert gitio.untracked_cache_enabled(repo.root) is False
+
+
+def test_doctor_says_how_much_of_the_vector_file_is_on_disk(tmp_path):
+    """After free rows' blocks were given back the file is as long as before and smaller on disk: both are said."""
+    from aleph_zero import doctor
+
+    index = tmp_path / "index.db"
+    index.write_bytes(b"")
+    file = tmp_path / "vectors.test.f16"
+    with open(file, "wb") as handle:
+        handle.truncate(8 * 1024 * 1024)             # eight megabytes long, nothing of it on disk
+    said = doctor._vector_file(index)
+    assert "vectors 8.4 MB long, 0.0 MB on disk" in said
+    file.write_bytes(b"x" * 1024 * 1024)             # all of it on disk: said once, as before
+    assert "vectors 1.0 MB" in doctor._vector_file(index) and "on disk" not in doctor._vector_file(index)

@@ -24,6 +24,7 @@ from . import archfacts, architecture, callgraph, decisions, plain, dense_policy
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
+from . import vectorfile
 from .indexer import Index, collect_if_due
 from .lang.parse import forget_parsers
 from .search import search as run_search
@@ -777,8 +778,11 @@ class Engine:
             # New content was stored, so old content may be due to go. Not under a caller's
             # time limit, and never an error for the query that happens to trigger it.
             try:
-                collect_if_due(index.conn)
-            except apsw.BusyError:
+                collected = collect_if_due(index.conn)
+                if collected and collected.get("chunks_removed"):
+                    # Their vectors' rows are free now: the disk under them goes back to the file system.
+                    vectorfile.give_back(index.conn, index_file(view.common_dir).parent)
+            except (apsw.BusyError, OSError):
                 pass
         return index, view, report.pending, until is not None and report.pending > 0
 

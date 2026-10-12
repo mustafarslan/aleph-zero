@@ -136,4 +136,4 @@ Coverage figures count only chunks that should have a vector.
 
 ## Rows are used again (M3, 2026-10-12)
 
-Until M3 a row of the vector file was never reused, and the file grew with every chunk ever embedded. A row whose chunk is collected now goes on a free list and is given to the next chunk; the file stops growing and does not shrink. A chunk's hash no longer includes the chunker's version, so a newer chunker keeps the vectors of chunks it leaves unchanged. Both are described in ADR-010.
+Until M3 a row of the vector file was never reused, and the file grew with every chunk ever embedded. A row whose chunk is collected now goes on a free list and is given to the next chunk; the file stops growing and does not get shorter (since 2026-10-12 the disk under free rows is given back, ADR-010). A chunk's hash no longer includes the chunker's version, so a newer chunker keeps the vectors of chunks it leaves unchanged. Both are described in ADR-010.
