@@ -1,0 +1,282 @@
+"""The code graph of a view: what is kept of each file, and the questions asked of it.
+
+`graph.py` answers which definition a call reaches, from facts per file. This module keeps
+those facts beside the index, one row per blob, and asks the graph two questions: who calls
+a definition, and what a definition calls.
+
+The facts are read when a graph question is first asked of a view, not when a blob is
+indexed. Reading them at indexing time added a third to the time to index Django and to the
+size of its index, for every user, whether or not a graph question is ever asked; this way
+searching pays nothing. No edge is stored either: an edge depends on the other files of the
+view (what an import leads to, what a class is built on), so it is worked out when asked.
+
+Which files call a name is asked of the text index, which already knows which chunks
+mention an identifier: a file that calls `helper`, or imports it under another name,
+mentions it.
+"""
+from __future__ import annotations
+
+import json
+import time
+import zlib
+from dataclasses import dataclass
+
+import apsw
+
+from . import filters, gitio, lang, symbols
+from .graph import MANIFESTS, Defined, Edge, FileFacts, Graph, Target
+from .indexer import Index
+from .lang import parse
+from .lang.bindings import Binding, facts
+from .lang.calls import FAMILIES, Call, calls
+from .lang.definitions import definitions
+from .store import transaction
+from .view import View
+
+GRAPH_VERSION = 1           # bump when what the readers extract changes: every row is then read again
+PREPARE_BATCH = 64          # blobs read between two commits
+MENTION_LIMIT = 3000        # chunks taken from the text index for one name
+DEFINITION_LIMIT = 8        # definitions of one name that are answered for
+MANIFEST_LIMIT = 2000
+MANIFEST_BYTES = 262_144
+_TYPES = frozenset({"class", "interface", "enum", "type"})
+_EMPTY = (zlib.compress(b"[[],[],[]]", 1), zlib.compress(b"[]", 1))
+_CODE = sorted(FAMILIES & set(lang.PROFILES))
+_IN_CODE = "(" + ",".join("?" * len(_CODE)) + ")"
+_PENDING = (
+    "SELECT v.blob_oid, v.family FROM temp.view_blobs v "
+    "JOIN blobs b ON b.blob_oid = v.blob_oid AND b.family = v.family "
+    "LEFT JOIN graph_facts g ON g.blob_oid = v.blob_oid AND g.family = v.family AND g.version = ? "
+    f"WHERE g.blob_oid IS NULL AND v.family IN {_IN_CODE}"
+)
+_now = time.monotonic       # looked at through this name so that a test can move the clock
+
+
+@dataclass(frozen=True)
+class Reference:
+    """One call, and one definition it may reach."""
+    path: str            # where the call is written
+    line: int
+    written: str         # the call as written: `self.store.save`
+    caller: str          # the definition the call sits in, qualified; '' at file level
+    target_path: str
+    target_line: int
+    target: str          # the definition reached, qualified within its file
+    kind: str
+    level: str           # 'L0' the same file, 'L1' another
+    provenance: str      # 'syntactic', 'import-resolved', or 'name': found by its name alone
+    candidates: int      # how many definitions this call may reach; 1 is not yet certain: see `certain`
+    certain: bool        # one candidate, and not by its name alone
+
+
+@dataclass(frozen=True)
+class Answer:
+    symbol: str
+    definitions: list[symbols.SymbolHit]
+    callers: list[Reference]
+    callees: list[Reference]
+    unanswered: int = 0          # calls inside the definitions that reach nothing in the view: libraries, local functions
+    pending: int = 0             # files of the view not indexed yet
+    graph_pending: int = 0       # indexed files whose calls and imports are not read yet
+    late: bool = False
+    elapsed_ms: int = 0
+    truncated: bool = False      # more callers may exist than were looked at
+
+
+def pending(index: Index) -> list[tuple[str, str]]:
+    """The indexed code blobs of the synced view whose graph facts are not read yet."""
+    return [(oid, family) for oid, family in index.conn.execute(_PENDING, (GRAPH_VERSION, *_CODE))]
+
+
+def coverage(index: Index) -> tuple[int, int]:
+    """(code blobs of the view whose graph facts are read, those that are not)."""
+    ready = index.conn.execute(
+        "SELECT count(*) FROM graph_facts g JOIN temp.view_blobs v ON v.blob_oid = g.blob_oid AND v.family = g.family "
+        "WHERE g.version = ?", (GRAPH_VERSION,)).fetchall()[0][0]
+    return ready, len(pending(index))
+
+
+def prepare(index: Index, view: View, budget_seconds: float, stop=None) -> int:
+    """Read and store the graph facts of the view's blobs that lack them, for as long as the
+    budget allows. Returns how many are still to be read."""
+    todo = pending(index)
+    if not todo:
+        return 0
+    deadline = _now() + budget_seconds
+    done = 0
+    with gitio.Readers() as reader:
+        for start in range(0, len(todo), PREPARE_BATCH):
+            if _now() >= deadline or (stop is not None and stop()):
+                break
+            batch = todo[start:start + PREPARE_BATCH]
+            rows = [(key, _read(index, view, reader, key)) for key in batch]
+            with transaction(index.conn):
+                for (oid, family), found in rows:
+                    if found is None:
+                        continue    # git does not have the content right now: nothing is recorded without it
+                    try:
+                        index.conn.execute(
+                            "INSERT INTO graph_facts(blob_oid, family, version, shape, calls) VALUES (?, ?, ?, ?, ?) "
+                            "ON CONFLICT(blob_oid, family) DO UPDATE SET version = excluded.version, "
+                            "shape = excluded.shape, calls = excluded.calls", (oid, family, GRAPH_VERSION, *found))
+                    except apsw.ConstraintError:
+                        pass        # another session collected the blob meanwhile
+            done += len(batch)
+    return len(todo) - done
+
+
+def _read(index: Index, view: View, reader: gitio.Readers, key: tuple[str, str]) -> tuple[bytes, bytes] | None:
+    oid, family = key
+    for path in index.paths_for(oid, family):
+        data = view.read(path, reader, filters.MAX_BYTES)
+        if data is not None:
+            break
+    else:
+        return None
+    if isinstance(data, gitio.TooLarge):
+        return _EMPTY
+    _, text = filters.classify(family, data)
+    profile = lang.PROFILES.get(family)
+    if text is None or profile is None:
+        return _EMPTY
+    return extract(profile, text)
+
+
+def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
+    """(shape, calls) of one file as stored: see the `graph_facts` table."""
+    source = text.replace("\r\n", "\n").encode("utf-8", "surrogateescape")    # as the chunker read it: the symbols' order is the callers' key
+    try:
+        tree = parse.tree(profile, source)
+        found = definitions(profile, tree, source)
+        sites = calls(profile, tree, source, found)
+        bound, built_on, typed = facts(profile, tree, source)
+    except Exception:  # noqa: BLE001 - a grammar that fails to load, or a shape a reader does not know
+        return _EMPTY
+    shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed]
+    # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
+    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type]
+            for c in sites if c.via or c.head != "local"]
+    pack = lambda value: zlib.compress(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogateescape"), 1)  # noqa: E731
+    return pack(shape), pack(kept)
+
+
+def _unpack(blob: bytes):
+    return json.loads(zlib.decompress(blob).decode("utf-8", "surrogateescape"))
+
+
+def load(index: Index, view: View) -> Graph:
+    """The graph of the synced view, from the symbols and graph facts the index holds for it.
+    A file whose facts are not read yet takes part with its definitions alone."""
+    conn = index.conn
+    defined: dict[tuple[str, str], list[Defined]] = {}
+    for oid, family, name, qualified, kind, signature, line in conn.execute(
+            "SELECT s.blob_oid, s.family, s.name, s.qualified, s.kind, s.signature, s.line FROM symbols s "
+            "JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
+            f"WHERE s.family IN {_IN_CODE} ORDER BY s.blob_oid, s.family, s.ord", _CODE):
+        defined.setdefault((oid, family), []).append(Defined(kind, name, qualified, signature, line, line))
+    shapes: dict[tuple[str, str], tuple[list, list, list]] = {}
+    for oid, family, shape in conn.execute(
+            "SELECT g.blob_oid, g.family, g.shape FROM graph_facts g "
+            "JOIN temp.view_blobs v ON v.blob_oid = g.blob_oid AND v.family = g.family WHERE g.version = ?", (GRAPH_VERSION,)):
+        bound, built_on, typed = _unpack(shape)
+        shapes[(oid, family)] = ([Binding(*row) for row in bound], [tuple(row) for row in built_on], [tuple(row) for row in typed])
+    files: dict[str, FileFacts] = {}
+    for oid, family in conn.execute(f"SELECT blob_oid, family FROM temp.view_blobs WHERE family IN {_IN_CODE}", _CODE).fetchall():
+        key = (oid, family)
+        of_file = FileFacts(family, defined.get(key, []), *shapes.get(key, ([], [], [])))
+        for path in index.paths_for(oid, family):
+            files[path] = of_file
+    manifests: dict[str, bytes] = {}
+    named = [path for path in view.files if path.rsplit("/", 1)[-1] in MANIFESTS][:MANIFEST_LIMIT]
+    if named:
+        with gitio.Readers() as reader:
+            for path in named:
+                data = view.read(path, reader, MANIFEST_BYTES)
+                if isinstance(data, bytes):
+                    manifests[path] = data
+    return Graph(files, manifests)
+
+
+def mentions(index: Index, name: str) -> tuple[list[tuple[str, str]], bool]:
+    """The blobs of the view whose text mentions `name` as a word, and whether the list was cut short."""
+    expression = '"' + name.replace('"', '""') + '"'
+    # The unary plus keeps SQLite from running one text match per chunk of the view (see lexical.py).
+    chunk_ids = [row[0] for row in index.conn.execute(
+        "SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ? AND +rowid IN (SELECT chunk_id FROM temp.view_chunks) LIMIT ?",
+        (expression, MENTION_LIMIT + 1))]
+    cut = len(chunk_ids) > MENTION_LIMIT
+    found: dict[tuple[str, str], None] = {}
+    for start in range(0, min(len(chunk_ids), MENTION_LIMIT), 500):
+        some = chunk_ids[start:start + 500]
+        for oid, family in index.conn.execute(
+                "SELECT DISTINCT bc.blob_oid, bc.family FROM blob_chunks bc "
+                "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
+                f"WHERE bc.chunk_id IN ({','.join('?' * len(some))})", some):
+            found[(oid, family)] = None
+    return list(found), cut
+
+
+def _calls(index: Index, key: tuple[str, str]) -> list[Call]:
+    rows = index.conn.execute("SELECT calls FROM graph_facts WHERE blob_oid = ? AND family = ? AND version = ?",
+                              (*key, GRAPH_VERSION)).fetchall()
+    return [Call(*row) for row in _unpack(rows[0][0])] if rows else []
+
+
+def _reference(path: str, of_file: FileFacts, call: Call, edge: Edge, target: Target) -> Reference:
+    joined = "::" if call.via == "path" else "."
+    caller = of_file.definitions[call.caller].qualified if call.caller is not None and call.caller < len(of_file.definitions) else ""
+    return Reference(path, call.line, f"{call.receiver}{joined}{call.name}" if call.receiver else call.name, caller,
+                     target.path, target.start_line, target.qualified, target.kind, edge.level, edge.provenance,
+                     len(edge.targets), edge.certain)
+
+
+def callers(index: Index, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[list[Reference], bool]:
+    """Every call in the view that may reach one of `hits`: the certain ones first. Also whether
+    the text index named more places than were looked at."""
+    wanted = {(hit.path, hit.qualified, hit.line) for hit in hits}
+    out: list[Reference] = []
+    truncated = False
+    for name in sorted({hit.name for hit in hits}):
+        keys, cut = mentions(index, name)
+        truncated = truncated or cut
+        for key in keys:
+            sites = _calls(index, key)
+            for path in index.paths_for(*key) if sites else ():
+                of_file = graph.files.get(path)
+                if of_file is None:
+                    continue
+                written = {name} | {b.local for b in of_file.bindings if b.kind == "import" and b.name == name}
+                for call in sites:
+                    if call.name not in written:
+                        continue
+                    edge = graph.resolve(path, call)
+                    for target in (edge.targets if edge is not None else ()):
+                        if (target.path, target.qualified, target.start_line) in wanted:
+                            out.append(_reference(path, of_file, call, edge, target))
+    out.sort(key=lambda r: (not r.certain, r.candidates, r.path, r.line, r.target_path, r.target))
+    return out, truncated
+
+
+def callees(index: Index, view: View, graph: Graph, hits: list[symbols.SymbolHit]) -> tuple[list[Reference], int]:
+    """What each of `hits` calls (for a type: what its members call), in source order, and how many
+    of its calls reach nothing in the view."""
+    out: list[Reference] = []
+    unanswered = 0
+    seen: set[tuple[str, int]] = set()
+    for hit in hits:
+        oid, of_file = view.files.get(hit.path), graph.files.get(hit.path)
+        if oid is None or of_file is None:
+            continue
+        inside = [index for index, definition in enumerate(of_file.definitions)
+                  if (definition.qualified == hit.qualified and definition.start_line == hit.line)
+                  or (hit.kind in _TYPES and definition.qualified.startswith(hit.qualified + "."))]
+        for call in _calls(index, (oid, of_file.family)):
+            if call.caller not in inside or (hit.path, call.column + call.line * 100_000) in seen:
+                continue
+            seen.add((hit.path, call.column + call.line * 100_000))
+            edge = graph.resolve(hit.path, call)
+            if edge is None:
+                unanswered += 1
+            for target in (edge.targets if edge is not None else ()):
+                out.append(_reference(hit.path, of_file, call, edge, target))
+    return out, unanswered

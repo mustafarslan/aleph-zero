@@ -1,86 +1,124 @@
-"""What the code graph reads is stored with each blob: once, and gone when the blob is."""
+"""The code graph of a view: facts read per blob when first asked, and the questions asked of them."""
 from aleph_zero.engine import Engine
-from aleph_zero.indexer import Index, collect_garbage
+from aleph_zero.indexer import collect_garbage
 from aleph_zero.store import SCHEMA_VERSION, index_path, open_db
-from aleph_zero.view import build_view
 
+STORE = "class Store:\n    def save(self, item):\n        return item\n\nclass Cache:\n    def save(self, item):\n        return item\n"
 SERVICE = ("from .store import Store as S\n\n"
-           "class Service(Base):\n    def __init__(self, store: S):\n        self.store = store\n"
-           "    def run(self, item, make):\n        self.store.save(item)\n        helper(item)\n        make()\n\n"
+           "class Service:\n    def __init__(self, store: S):\n        self.store = store\n"
+           "    def run(self, item, loose):\n        self.store.save(item)\n        helper(item)\n        loose.save(item)\n\n"
            "def helper(item):\n    return item\n")
+USE = "from app.service import helper as h, Service\n\ndef main():\n    h(1)\n    Service(None).run(1, None)\n"
 
 
-def synced(repo):
+def app(repo):
+    repo.write("src/app/__init__.py", "")
+    repo.write("src/app/store.py", STORE)
     repo.write("src/app/service.py", SERVICE)
-    index = Index(open_db(index_path(repo.root)))
-    view = build_view(repo.root)
-    index.sync(view)
-    return index, view
+    repo.write("src/use.py", USE)
+    return Engine(repo.root)
 
 
-def of_blob(index, view, table, columns):
-    oid = view.files["src/app/service.py"]
-    return index.conn.execute(f"SELECT {columns} FROM {table} WHERE blob_oid = ? ORDER BY ord", (oid,)).fetchall()
+def stored(repo) -> int:
+    return open_db(index_path(repo.root)).execute("SELECT count(*) FROM graph_facts").fetchall()[0][0]
 
 
-def test_a_files_calls_are_stored_as_written_with_the_definition_they_sit_in(repo):
-    index, view = synced(repo)
-    symbols = {ord_: qualified for ord_, qualified in of_blob(index, view, "symbols", "ord, qualified")}
-    stored = [(name, receiver, line, symbols.get(caller), via, head, receiver_type)
-              for name, receiver, line, caller, via, head, receiver_type
-              in of_blob(index, view, "calls", "name, receiver, line, caller, via, head, receiver_type")]
-    assert stored == [
-        ("save", "self.store", 7, "Service.run", "member", "self", ""),
-        ("helper", "", 8, "Service.run", "", "", ""),
-    ]                                           # `make()` calls a parameter: nothing could ever answer it, so it is not kept
+def shown(references):
+    return [(r.path, r.line, r.written, r.caller, f"{r.target_path}:{r.target}", r.provenance, r.candidates, r.certain) for r in references]
 
 
-def test_a_files_import_bindings_and_type_facts_are_stored(repo):
-    index, view = synced(repo)
-    assert of_blob(index, view, "bindings", "local, source, name, level, kind") == [("S", "store", "Store", 1, "import")]
-    assert of_blob(index, view, "type_parts", "owner, field, stated") == [("Service", "", "Base"), ("Service", "store", "S")]
-    ends = dict(of_blob(index, view, "symbols", "qualified, end_line"))
-    assert ends["Service"] == 9 and ends["helper"] == 12
-    assert index.counts()["calls_in_view"] >= 2
+def test_graph_facts_are_read_when_a_graph_question_is_first_asked_not_when_a_file_is_indexed(repo):
+    engine = app(repo)
+    assert engine.search("refresh token").pending == 0
+    assert stored(repo) == 0                                    # searching pays nothing for the graph
+    answer = engine.references("helper")
+    assert answer.graph_pending == 0 and stored(repo) >= 4
+    before = stored(repo)
+    engine.references("helper")
+    assert stored(repo) == before                               # and they are read once
 
 
-def test_indexing_a_blob_again_does_not_double_what_is_stored_for_it(repo):
-    index, view = synced(repo)
-    before = {table: index.conn.execute(f"SELECT count(*) FROM {table}").fetchall() for table in ("calls", "bindings", "type_parts")}
-    open_db(index_path(repo.root)).execute("UPDATE blobs SET chunker_version = chunker_version - 1")
-    assert index.sync(build_view(repo.root)).indexed == 4
-    assert {table: index.conn.execute(f"SELECT count(*) FROM {table}").fetchall() for table in before} == before
+def test_who_calls_a_function_including_under_another_name(repo):
+    answer = app(repo).references("helper", direction="callers")
+    assert [hit.path for hit in answer.definitions] == ["src/app/service.py"]
+    assert shown(answer.callers) == [
+        ("src/app/service.py", 8, "helper", "Service.run", "src/app/service.py:helper", "syntactic", 1, True),
+        ("src/use.py", 4, "h", "main", "src/app/service.py:helper", "import-resolved", 1, True),
+    ]
+    assert answer.callees == []
 
 
-def test_a_blob_that_is_collected_takes_its_graph_rows_with_it(repo):
-    index, view = synced(repo)
-    oid = view.files["src/app/service.py"]
+def test_what_a_method_calls_with_how_sure_each_answer_is(repo):
+    answer = app(repo).references("Service.run", direction="callees")
+    assert shown(answer.callees) == [
+        ("src/app/service.py", 7, "self.store.save", "Service.run", "src/app/store.py:Store.save", "import-resolved", 1, True),
+        ("src/app/service.py", 8, "helper", "Service.run", "src/app/service.py:helper", "syntactic", 1, True),
+        # `loose` has no stated type: both `save` methods are candidates, and the answer says it is by name
+        ("src/app/service.py", 9, "loose.save", "Service.run", "src/app/store.py:Store.save", "name", 2, False),
+        ("src/app/service.py", 9, "loose.save", "Service.run", "src/app/store.py:Cache.save", "name", 2, False),
+    ]
+
+
+def test_callers_of_a_method_keep_the_certain_ones_apart_from_the_guesses(repo):
+    answer = app(repo).references("Store.save")
+    assert shown(answer.callers) == [
+        ("src/app/service.py", 7, "self.store.save", "Service.run", "src/app/store.py:Store.save", "import-resolved", 1, True),
+        ("src/app/service.py", 9, "loose.save", "Service.run", "src/app/store.py:Store.save", "name", 2, False),
+    ]
+
+
+def test_an_edited_file_is_answered_from_what_it_holds_now(repo):
+    engine = app(repo)
+    assert len(engine.references("helper").callers) == 2
+    repo.write("src/use.py", "def main():\n    pass\n")       # no longer calls it; not committed
+    assert [r.path for r in engine.references("helper").callers] == ["src/app/service.py"]
+
+
+def test_a_callee_whose_file_left_the_view_is_no_longer_an_answer(repo):
+    engine = app(repo)
+    assert any(r.target == "Store.save" for r in engine.references("Service.run").callees)
+    (repo.root / "src/app/store.py").unlink()
+    assert [r.target for r in engine.references("Service.run").callees] == ["helper"]
+
+
+def test_a_blob_that_is_collected_takes_its_graph_facts_with_it(repo):
+    engine = app(repo)
+    engine.references("helper")
+    conn = open_db(index_path(repo.root))
+    oid = conn.execute("SELECT blob_oid FROM symbols WHERE name = 'helper'").fetchall()[0][0]
     (repo.root / "src/app/service.py").unlink()
-    index.sync(build_view(repo.root))
-    collect_garbage(index.conn, max_age_days=0, now=2**40)
-    for table in ("calls", "bindings", "type_parts"):
-        assert index.conn.execute(f"SELECT count(*) FROM {table} WHERE blob_oid = ?", (oid,)).fetchall() == [(0,)]
+    engine.search("refresh token")
+    collect_garbage(conn, max_age_days=0, now=2**40)
+    assert conn.execute("SELECT count(*) FROM graph_facts WHERE blob_oid = ?", (oid,)).fetchall() == [(0,)]
 
 
-def test_an_index_of_schema_6_gets_the_graph_tables_and_fills_them_on_the_next_sync(repo):
-    """Schema 6 had no calls, bindings or type facts, and its blobs were written by the chunker before them."""
-    repo.write("src/app/service.py", SERVICE)
-    engine = Engine(repo.root)
+def test_out_of_time_the_answer_says_how_many_files_the_graph_has_not_read(repo, monkeypatch):
+    from aleph_zero import callgraph
+
+    engine = app(repo)
+    engine.search("refresh token")
+    monkeypatch.setattr(callgraph, "PREPARE_BATCH", 1)
+    clock = iter(range(0, 10_000, 50))
+    monkeypatch.setattr(callgraph, "_now", lambda: next(clock))     # each look at the clock is 50 s later
+    answer = engine.references("helper", prepare_seconds=60)
+    assert answer.graph_pending > 0
+    monkeypatch.undo()
+    assert engine.references("helper").graph_pending == 0
+
+
+def test_an_index_of_schema_6_gets_the_graph_table_and_nothing_is_indexed_again(repo):
+    engine = app(repo)
     assert engine.search("refresh token").hits
     engine.close()
     path = index_path(repo.root)
     conn = open_db(path)
-    blobs = conn.execute("SELECT count(*) FROM blobs").fetchall()
-    for statement in ("DROP TABLE calls", "DROP TABLE bindings", "DROP TABLE type_parts", "ALTER TABLE symbols DROP COLUMN end_line",
-                      "UPDATE blobs SET chunker_version = 4"):
-        conn.execute(statement)
+    blobs = conn.execute("SELECT blob_oid, chunker_version FROM blobs ORDER BY 1").fetchall()
+    conn.execute("DROP TABLE graph_facts")
     conn.pragma("user_version", 6)
     conn.close()
     conn = open_db(path)
     assert conn.pragma("user_version") == SCHEMA_VERSION == 7
-    assert conn.execute("SELECT count(*) FROM blobs").fetchall() == blobs
-    assert conn.execute("SELECT count(*) FROM calls").fetchall() == [(0,)]
+    assert conn.execute("SELECT blob_oid, chunker_version FROM blobs ORDER BY 1").fetchall() == blobs
     engine = Engine(repo.root)
     assert engine.search("refresh token").pending == 0
-    assert conn.execute("SELECT count(*) FROM calls").fetchall()[0][0] >= 2
-    assert conn.execute("SELECT min(end_line) FROM symbols").fetchall()[0][0] >= 1
+    assert len(engine.references("helper").callers) == 2

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import dense_policy, gitio, lang, memory, memstat, render, sources, symbols
+from . import callgraph, dense_policy, gitio, lang, memory, memstat, render, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -34,6 +34,8 @@ from .view import View, build_view
 SYNC_SECONDS = 5.0       # how long a query without a time limit may spend indexing first
 SEARCH_SHARE = 0.25      # of a time limit, kept for the search itself
 SHOWN_LIMIT = 5000       # texts remembered as shown before the memory starts over
+GRAPH_SECONDS = 60.0     # how long a graph question without a time limit may spend reading files first
+GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for reading the graph's facts
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
@@ -98,6 +100,7 @@ class Engine:
         self._embedder = None  # the connection to the worker used for queries
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
+        self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
         self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
@@ -142,6 +145,7 @@ class Engine:
             index.release_memory()
         for store in self._stores.values():
             store.release_memory()
+        self._graphs.clear()
         views.forget_trees()
         forget_parsers()
         self._shown.clear()
@@ -162,6 +166,7 @@ class Engine:
         index = self._indexes.pop(root, None)
         self._stores.pop(root, None)
         self._files.pop(root, None)
+        self._graphs.pop(root, None)
         if index is not None:
             self._decisions.pop(id(index), None)
             try:
@@ -233,6 +238,56 @@ class Engine:
             return SymbolAnswer(name, [], 0, True, _elapsed(started))
         return SymbolAnswer(name, found, pending, late, _elapsed(started))
 
+    @_rebuilding
+    def references(self, name: str, direction: str = "both", k: int = 50, cwd: Path | str | None = None,
+                   timeout_ms: int | None = None, prepare_seconds: float | None = None) -> callgraph.Answer:
+        """Who calls the definition(s) named `name`, and what they call ('callers', 'callees' or 'both'),
+        at most `k` of each, the certain answers first. Each answer says how it was found and how many
+        definitions the call may reach. The first question about a view reads every file's calls and
+        imports, for at most `prepare_seconds` (or a share of the time limit); `graph_pending` says how
+        many files are still unread, and a later question carries on."""
+        if direction not in ("both", "callers", "callees"):
+            raise ValueError("direction is 'callers', 'callees' or 'both'")
+        started, until = _limits(timeout_ms)
+        left = [0]
+
+        def prepare(index: Index, view: View):
+            if prepare_seconds is not None:
+                budget = prepare_seconds
+            else:
+                budget = GRAPH_SECONDS if until is None else max(0.0, (until - time.monotonic()) * GRAPH_SHARE)
+            left[0] = callgraph.prepare(index, view, budget, self._stop.is_set)
+            if self._stop.is_set():
+                raise Cancelled
+            return (lambda: self._references(index, view, name, direction),)
+
+        try:
+            (found,), pending, late = self._consistent(cwd, started, until, prepare, ())
+        except gitio.GitTimeout:
+            return callgraph.Answer(name, [], [], [], late=True, elapsed_ms=_elapsed(started))
+        if not found:       # out of time before the index could be read
+            return callgraph.Answer(name, [], [], [], pending=pending, graph_pending=left[0], late=True,
+                                    elapsed_ms=_elapsed(started))
+        definitions, callers, callees, unanswered, truncated = found
+        return callgraph.Answer(name, definitions, callers[:k], callees[:k], unanswered, pending, left[0],
+                                late or left[0] > 0 and until is not None, _elapsed(started),
+                                truncated or len(callers) > k or len(callees) > k)
+
+    def _references(self, index: Index, view: View, name: str, direction: str) -> tuple:
+        definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT)
+        if not definitions:
+            return [], [], [], 0, False
+        ready = callgraph.coverage(index)[0]
+        token = (view.fingerprint, ready)
+        cached = self._graphs.get(view.root)
+        if cached is None or cached[0] != token:
+            cached = (token, callgraph.load(index, view))
+            self._graphs[view.root] = cached
+        graph = cached[1]
+        callers, truncated = callgraph.callers(index, graph, definitions) if direction != "callees" else ([], False)
+        callees, unanswered = callgraph.callees(index, view, graph, definitions) if direction != "callers" else ([], 0)
+        return definitions, callers, callees, unanswered, truncated
+
     def outline(self, path: str, cwd: Path | str | None = None,
                 timeout_ms: int | None = None) -> outlines.Outline:
         """Raises gitio.GitTimeout when the worktree cannot be read within the limit."""
@@ -269,6 +324,7 @@ class Engine:
             "main_language": next(iter(shares), None),
             "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
+            "graph": dict(zip(("files_read", "files_unread"), callgraph.coverage(index))),
             "memory": {**self._memory(), **self._memory_counts(view)},
         }
 

@@ -39,6 +39,7 @@ _SITES: dict[str, dict[str, str]] = {
     "cpp": {"call_expression": "function", "new_expression": "type"},
     "c": {"call_expression": "function"},
 }
+FAMILIES = frozenset(_SITES)     # the languages whose calls are read
 _NAME_FIELDS = ("attribute", "property", "field", "name")
 _OWNER_FIELDS = ("object", "operand", "value", "argument", "path", "scope")
 _WRAPPERS = {"generic_function": "function", "template_function": "name", "generic_type": None,

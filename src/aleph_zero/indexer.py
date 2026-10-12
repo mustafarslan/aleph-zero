@@ -13,8 +13,6 @@ import apsw
 
 from . import filters, gitio, lang, lexical
 from .chunking import CHUNKER_VERSION, Chunk, chunk_file, chunk_hash, code_chunks
-from .lang.bindings import Binding
-from .lang.calls import Call
 from .lang.definitions import Definition
 from .lang.imports import RawImport
 from .store import transaction
@@ -88,10 +86,6 @@ class _Prepared:
     definitions: list[Definition] = field(default_factory=list)
     chunk_of: list[int] = field(default_factory=list)
     imports: list[RawImport] = field(default_factory=list)
-    calls: list[Call] = field(default_factory=list)
-    bindings: list[Binding] = field(default_factory=list)
-    bases: list[tuple[str, str]] = field(default_factory=list)
-    fields: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 class Index:
@@ -315,8 +309,6 @@ class Index:
                                    "ON v.blob_oid = s.blob_oid AND v.family = s.family"),
             "imports_in_view": one("SELECT count(*) FROM imports i JOIN temp.view_blobs v "
                                    "ON v.blob_oid = i.blob_oid AND v.family = i.family"),
-            "calls_in_view": one("SELECT count(*) FROM calls c JOIN temp.view_blobs v "
-                                 "ON v.blob_oid = c.blob_oid AND v.family = c.family"),
             "blobs_total": one("SELECT count(*) FROM blobs"),
             "chunks_total": one("SELECT count(*) FROM chunks"),
             "pending": self._pending,
@@ -389,8 +381,7 @@ class Index:
         if profile is not None:
             code = code_chunks(profile, text)
             if code.chunks:
-                return _Prepared(key, kind, len(data), code.chunks, code.definitions, code.chunk_of, code.imports,
-                                 code.calls, code.bindings, code.bases, code.fields)
+                return _Prepared(key, kind, len(data), code.chunks, code.definitions, code.chunk_of, code.imports)
         chunks = chunk_file(family, kind, text)
         return _Prepared(key, kind if chunks else "skip:empty", len(data), chunks)
 
@@ -428,28 +419,10 @@ class Index:
                  chunk.scope_start_line, chunk.scope_end_line),
             )
         conn.executemany(
-            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line, end_line) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature, chunk_ord, d.start_line,
-              d.end_line)
+            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ((oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature, chunk_ord, d.start_line)
              for ordinal, (d, chunk_ord) in enumerate(zip(item.definitions, item.chunk_of))),
-        )
-        # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
-        kept = [call for call in item.calls if call.via or call.head != "local"]
-        conn.executemany(
-            "INSERT INTO calls(blob_oid, family, ord, name, receiver, line, col, caller, via, head, receiver_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type)
-             for ordinal, c in enumerate(kept)),
-        )
-        conn.executemany(
-            "INSERT INTO bindings(blob_oid, family, ord, local, source, name, level, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, b.local, b.source, b.name, b.level, b.kind) for ordinal, b in enumerate(item.bindings)),
-        )
-        parts = [(owner, "", base) for owner, base in item.bases] + list(item.fields)
-        conn.executemany(
-            "INSERT INTO type_parts(blob_oid, family, ord, owner, field, stated) VALUES (?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, owner, name, stated) for ordinal, (owner, name, stated) in enumerate(parts)),
         )
         conn.executemany(
             "INSERT INTO imports(blob_oid, family, ord, specifier, names, level, kind, flags, line) "

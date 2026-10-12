@@ -27,8 +27,10 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from typing import NamedTuple
 
 from .lang.bindings import Binding, named_type
 from .lang.calls import Call
@@ -53,10 +55,21 @@ _SEGMENT = re.compile(r"^[A-Za-z_$][\w$]*$")
 _UNSTATED = "unstated"      # the source does not say what type a value has: the name is all there is to go on
 
 
+class Defined(NamedTuple):
+    """A definition as the graph needs it: what `lang.definitions.Definition` holds of it, or a row of
+    the index's symbols (which does not record where a definition ends: `end_line` is then its line)."""
+    kind: str
+    name: str
+    qualified: str
+    signature: str
+    start_line: int
+    end_line: int
+
+
 @dataclass(frozen=True)
 class FileFacts:
     family: str                         # the language profile's name
-    definitions: list[Definition]
+    definitions: Sequence[Definition | Defined]   # in source order: a call names its caller by position
     bindings: list[Binding] = field(default_factory=list)
     bases: list[tuple[str, str]] = field(default_factory=list)
     fields: list[tuple[str, str, str]] = field(default_factory=list)   # (type, field, the field's type as written)
@@ -321,7 +334,7 @@ class Graph:
             owner = self._owner(facts, call)
             found = self._method((path, owner), call.name) if owner and len(segments) == 1 else []
             return self._edge(path, found, "own type") if found else None
-        module, rest = self._rust_module(path, segments, self._inline_depth(facts, call))
+        module, rest = self._rust_module(path, segments, self._inline_depth(path, facts, call))
         if module is None:
             return None     # `Vec::new()`, `std::fs::read()`: a path that leaves these files
         if not rest and module == path and segments[-1] != "crate":    # `self::f()`, `super::f()` from an inline module
@@ -341,20 +354,9 @@ class Graph:
         kinds = self._kinds[path]
         return [(".".join(parts[:cut]), kinds.get(".".join(parts[:cut]), "")) for cut in range(len(parts) - 1, 0, -1)]
 
-    def _inline_depth(self, facts: FileFacts, call: Call) -> int:
+    def _inline_depth(self, path: str, facts: FileFacts, call: Call) -> int:
         """How many inline Rust modules the call is written inside."""
-        if call.caller is None:
-            return 0
-        return sum(1 for index in self._ancestors(facts, call.caller) if facts.definitions[index].kind == "namespace")
-
-    @staticmethod
-    def _ancestors(facts: FileFacts, index: int) -> list[int]:
-        out: list[int] = []
-        parent = facts.definitions[index].parent
-        while parent is not None and len(out) < 32:
-            out.append(parent)
-            parent = facts.definitions[parent].parent
-        return out
+        return sum(1 for _, kind in self._containers(path, facts, call) if kind == "namespace")
 
     def _lexical(self, path: str, facts: FileFacts, call: Call) -> list[Target]:
         """A plain name looked up outwards from where the call stands, as the language would."""

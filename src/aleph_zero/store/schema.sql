@@ -47,7 +47,6 @@ CREATE TABLE IF NOT EXISTS symbols (
     signature TEXT NOT NULL,
     chunk_ord INTEGER NOT NULL,   -- the chunk of the same blob that holds its first line
     line      INTEGER NOT NULL,
-    end_line  INTEGER NOT NULL DEFAULT 0,   -- its last line; 0 in a row written before schema 7
     PRIMARY KEY (blob_oid, family, ord),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
@@ -69,51 +68,18 @@ CREATE TABLE IF NOT EXISTS imports (
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
--- Where a blob calls something, as written. Which definition a call reaches depends on the
--- other files of a view, so the code graph (M7) works that out per view and stores no edge.
-CREATE TABLE IF NOT EXISTS calls (
-    blob_oid      TEXT NOT NULL,
-    family        TEXT NOT NULL,
-    ord           INTEGER NOT NULL,
-    name          TEXT NOT NULL,      -- the callee's own name
-    receiver      TEXT NOT NULL,      -- what it is called on; '' for a plain call
-    line          INTEGER NOT NULL,
-    col           INTEGER NOT NULL,
-    caller        INTEGER,            -- ord of the symbol of the same blob it sits in; NULL at file level
-    via           TEXT NOT NULL,      -- '', member, path
-    head          TEXT NOT NULL,      -- what its first name is bound to: '', self, super, local, value
-    receiver_type TEXT NOT NULL,      -- the type the function states for a local receiver, or ''
-    PRIMARY KEY (blob_oid, family, ord),
-    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
-) WITHOUT ROWID;
-
-CREATE INDEX IF NOT EXISTS calls_by_name ON calls(name);
-
--- The names a blob's imports bind, and what it publishes under another name.
-CREATE TABLE IF NOT EXISTS bindings (
+-- What the code graph (M7) reads from a blob: its call sites as written, the names its
+-- imports bind, what its types are built on and the types of their fields. Which definition
+-- a call reaches depends on the other files of a view, so no edge is stored. Filled when a
+-- graph question is first asked of a view, not when a blob is indexed: an index that is only
+-- searched pays nothing for it. Which blobs call a name is asked of the text index.
+CREATE TABLE IF NOT EXISTS graph_facts (
     blob_oid TEXT NOT NULL,
     family   TEXT NOT NULL,
-    ord      INTEGER NOT NULL,
-    local    TEXT NOT NULL,       -- the name the file may write; '*' for everything of a module
-    source   TEXT NOT NULL,       -- the module, as written
-    name     TEXT NOT NULL,       -- what it is called there; '' when local stands for the module
-    level    INTEGER NOT NULL,    -- Python: leading dots. Rust: inline modules around it
-    kind     TEXT NOT NULL,       -- import, export, module, package
-    PRIMARY KEY (blob_oid, family, ord),
-    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
-) WITHOUT ROWID;
-
-CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings(name);
-
--- What a blob's types are built on (field = '') and the types they state for their fields.
-CREATE TABLE IF NOT EXISTS type_parts (
-    blob_oid TEXT NOT NULL,
-    family   TEXT NOT NULL,
-    ord      INTEGER NOT NULL,
-    owner    TEXT NOT NULL,       -- the type, qualified within the file
-    field    TEXT NOT NULL,       -- '' for a base: what the type extends, implements or embeds
-    stated   TEXT NOT NULL,       -- the base, or the field's type, as written
-    PRIMARY KEY (blob_oid, family, ord),
+    version  INTEGER NOT NULL,    -- of the readers that wrote the row; another version is read again
+    shape    BLOB NOT NULL,       -- zlib(JSON): bindings, bases, field types: needed of every blob of a view
+    calls    BLOB NOT NULL,       -- zlib(JSON): the call sites: needed of the blobs a question touches
+    PRIMARY KEY (blob_oid, family),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
 

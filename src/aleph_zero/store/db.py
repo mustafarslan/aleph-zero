@@ -211,11 +211,8 @@ def _upgrade_5(conn: apsw.Connection) -> None:
 
 
 def _upgrade_6(conn: apsw.Connection) -> None:
-    """Schema 6 to 7: the tables the code graph reads, and where each definition ends. Blobs
-    indexed before have neither; the chunker version that came with this has them indexed
-    again as they are next seen, and a chunk that comes out the same keeps its vector."""
-    if "end_line" not in {row[1] for row in conn.execute("PRAGMA table_info(symbols)")}:
-        conn.execute("ALTER TABLE symbols ADD COLUMN end_line INTEGER NOT NULL DEFAULT 0")
+    """Schema 6 to 7: the table the code graph keeps its per-file facts in. It starts empty and
+    is filled when a graph question is first asked; nothing indexed or embedded is touched."""
     conn.execute(_SCHEMA.read_text())
 
 
