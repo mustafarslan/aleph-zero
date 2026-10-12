@@ -9,8 +9,9 @@ from dataclasses import dataclass
 # Bump when what is extracted from a file changes (chunk boundaries, symbols, imports):
 # every blob is then processed again. 2: words are recognised in every script, not only
 # ASCII. 3: source code is chunked by definition, with symbols and imports. 4: methods of
-# object literals and every target of a chained assignment are definitions.
-CHUNKER_VERSION = 4
+# object literals and every target of a chained assignment are definitions. 5: call sites,
+# import bindings, base types and field types are read for the code graph; chunks are as before.
+CHUNKER_VERSION = 5
 # Part of every chunk's hash. A chunk that comes out of a newer chunker with the same kind,
 # names and text keeps its hash, and with it its row in the text index and its vector:
 # embedding a large repository takes minutes to hours. Bump this only when what is stored

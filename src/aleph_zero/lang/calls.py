@@ -45,6 +45,7 @@ _WRAPPERS = {"generic_function": "function", "template_function": "name", "gener
 _CALLABLE = frozenset({"function", "method"})
 
 
+RECEIVER_LIMIT = 120
 _PATHS = frozenset({"scoped_identifier", "qualified_identifier"})
 _JS_SCOPES = frozenset({"function_declaration", "function_expression", "arrow_function", "method_definition",
                         "generator_function_declaration", "generator_function"})
@@ -169,7 +170,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
         stated = next((declared[scope].get(first, "") for scope in reversed(chain) if first in bound[scope]), "") \
             if head == "local" and owner is not None else ""
-        out.append(Call(_text(name), _text(owner) if owner is not None else "", name.start_point[0] + 1,
+        out.append(Call(_text(name), _receiver(owner) if owner is not None else "", name.start_point[0] + 1,
                         name.start_point[1], caller, via, head, stated))
     out.sort(key=lambda call: (call.line, call.column))
     return out
@@ -365,6 +366,13 @@ def _is_require(node: Node) -> bool:
         value = value.child_by_field_name("object")
     function = value.child_by_field_name("function") if value is not None and value.type == "call_expression" else None
     return function is not None and _text(function) == "require"
+
+
+def _receiver(owner: Node) -> str:
+    """What a call is made on, as written: on one line, and cut short when it is a long expression
+    (a chain of builder calls over many lines says nothing more by being kept whole)."""
+    text = " ".join(_text(owner).split())
+    return text if len(text) <= RECEIVER_LIMIT else text[:RECEIVER_LIMIT - 1] + "…"
 
 
 def _is_name(node: Node) -> bool:

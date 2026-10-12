@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS symbols (
     signature TEXT NOT NULL,
     chunk_ord INTEGER NOT NULL,   -- the chunk of the same blob that holds its first line
     line      INTEGER NOT NULL,
+    end_line  INTEGER NOT NULL DEFAULT 0,   -- its last line; 0 in a row written before schema 7
     PRIMARY KEY (blob_oid, family, ord),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;
@@ -64,6 +65,54 @@ CREATE TABLE IF NOT EXISTS imports (
     kind      TEXT NOT NULL,      -- value, type_only, wildcard, dynamic, side_effect, system
     flags     INTEGER NOT NULL,   -- 1 = re-export, 2 = deferred (inside a definition)
     line      INTEGER NOT NULL,
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- Where a blob calls something, as written. Which definition a call reaches depends on the
+-- other files of a view, so the code graph (M7) works that out per view and stores no edge.
+CREATE TABLE IF NOT EXISTS calls (
+    blob_oid      TEXT NOT NULL,
+    family        TEXT NOT NULL,
+    ord           INTEGER NOT NULL,
+    name          TEXT NOT NULL,      -- the callee's own name
+    receiver      TEXT NOT NULL,      -- what it is called on; '' for a plain call
+    line          INTEGER NOT NULL,
+    col           INTEGER NOT NULL,
+    caller        INTEGER,            -- ord of the symbol of the same blob it sits in; NULL at file level
+    via           TEXT NOT NULL,      -- '', member, path
+    head          TEXT NOT NULL,      -- what its first name is bound to: '', self, super, local, value
+    receiver_type TEXT NOT NULL,      -- the type the function states for a local receiver, or ''
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS calls_by_name ON calls(name);
+
+-- The names a blob's imports bind, and what it publishes under another name.
+CREATE TABLE IF NOT EXISTS bindings (
+    blob_oid TEXT NOT NULL,
+    family   TEXT NOT NULL,
+    ord      INTEGER NOT NULL,
+    local    TEXT NOT NULL,       -- the name the file may write; '*' for everything of a module
+    source   TEXT NOT NULL,       -- the module, as written
+    name     TEXT NOT NULL,       -- what it is called there; '' when local stands for the module
+    level    INTEGER NOT NULL,    -- Python: leading dots. Rust: inline modules around it
+    kind     TEXT NOT NULL,       -- import, export, module, package
+    PRIMARY KEY (blob_oid, family, ord),
+    FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings(name);
+
+-- What a blob's types are built on (field = '') and the types they state for their fields.
+CREATE TABLE IF NOT EXISTS type_parts (
+    blob_oid TEXT NOT NULL,
+    family   TEXT NOT NULL,
+    ord      INTEGER NOT NULL,
+    owner    TEXT NOT NULL,       -- the type, qualified within the file
+    field    TEXT NOT NULL,       -- '' for a base: what the type extends, implements or embeds
+    stated   TEXT NOT NULL,       -- the base, or the field's type, as written
     PRIMARY KEY (blob_oid, family, ord),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;

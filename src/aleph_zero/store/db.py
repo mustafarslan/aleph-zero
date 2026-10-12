@@ -14,7 +14,7 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -210,9 +210,18 @@ def _upgrade_5(conn: apsw.Connection) -> None:
             "WHERE i NOT IN (SELECT row FROM chunk_vectors WHERE kind = ?)", (next_row, next_row, kind, kind))
 
 
+def _upgrade_6(conn: apsw.Connection) -> None:
+    """Schema 6 to 7: the tables the code graph reads, and where each definition ends. Blobs
+    indexed before have neither; the chunker version that came with this has them indexed
+    again as they are next seen, and a chunk that comes out the same keeps its vector."""
+    if "end_line" not in {row[1] for row in conn.execute("PRAGMA table_info(symbols)")}:
+        conn.execute("ALTER TABLE symbols ADD COLUMN end_line INTEGER NOT NULL DEFAULT 0")
+    conn.execute(_SCHEMA.read_text())
+
+
 # Versions that are brought up to date where they are, one step at a time. Anything older
 # is a cache of a different shape and is rebuilt; these hold vectors that took GPU time.
-_UPGRADES = {4: _upgrade_4, 5: _upgrade_5}
+_UPGRADES = {4: _upgrade_4, 5: _upgrade_5, 6: _upgrade_6}
 
 
 def upgradable() -> frozenset[int]:

@@ -8,9 +8,11 @@ name, signature and line range, so search can report them as one result.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..lang import LanguageProfile, parse
+from ..lang.bindings import Binding, bases, bindings, fields
+from ..lang.calls import Call, calls
 from ..lang.definitions import Definition, definitions
 from ..lang.imports import RawImport, extract_imports
 from .fallback import window_chunks
@@ -34,6 +36,10 @@ class CodeFile:
     definitions: list[Definition]
     chunk_of: list[int]              # for each definition, the chunk holding its first line
     imports: list[RawImport]
+    calls: list[Call] = field(default_factory=list)                      # what the code graph reads: see graph.py
+    bindings: list[Binding] = field(default_factory=list)
+    bases: list[tuple[str, str]] = field(default_factory=list)
+    fields: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
@@ -48,6 +54,11 @@ def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
     except Exception:  # noqa: BLE001 - a grammar that fails to load or a parser that gives up
         windows = window_chunks(text)
         return CodeFile(windows, [((c.start_line, c.end_line),) for c in windows], [], [], [])
+    try:
+        graph = (calls(profile, tree, data, found), bindings(profile, tree, data), bases(profile, tree, data),
+                 fields(profile, tree, data))
+    except Exception:  # noqa: BLE001 - search must not lose a file because a graph reader met a shape it does not know
+        graph = ([], [], [], [])
 
     lines = text.split("\n")
     if lines and lines[-1] == "":
@@ -64,7 +75,7 @@ def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
             for number in range(first, last + 1):
                 line_chunk[number] = ordinal
     chunk_of = [line_chunk[min(max(d.start_line, 1), len(lines))] if lines else 0 for d in found]
-    return CodeFile([chunk for chunk, _ in chunks], [runs for _, runs in chunks], found, chunk_of, imported)
+    return CodeFile([chunk for chunk, _ in chunks], [runs for _, runs in chunks], found, chunk_of, imported, *graph)
 
 
 def _owners(found: list[Definition], count: int) -> list[int]:
