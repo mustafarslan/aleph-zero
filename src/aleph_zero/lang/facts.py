@@ -7,6 +7,12 @@ only looks like one is left out: a commented-out route is not syntax, a request 
 HTTP client is not a route served, a `get("/x")` with nothing to handle it is a lookup. A path
 built at run time has no literal to read and is not reported.
 
+A route's path is as written where it is registered, with the prefix its own file gives the
+router. A prefix given where a router is mounted (`app.use("/api", router)`,
+`include_router(router, prefix="/x")`) is a fact of its own, a `mount`: which routes pass
+through it is often decided by a router handed from one file to another, which the syntax of
+neither says, so the two are not joined here.
+
 Frameworks read: Express and its relatives (JavaScript, TypeScript), FastAPI and Flask
 (Python), net/http, chi and gin (Go), Spring (Java); SQLAlchemy, Django, Alembic, JPA, Prisma;
 Celery; gRPC. Environment reads in JavaScript, Python, Go, Rust and Java, and the names an
@@ -25,10 +31,10 @@ from .profile import LanguageProfile
 
 @dataclass(frozen=True)
 class Fact:
-    kind: str       # 'route', 'model', 'table', 'env', 'task', 'service', 'rpc'
-    name: str       # route: 'GET /v1/users/{id}'; env: 'DATABASE_URL'; model, table, task, service: its name; rpc: 'Service.Method'
+    kind: str       # 'route', 'mount', 'model', 'table', 'env', 'task', 'service', 'rpc'
+    name: str       # route: 'GET /v1/users/{id}'; mount: the prefix; env: 'DATABASE_URL'; model, table, task, service: its name; rpc: 'Service.Method'
     line: int       # 1-based
-    detail: str = ""  # route: the framework; env: 'read', 'declared', 'settings field'; model: where its table is said
+    detail: str = ""  # route: the framework; mount: what is mounted, as written; env: 'read', 'set', 'declared', 'settings field'; model: where its table is said
 
 
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
@@ -40,10 +46,13 @@ _GO_ROUTES = {"HandleFunc": "ANY", "Handle": "ANY", "Get": "GET", "Post": "POST"
 _SPRING = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE", "PatchMapping": "PATCH",
            "RequestMapping": "ANY"}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_GO_MOUNTS = frozenset({"Mount", "Route", "Group", "PathPrefix"})
+_ENVIRONMENT = ("process.env", "import.meta.env")
+_WRITTEN_LIMIT = 80
 _GO_PATTERN = re.compile(r"^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/.*)$")
 _KINDS = {
     "ecma": ("call_expression", "member_expression", "subscript_expression"),
-    "python": ("decorator", "call", "subscript", "class_definition", "assignment"),
+    "python": ("decorator", "call", "subscript", "class_definition", "assignment", "comparison_operator"),
     "go": ("call_expression",),
     "rust": ("call_expression",),
     "java": ("annotation", "marker_annotation", "method_invocation"),
@@ -149,6 +158,21 @@ def _line(node: Node) -> int:
     return node.start_point[0] + 1
 
 
+def _written(node: Node | None) -> str:
+    """An expression as written, on one line and not long."""
+    return " ".join(_text(node).split())[:_WRITTEN_LIMIT]
+
+
+def _is(node: Node | None, other: Node | None) -> bool:
+    return node is not None and other is not None and (node.start_byte, node.end_byte) == (other.start_byte, other.end_byte)
+
+
+def _assigned(node: Node, kinds: tuple[str, ...]) -> bool:
+    """Whether the node is what an assignment assigns to."""
+    parent = node.parent
+    return parent is not None and parent.type in kinds and _is(parent.child_by_field_name("left"), node)
+
+
 # ---- JavaScript and TypeScript -----------------------------------------------------------------------
 
 def _ecma(node: Node, state: dict) -> list[Fact]:
@@ -157,22 +181,54 @@ def _ecma(node: Node, state: dict) -> list[Fact]:
         function, arguments = node.child_by_field_name("function"), node.child_by_field_name("arguments")
         if function is None or arguments is None or function.type != "member_expression":
             return []
-        holder, method = function.child_by_field_name("object"), _METHODS.get(_text(function.child_by_field_name("property")))
-        given = arguments.named_children
-        if method is None or holder is None or holder.type != "identifier" or _text(holder) in _CLIENTS or len(given) < 2:
+        holder, called = function.child_by_field_name("object"), _text(function.child_by_field_name("property"))
+        method = _METHODS.get(called)
+        given = [argument for argument in arguments.named_children if argument.type != "comment"]
+        if holder is None or holder.type != "identifier" or _text(holder) in _CLIENTS or len(given) < 2:
             return []
         path = _literal(given[0])
+        if called == "use" and path is not None and path.startswith("/"):
+            return [Fact("mount", _path(path), _line(node), _written(given[-1]))]
+        if method is None:
+            return []
         if path is None or not path.startswith("/") or given[-1].type == "object":
             return []       # a handler is a function or a name, never an options object: that shape is a request
         return [Fact("route", f"{method} {_path(path)}", _line(node), "express")]
     holder = node.child_by_field_name("object")
-    if holder is None or _text(holder).replace(" ", "") not in ("process.env", "import.meta.env"):
-        return []
+    if holder is None or _environment(holder) not in _ENVIRONMENT:
+        return _ecma_whole(node) if _environment(node) in _ENVIRONMENT else []
     if kind == "member_expression":
         name = _text(node.child_by_field_name("property"))
     else:
         name = _literal(node.child_by_field_name("index")) or ""
-    return [Fact("env", name, _line(node), "read")] if _ENV_NAME.match(name) else []
+    detail = "set" if _assigned(node, ("assignment_expression",)) else "read"
+    return [Fact("env", name, _line(node), detail)] if _ENV_NAME.match(name) else []
+
+
+def _environment(node: Node) -> str:
+    return _text(node).replace(" ", "").replace("?.", ".") if node.end_byte - node.start_byte <= 24 else ""
+
+
+def _ecma_whole(node: Node) -> list[Fact]:
+    """`"NAME" in process.env`, and `const { NAME, OTHER: local } = process.env`."""
+    parent = node.parent
+    if parent is None:
+        return []
+    names: list[tuple[str, Node]] = []
+    if parent.type == "binary_expression" and _is(parent.child_by_field_name("right"), node) \
+            and _text(parent.child_by_field_name("operator")) == "in":
+        names.append((_literal(parent.child_by_field_name("left")) or "", parent))
+    elif parent.type == "variable_declarator" and _is(parent.child_by_field_name("value"), node):
+        pattern = parent.child_by_field_name("name")
+        for taken in (pattern.named_children if pattern is not None and pattern.type == "object_pattern" else []):
+            if taken.type == "object_assignment_pattern":       # { PORT = 3000 }
+                taken = taken.child_by_field_name("left") or taken
+            if taken.type == "pair_pattern":
+                key = taken.child_by_field_name("key")
+                names.append((_literal(key) or _text(key), taken))
+            elif taken.type == "shorthand_property_identifier_pattern":
+                names.append((_text(taken), taken))
+    return [Fact("env", name, _line(where), "read") for name, where in names if _ENV_NAME.match(name)]
 
 
 # ---- Python ------------------------------------------------------------------------------------------
@@ -195,12 +251,27 @@ def _python(node: Node, state: dict) -> list[Fact]:
         first = _first_argument(node)
         if function in ("os.getenv", "getenv", "os.environ.get", "environ.get") and first and _ENV_NAME.match(first):
             return [Fact("env", first, _line(node), "read")]
+        if function in ("os.environ.setdefault", "environ.setdefault", "os.putenv") and first and _ENV_NAME.match(first):
+            return [Fact("env", first, _line(node), "set")]
+        if function.endswith((".include_router", ".register_blueprint")):
+            prefix = _keyword(node, "prefix") or _keyword(node, "url_prefix")
+            arguments = node.child_by_field_name("arguments")
+            given = [argument for argument in (arguments.named_children if arguments is not None else [])
+                     if argument.type not in ("comment", "keyword_argument")]
+            return [Fact("mount", _path(prefix), _line(node), _written(given[0]) if given else "")] if prefix and prefix.startswith("/") else []
         if function == "op.create_table" and first:
             return [Fact("table", first, _line(node), "alembic")]
         return []
     if kind == "subscript":
         if _text(node.child_by_field_name("value")) in ("os.environ", "environ"):
             name = _literal(node.child_by_field_name("subscript")) or ""
+            detail = "set" if _assigned(node, ("assignment", "augmented_assignment")) else "read"
+            return [Fact("env", name, _line(node), detail)] if _ENV_NAME.match(name) else []
+        return []
+    if kind == "comparison_operator":       # "NAME" in os.environ
+        sides = node.named_children
+        if len(sides) == 2 and _text(sides[1]) in ("os.environ", "environ") and any(child.type in ("in", "not in") for child in node.children):
+            name = _literal(sides[0]) or ""
             return [Fact("env", name, _line(node), "read")] if _ENV_NAME.match(name) else []
         return []
     return _python_class(node)
@@ -288,10 +359,14 @@ def _go(node: Node, state: dict) -> list[Fact]:
     first = _literal(given[0]) if given else None
     if _text(function) in ("os.Getenv", "os.LookupEnv"):
         return [Fact("env", first, _line(node), "read")] if first and _ENV_NAME.match(first) else []
-    if function.type != "selector_expression" or first is None or len(given) < 2:
+    if function.type != "selector_expression" or first is None:
         return []
-    method = _GO_ROUTES.get(_text(function.child_by_field_name("field")))
-    if method is None:
+    called = _text(function.child_by_field_name("field"))
+    if called in _GO_MOUNTS and first.startswith("/"):
+        mounted = given[1] if len(given) > 1 and given[1].type != "func_literal" else None
+        return [Fact("mount", _path(first), _line(node), _written(mounted))]
+    method = _GO_ROUTES.get(called)
+    if method is None or len(given) < 2:
         return []
     patterned = _GO_PATTERN.match(first)       # Go 1.22: "POST /v1/jobs"
     if patterned:

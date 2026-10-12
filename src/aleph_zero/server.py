@@ -142,9 +142,10 @@ DECISIONS_TOOL = {
 }
 FACTS_TOOL = {
     "name": "facts",
-    "description": "What this repository states about its architecture: HTTP routes, data models and tables, environment "
-                   "names read or declared, background tasks, gRPC services. With no kind: how many of each. With a kind, "
-                   "or part of a name (a path, a variable): each with its file and line.",
+    "description": "What this repository states about its architecture: HTTP routes and where routers are mounted, data "
+                   "models and tables, environment names read, set or declared, background tasks, gRPC services. With no "
+                   "kind: how many of each. With a kind, or part of a name (a path, a variable): each with its file and line. "
+                   "A route's path is as written in its file; a mount's prefix is not added to it.",
     "inputSchema": {"type": "object", "properties": {
         "kind": {"type": "string", "enum": list(archfacts.KINDS)},
         "like": {"type": "string"},

@@ -40,6 +40,7 @@ def test_express_routes_are_calls_that_register_a_handler_under_a_literal_path()
         ("route", "GET /v1/users/{id}", 3, "express"),
         ("route", "POST /v1/users", 4, "express"),
         ("route", "DELETE /v1/users/{id}/keys/{keyId}", 8, "express"),
+        ("mount", "/v1/reports", 12, "reportsRouter"),               # where a router is mounted: not a route
         ("env", "API_KEY", 13, "read"),
         ("env", "FALLBACK_KEY", 13, "read"),
         ("env", "VITE_MODE", 14, "read"),
@@ -191,3 +192,32 @@ def test_a_file_that_is_not_one_of_these_is_not_read_for_facts(repo):
     assert engine.facts().counts.get("service") is None
     conn = open_db(index_path(repo.root))
     assert conn.execute("SELECT count(*) FROM arch_facts WHERE family = 'text'").fetchall() == [(2,)]   # the schema and the example file
+
+
+def test_environment_names_read_in_other_shapes_and_those_that_are_set():
+    source = (
+        "const token = process?.env?.ASTRA_TOKEN;\n"
+        "const on = \"LOGIN_BANNER\" in process.env || false;\n"
+        "const { PORT, HOST: host, ...rest } = process.env;\n"
+        "process.env.AUTH_TOKEN = \"\";\n"
+        "const other = \"name\" in options;\n"
+    )
+    assert found("a.js", source) == [("env", "ASTRA_TOKEN", 1, "read"), ("env", "LOGIN_BANNER", 2, "read"),
+                                     ("env", "PORT", 3, "read"), ("env", "HOST", 3, "read"), ("env", "AUTH_TOKEN", 4, "set")]
+    python = (
+        "import os\n"
+        "if \"DEBUG_SQL\" in os.environ:\n"
+        "    os.environ[\"TZ\"] = \"UTC\"\n"
+        "os.environ.setdefault(\"LANG\", \"C\")\n"
+        "if \"x\" in names: pass\n"
+    )
+    assert found("a.py", python) == [("env", "DEBUG_SQL", 2, "read"), ("env", "TZ", 3, "set"), ("env", "LANG", 4, "set")]
+
+
+def test_where_a_router_is_mounted_is_a_fact_of_its_own():
+    assert found("a.js", "app.use(\"/api\", apiRouter);\napp.use(express.json());\napp.use(\"/static\", express.static(dir));\n") == [
+        ("mount", "/api", 1, "apiRouter"), ("mount", "/static", 3, "express.static(dir)")]
+    python = "app.include_router(workspace.router, prefix=\"/workspace\", tags=[\"w\"])\napp.include_router(health.router)\napp.register_blueprint(admin, url_prefix=\"/admin\")\n"
+    assert found("a.py", python) == [("mount", "/workspace", 1, "workspace.router"), ("mount", "/admin", 3, "admin")]
+    assert found("a.go", "package a\nfunc f(r chi.Router) {\n\tr.Mount(\"/v1\", api())\n\tr.Route(\"/jobs\", func(r chi.Router) {})\n}\n") == [
+        ("mount", "/v1", 3, "api()"), ("mount", "/jobs", 4, "")]

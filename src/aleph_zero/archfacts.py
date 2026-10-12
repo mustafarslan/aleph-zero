@@ -1,5 +1,5 @@
 """Architectural facts of a view: the routes it serves, its models and tables, the environment
-names it reads, its tasks and services (M8).
+names it reads, its tasks and services, and where its routers are mounted (M8).
 
 What one file states does not depend on any other file, so it is kept per blob, like the code
 graph's facts, and like them it is read when first asked for: an index that is only searched
@@ -21,9 +21,9 @@ from .lang.facts import Fact, facts, states_facts, text_facts
 from .store.db import transaction
 from .view import View
 
-FACTS_VERSION = 1           # bump when what the readers extract changes: every row is then read again
+FACTS_VERSION = 2           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
-KINDS = ("route", "model", "table", "env", "task", "service", "rpc")
+KINDS = ("route", "mount", "model", "table", "env", "task", "service", "rpc")
 _CODE = sorted({"typescript", "tsx", "javascript", "python", "go", "rust", "java"} & set(lang.PROFILES))
 _TEXT = "text"              # the family of a Prisma schema, an example environment file, a .proto
 _READ = "(" + ",".join("?" * (len(_CODE) + 1)) + ")"
