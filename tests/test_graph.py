@@ -589,3 +589,41 @@ def test_a_plain_call_beside_a_local_class_with_a_method_of_that_name_is_the_fil
               "    return shout()\n")
     found = edge(*build({"a.py": source}), "a.py", "shout")
     assert summary(found) == ("L0", "syntactic", [("a.py", "shout")]) and found.targets[0].start_line == 1
+
+
+def test_a_rust_function_that_is_also_imported_under_the_same_name_is_one_of_two_not_certain():
+    """Found on a corpus never seen before (rayon): a fallback under `#[cfg(not(unix))]` beside `pub use self::unix::f` under
+    `#[cfg(unix)]`. Rust allows a function and an import of one name in one module only where the conditions exclude each
+    other, and which holds is the platform's to say: both are offered."""
+    rust = {"Cargo.toml": '[package]\nname = "demo"\n',
+            "src/cpu_time/mod.rs": ("#[cfg(unix)]\nmod unix;\n#[cfg(unix)]\npub use self::unix::get_cpu_time;\n\n"
+                                    "#[cfg(not(unix))]\npub fn get_cpu_time() -> Option<u64> {\n    None\n}\n\n"
+                                    "pub fn measure() -> Option<u64> {\n    get_cpu_time()\n}\n"),
+            "src/cpu_time/unix.rs": "pub fn get_cpu_time() -> Option<u64> {\n    Some(1)\n}\n",
+            "src/lib.rs": "mod cpu_time;\n"}
+    found, certain = certainty(rust, "src/cpu_time/mod.rs", "get_cpu_time")
+    assert sorted(found) == ["get_cpu_time", "get_cpu_time"] and certain is False
+    graph, sites = build(rust, FEATURES)
+    assert sorted(target.path for target in edge(graph, sites, "src/cpu_time/mod.rs", "get_cpu_time").targets) == ["src/cpu_time/mod.rs", "src/cpu_time/unix.rs"]
+    # a function beside an import of a *module* of its name is no such case: the two names live apart
+    apart = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod parse;\nmod run;\n", "src/parse.rs": "pub fn tokens() {}\n",
+             "src/run.rs": "use crate::parse;\n\nfn parse() {}\n\nfn go() {\n    parse();\n    parse::tokens();\n}\n"}
+    assert certainty(apart, "src/run.rs", "parse") == (["parse"], True)
+
+
+def test_a_rust_call_written_through_a_trait_is_not_certain_of_the_trait_s_own_method():
+    """Found on rayon: `Latch::set(&self.latch)`. The callee is the implementation for the value's type; the trait's
+    method is where it is declared. It is still the answer offered, and no longer stamped certain."""
+    rust = {"Cargo.toml": '[package]\nname = "demo"\n', "src/lib.rs": "mod latch;\nmod registry;\n",
+            "src/latch.rs": ("pub trait Latch {\n    unsafe fn set(this: *const Self);\n}\n\npub struct LockLatch;\n\n"
+                             "impl Latch for LockLatch {\n    unsafe fn set(this: *const Self) {}\n}\n\n"
+                             "impl LockLatch {\n    pub fn new() -> LockLatch {\n        LockLatch\n    }\n}\n"),
+            "src/registry.rs": ("use crate::latch::{Latch, LockLatch};\n\nfn wake(latch: &LockLatch) {\n    unsafe { Latch::set(latch) };\n"
+                                "    let fresh = LockLatch::new();\n}\n")}
+    found, certain = certainty(rust, "src/registry.rs", "set")
+    assert found == ["Latch.set"] and certain is False
+    assert certainty(rust, "src/registry.rs", "new") == (["LockLatch.new"], True)       # through a type, as before
+    same_file = {"Cargo.toml": '[package]\nname = "demo"\n',
+                 "src/lib.rs": ("trait Shape {\n    fn area(&self) -> f64;\n}\nstruct Dot;\nimpl Shape for Dot {\n    fn area(&self) -> f64 { 0.0 }\n}\n"
+                                "fn total(dot: &Dot) -> f64 {\n    Shape::area(dot)\n}\n")}
+    assert certainty(same_file, "src/lib.rs", "area")[1] is False

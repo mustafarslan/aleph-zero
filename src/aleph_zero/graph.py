@@ -465,7 +465,8 @@ class Graph:
             return None     # a parameter or a local variable: nothing recorded has that name
         here = self._lexical(path, facts, call)
         if here:
-            return self._edge(path, here, "scope")
+            found = self._edge(path, here, "scope")
+            return self._rust_or_its_import(path, name, found) if facts.family == "rust" else found
         bound = self._bound[path].get(name)
         if bound:
             reached, imported = False, []
@@ -518,18 +519,20 @@ class Graph:
         if local_type:      # `Type.method()`, or an object of this file: `handlers.run()`
             found = [target for qualified in local_type for target in self._method((path, qualified), name, arity=call.arity)]
             if found:
-                return self._edge(path, found, "type in file")
+                through_trait = facts.family == "rust" and any(self._kinds[path].get(qualified) == "interface" for qualified in local_type)
+                return self._through_a_trait(self._edge(path, found, "type in file")) if through_trait else self._edge(path, found, "type in file")
         if facts.family == "rust" and call.via == "path" and (head in ("crate", "self", "super") or head not in self._bound[path]):
             return self._rust_path(path, facts, call, list(segments))
         bound = self._bound[path].get(head) or self._go_bound(path, head)
         if bound:
-            reached, found = False, []
+            reached, found, through_trait = False, [], False
             for binding in bound:
                 targets, modules, placed = self._stands_for(path, binding)
                 reached = reached or placed
                 found += self._member_of(targets, modules, rest, name)
+                through_trait = through_trait or (facts.family == "rust" and not rest and any(target.kind == "interface" for target in targets))
             if found:
-                return self._edge(path, found, "import")
+                return self._through_a_trait(self._edge(path, found, "import")) if through_trait else self._edge(path, found, "import")
             if not reached:
                 return None     # `np.array()`: the receiver is an import from outside these files
             return self._by_name(path, facts, call, members=True, rule="name, import not followed")
@@ -546,6 +549,32 @@ class Graph:
             if found:
                 return self._edge(path, found, "package")
         return self._by_name(path, facts, call, members=True, rule="name, on an unbound name")
+
+    def _rust_or_its_import(self, path: str, name: str, found: Edge | None) -> Edge | None:
+        """A Rust function that the same file also imports under its name. A module holds a function and an
+        import of one name only where `#[cfg]`s exclude each other (a fallback beside `pub use self::unix::f`),
+        and which of them holds is the platform's to say: both are offered. An import that leaves these files
+        cannot be offered, so the function stands alone and is not certain. An import of a module of that name
+        is another matter: modules and functions are named apart."""
+        bound = self._bound[path].get(name)
+        if found is None or not bound:
+            return found
+        others, leaves = [], False
+        for binding in bound:
+            targets, modules, placed = self._stands_for(path, binding)
+            others += [target for target in targets if target.kind not in _TYPES and target not in found.targets]
+            leaves = leaves or not (targets or modules or placed)
+        if others:
+            return self._edge(path, [*found.targets, *others], found.rule)
+        return replace(found, doubt=found.doubt or "the name is also imported in this file, under another condition") if leaves else found
+
+    @staticmethod
+    def _through_a_trait(found: Edge | None) -> Edge | None:
+        """`Trait::method(value)`: what runs is the implementation for the value's type, which is not written at
+        the call. The trait's own method is where it is declared, and is still the answer; it is not certain."""
+        if found is None or found.doubt:
+            return found
+        return replace(found, doubt="called through a trait: what runs is one of its implementations")
 
     def _rust_path(self, path: str, facts: FileFacts, call: Call, segments: list[str]) -> Edge | None:
         """`crate::flags::parse()`, `super::check()`, `Self::new()`, `grep_matcher::find()`."""
