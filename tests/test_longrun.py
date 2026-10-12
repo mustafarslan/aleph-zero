@@ -519,3 +519,27 @@ def test_a_pause_asked_for_during_a_fetch_holds_the_job_before_it_indexes(tmp_pa
     monkeypatch.setattr(benchmark_c, "fetch", stopped_meanwhile)
     monkeypatch.setattr(benchmark_c, "view_at", lambda *_: opened.append(1) or pytest.fail("it went on to index"))
     assert benchmark_c.prepare(work, rows, max_chunks=1000, guard=cool) == "stopped" and opened == []
+
+
+def test_the_run_step_watches_the_heat_too_and_gives_itself_up_with_what_it_worked_out_kept(tmp_path, fake_worker, monkeypatch):
+    """`run` embeds a text a question and searches for minutes: left alone (it is started by itself when `prepare`
+    ends), it is guarded like `prepare`, and waits on battery."""
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    looked = []
+
+    def too_hot(*_):
+        looked.append(1)
+        raise temps.TooHot("the chip is at 104 C")
+
+    with pytest.raises(SystemExit, match="heat"):
+        benchmark_c.run(work, rows, None, with_bm25=False, guard=too_hot)
+    assert looked == [1] and status(work)["state"] == "stopped for heat" and "104" in status(work)["why"]
+    assert "again" in longrun.describe(work)
+    seen = []
+    monkeypatch.setattr(benchmark_c.longrun, "Control", lambda *a, **k: seen.append(k) or (_ for _ in ()).throw(SystemExit("looked")))
+    with pytest.raises(SystemExit, match="looked"):
+        benchmark_c.run(work, rows, None, with_bm25=False, mains=lambda: True)
+    assert isinstance(seen[0]["guard"], temps.Guard) and seen[0]["mains"]() is True     # by default: the guard, and the power asked about

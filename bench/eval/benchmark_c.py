@@ -10,7 +10,7 @@ and `run` can then compare configurations without touching a working tree.
 
 `prepare` uses the network (it fetches each base commit by id from GitHub) and the
 embedding worker (GPU, about a hundred chunks a second). `run` does not use the network; it embeds each
-question with the same worker (one text a question), and has no heat guard of its own.
+question with the same worker (one text a question), and watches the heat as `prepare` does.
 
 Both run for a long time and are made to be left alone and looked after from another shell:
 
@@ -371,14 +371,25 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
 
 
 def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False,
-        k: int = 10, cache: ResultCache | None = None) -> dict:
+        k: int = 10, cache: ResultCache | None = None, guard=None, temp_limit: float = 95.0, temp_stop: float | None = None,
+        max_pauses: int | None = None, mains=None) -> dict:
     sock = worker.ensure()
     client = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=60)
     results = []
-    job = longrun.Control(workdir, "run", total=len(rows), say=lambda text: print(text, file=sys.stderr, flush=True))
+    say = lambda text: print(text, file=sys.stderr, flush=True)  # noqa: E731
+    # Minutes of searching and a text embedded a question, perhaps with nobody there: guarded for heat as `prepare` is.
+    cool = guard or Guard(limit=temp_limit, resume=temp_limit - 15, say=say, stop_at=temp_stop, max_pauses=max_pauses)
+    job = longrun.Control(workdir, "run", total=len(rows), guard=cool, say=say, mains=mains)
+    if isinstance(cool, Guard):
+        cool.while_waiting = job.cooling
     stopped = False
     for number, row in enumerate(rows, 1):
-        job()
+        try:
+            job()
+        except TooHot as hot:
+            job.finish(why=str(hot))
+            raise SystemExit(f"given up for heat after {len(results)} questions: {hot}. What was worked out is kept: "
+                             f"the same command takes it up there") from hot
         if job.stop_wanted():
             stopped = True
             break
@@ -481,11 +492,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-repo", type=int, default=40, help="with another --set: at most this many questions of one repository in a language (default 40)")
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--temp-limit", type=float, default=95.0,
-                        help="prepare: pause embedding while the chip is at or above this many degrees Celsius")
-    parser.add_argument("--temp-stop", type=float, help="prepare: give the job up when the chip is at or above this")
-    parser.add_argument("--max-pauses", type=int, help="prepare: give the job up after waiting to cool this often within half an hour")
+                        help="prepare and run: wait while the chip is at or above this many degrees Celsius")
+    parser.add_argument("--temp-stop", type=float, help="prepare and run: give the job up when the chip is at or above this")
+    parser.add_argument("--max-pauses", type=int, help="prepare and run: give the job up after waiting to cool this often within half an hour")
     parser.add_argument("--away", action="store_true",
-                        help="prepare: nobody is at the machine: wait at 85 C, give up at 97 C or after 6 waits in half an hour")
+                        help="prepare and run: nobody is at the machine: wait at 85 C, give up at 97 C or after 6 waits in half an hour")
     parser.add_argument("--hours", help="prepare: only work in these hours of the day, as FIRST-LAST (19-7: from 19:00 to 7:00)")
     parser.add_argument("--no-cache", action="store_true", help="run: work every question out again")
     parser.add_argument("--no-preflight", action="store_true", help="prepare: start although the disk is nearly full or the machine is on battery")
@@ -541,7 +552,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.set != "locbench":      # another set's result for an instance of the same name is not this set's (Loc-Bench's cache stays as it is)
             settings["set"] = args.set
         cache = None if args.no_cache else ResultCache(workdir / "run-cache", settings, code_fingerprint())
-        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k, cache)
+        limit, stop_at, pauses = (min(args.temp_limit, 85.0), 97.0, 6) if args.away else (args.temp_limit, None, None)
+        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k, cache, temp_limit=limit,
+            temp_stop=args.temp_stop or stop_at, max_pauses=args.max_pauses or pauses, mains=longrun.on_mains)
     return 0
 
 
