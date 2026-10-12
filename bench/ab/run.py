@@ -55,6 +55,7 @@ QUESTION = (
     '{"files": ["path/relative/to/the/repository/root.py"]} listing at most five files, most likely first.'
 )
 ARMS = ("none", "L0", "L1n", "L1", "L2", "L3")
+JOB = "A/B run"
 
 
 def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False) -> list[dict]:
@@ -287,16 +288,45 @@ def report(records: list[dict], baseline: str) -> dict:
     return out
 
 
+TRIES = 2    # a session that failed this often is not asked again: every try spends plan usage
+
+
 def sessions_left(chosen: list[dict], arms: list[str], done: list[dict]) -> list[tuple[str, str]]:
-    """(task, arm) for every session of the plan that has no successful record yet, in the plan's order."""
+    """(task, arm) for every session of the plan that has no successful record yet and has not failed
+    `TRIES` times, in the plan's order."""
     have = {(record.get("task"), record.get("arm")) for record in done if record.get("ok")}
-    return [(task["id"], arm) for task in chosen for arm in arms if (task["id"], arm) not in have]
+    failed: dict[tuple, int] = {}
+    for record in done:
+        if not record.get("ok"):
+            failed[record.get("task"), record.get("arm")] = failed.get((record.get("task"), record.get("arm")), 0) + 1
+    return [(task["id"], arm) for task in chosen for arm in arms
+            if (task["id"], arm) not in have and failed.get((task["id"], arm), 0) < TRIES]
+
+
+def foreign_tasks(chosen: list[dict], done: list[dict]) -> list[str]:
+    """The tasks a results file holds that the plan does not: the file is of another run (another seed or count)."""
+    planned = {task["id"] for task in chosen}
+    return sorted({str(record.get("task")) for record in done} - planned)
+
+
+def control_directory(target: Path) -> tuple[Path | None, str]:
+    """Where the files that steer an A/B run are, from what was named: the directory of the results, or a results
+    file in it. (None, why) when what is there is not an A/B run's: `run` takes the Benchmark C work directory,
+    where a pause would hold the GPU job instead."""
+    directory = target.parent if target.is_file() else target
+    job = longrun.job_of(directory)
+    if job is None:
+        return None, f"no A/B run has written its status in {directory}: name the directory of the results file (bench/data/results/ab)"
+    if not job.startswith(JOB):
+        return None, f"{directory} holds the status of another job ({job}), not of an A/B run: name the directory of the results file"
+    return directory, ""
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("action", choices=("tasks", "run", "report", "status", "pause", "resume", "stop"))
-    parser.add_argument("target", type=Path, help="tasks/run: the Benchmark C work directory; report: a results file")
+    parser.add_argument("target", type=Path, help="tasks/run: the Benchmark C work directory; report: a results file; "
+                        "status/pause/resume/stop: the directory of the results file, or the file (not the work directory)")
     parser.add_argument("--count", type=int, default=2, help="how many tasks")
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--arms", default="none,L1", help=f"comma-separated, from {','.join(ARMS)}")
@@ -311,7 +341,11 @@ def main(argv: list[str] | None = None) -> int:
                              "(without this, running a command again adds a second run of every task)")
     args = parser.parse_args(argv)
     if args.action in ("status", "pause", "resume", "stop"):
-        return longrun.main([args.action, str(args.target)])    # the directory of the results file
+        directory, why = control_directory(args.target)
+        if directory is None:
+            print(why, file=sys.stderr)
+            return 2
+        return longrun.main([args.action, str(directory)])
     if args.action == "report":
         records = [json.loads(line) for line in args.target.read_text().splitlines() if line.strip()]
         print(json.dumps(report(records, args.baseline), indent=2))
@@ -324,17 +358,25 @@ def main(argv: list[str] | None = None) -> int:
     arms = [arm for arm in args.arms.split(",") if arm]
     if any(arm not in ARMS for arm in arms):
         parser.error(f"arms are {', '.join(ARMS)}")
-    sessions = len(chosen) * len(arms)
+    out = args.take_up or args.out or ROOT / "bench" / "data" / "results" / "ab" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.model}.jsonl"
+    before = [json.loads(line) for line in out.read_text().splitlines() if line.strip()] if args.take_up and out.exists() else []
+    wanted = set(sessions_left(chosen, arms, before)) if args.take_up else None
+    other = foreign_tasks(chosen, before)
+    if other:
+        parser.error(f"{out} holds {len(other)} tasks this command would not run ({', '.join(other[:3])}...): it is of another "
+                     f"run. Give the --seed, --count and --arms it was started with")
+    sessions = len(chosen) * len(arms) if wanted is None else len(wanted)     # what this command would start, and spend
     if sessions > args.max_sessions:
         parser.error(f"{sessions} sessions asked for, over --max-sessions {args.max_sessions}: this spends plan usage; "
                      f"raise the limit on purpose")
-    out = args.take_up or args.out or ROOT / "bench" / "data" / "results" / "ab" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.model}.jsonl"
+    if wanted is not None:
+        given_up = len(chosen) * len(arms) - len(wanted) - len({(r.get("task"), r.get("arm")) for r in before if r.get("ok")})
+        print(f"taking up {out}: {sessions} sessions to run" +
+              (f"; {given_up} failed {TRIES} times and are not asked again" if given_up else ""), flush=True)
     out.parent.mkdir(parents=True, exist_ok=True)
-    before = [json.loads(line) for line in out.read_text().splitlines() if line.strip()] if args.take_up and out.exists() else []
-    wanted = set(sessions_left(chosen, arms, before)) if args.take_up else None
     # Steered from another shell through files beside the results (`run.py pause|resume|stop|status DIRECTORY`):
     # a session that has started is finished; the next one waits, or is not started.
-    job = longrun.Control(out.parent, f"A/B run into {out.name}", total=len(chosen))
+    job = longrun.Control(out.parent, f"{JOB} into {out.name}", total=len(chosen))
     chooser = random.Random(args.seed)
     for number, task in enumerate(chosen, 1):
         order = list(arms)

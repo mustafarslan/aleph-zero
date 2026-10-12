@@ -91,10 +91,10 @@ VERSION, SERVER = "io.modelcontextprotocol/protocolVersion", "io.modelcontextpro
 
 def test_until_it_is_switched_on_the_newer_revision_is_declined_and_the_client_falls_back(client):
     # Claude Code 2.1.296 first sends server/discover and, on "method not found", sends initialize.
-    client.send({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover",
-                 "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
-    reply = client.read()
-    assert reply["id"] == "server-discover-probe-1" and reply["error"]["code"] == -32601
+    for params in ({}, {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}):       # as it was seen to ask, and in full
+        client.send({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover", "params": params})
+        reply = client.read()
+        assert reply["id"] == "server-discover-probe-1" and reply["error"]["code"] == -32601
     assert client.start()["protocolVersion"] == LATEST
     assert set(client.request("tools/list", {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}})["result"]) == {"tools"}
 
@@ -129,6 +129,15 @@ def test_a_version_the_server_does_not_speak_is_refused_with_the_ones_it_does(mo
         error = client.request(method, params)["error"]
         assert error["code"] == -32022 and error["data"]["requested"] == "2099-01-01"
         assert MODERN in error["data"]["supported"] and LATEST in error["data"]["supported"]
+
+
+def test_a_question_about_what_is_spoken_is_answered_even_when_it_names_no_revision(modern):
+    found = modern.request("server/discover", {})["result"]                       # the bare form a client may probe with
+    assert found["supportedVersions"][0] == MODERN and found["resultType"] == "complete"
+    older = modern.request("initialize", {"protocolVersion": LATEST, "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
+                                          "_meta": {VERSION: LATEST}})
+    assert older["result"]["protocolVersion"] == LATEST                           # a revision it speaks is not "unsupported"
+    assert set(modern.request("tools/list", {"_meta": {VERSION: LATEST}})["result"]) == {"tools"}
 
 
 def test_a_client_of_the_handshake_revisions_is_answered_as_before(modern):

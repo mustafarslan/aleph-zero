@@ -16,7 +16,9 @@ that its own work is kept as it goes (an index, a file of results), and that is 
 
 To start a job so that it outlives the connection, and the machine does not sleep under it:
 
-    caffeinate -i nohup uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR ... > WORKDIR/prepare.log 2>&1 &
+    nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR ... > WORKDIR/prepare.log 2>&1 &
+
+(`nohup` first: it is what must outlive the connection, and `caffeinate` then stays for as long as the job does.)
 """
 from __future__ import annotations
 
@@ -50,9 +52,32 @@ def on_mains() -> bool | None:
     return True if "AC Power" in said else False if "Battery Power" in said else None
 
 
-def preflight(workdir: Path, need_gb: float = 20.0, mains=on_mains) -> list[str]:
+def parse_hours(text: str | None) -> tuple[int, int] | None:
+    """`FIRST-LAST` as two hours of the day (19-7), or ValueError that says what is expected."""
+    if text is None:
+        return None
+    parts = text.split("-")
+    if len(parts) != 2 or not all(part.isdigit() and int(part) < 24 for part in parts):
+        raise ValueError(f"hours are given as FIRST-LAST, each from 0 to 23 (19-7 is from 19:00 to 7:00; 0 is midnight), not {text!r}")
+    return int(parts[0]), int(parts[1])
+
+
+def _chip() -> float | None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import temps
+
+    return temps.chip_now()
+
+
+def preflight(workdir: Path, need_gb: float = 20.0, mains=None, chip=None) -> list[str]:
     """What stands in the way of hours of unattended work: each as one sentence. Empty when nothing does."""
     problems = []
+    mains, chip = mains or on_mains, chip or _chip
+    if Path(workdir, PAUSE).exists():
+        problems.append(f"a pause is asked for in {workdir} (left from before?): the job would start and wait at once; "
+                        f"`longrun.py resume {workdir}` takes it away")
+    if chip() is None:
+        problems.append("the chip's temperature cannot be read on this machine: the heat guard would see nothing")
     free = shutil.disk_usage(workdir if Path(workdir).exists() else Path(workdir).parent).free / 1e9
     if free < need_gb:
         problems.append(f"{free:.0f} GB free where {workdir} is, and the run may need {need_gb:.0f}: it would end in the middle of a fetch")
@@ -176,31 +201,60 @@ def stop(workdir: Path) -> None:
 
 
 def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
     return True
 
 
+LIVE = ("running", "paused", "cooling", "waiting for its hours", "waiting for mains power")
+
+
+def _read(workdir: Path) -> dict | None | str:
+    """The status as written; None when there is none; a sentence when what is there is not a status."""
+    try:
+        text = Path(workdir, STATUS).read_text()
+    except OSError:
+        return None
+    try:
+        found = json.loads(text)
+    except ValueError:
+        found = None
+    return found if isinstance(found, dict) else f"the status in {workdir} cannot be read ({STATUS} is damaged, or not a job's)"
+
+
+def job_of(workdir: Path) -> str | None:
+    """The name of the job whose status is in `workdir`; None when there is none to read."""
+    found = _read(workdir)
+    return str(found.get("job", "")) if isinstance(found, dict) else None
+
+
+def _number(value) -> float:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+
 def describe(workdir: Path) -> str:
     """What a person asking from another shell is told."""
-    try:
-        found = json.loads(Path(workdir, STATUS).read_text())
-    except (OSError, ValueError):
+    found = _read(workdir)
+    if found is None:
         return f"no job has run here ({workdir} has no {STATUS})"
-    state = found.get("state", "?")
-    live = state in ("running", "paused", "cooling", "waiting for its hours")
-    if live and not _alive(int(found.get("pid", 0) or 0)):
+    if isinstance(found, str):
+        return found
+    state = str(found.get("state", "?"))
+    if state in LIVE and not _alive(int(_number(found.get("pid")))):
         state = f"not running: it ended without saying so (killed, or the machine restarted) while {state}. Start it again to take it up"
     lines = [f"{found.get('job', 'job')}: {state}" + (f" ({found['why']})" if found.get("why") else ""),
              f"  at {found.get('unit', 0)} of {found.get('of', '?')}" + (f": {found['name']}" if found.get("name") else ""),
              f"  started {found.get('started', '?')}, last word {found.get('updated', '?')}, "
-             f"{found.get('elapsed_seconds', 0) // 60} min so far, {round(found.get('paused_seconds', 0)) // 60} min of it paused by hand or by the clock"]
+             f"{int(_number(found.get('elapsed_seconds'))) // 60} min so far, "
+             f"{round(_number(found.get('paused_seconds'))) // 60} min of it paused by hand or by the clock"]
     if "highest_c" in found:
-        lines.append(f"  chip: highest {found['highest_c']:.0f} C, waited to cool {int(found.get('heat_pauses', 0))} times")
+        lines.append(f"  chip: highest {_number(found['highest_c']):.0f} C, waited to cool {int(_number(found.get('heat_pauses')))} times")
     extra = {key: value for key, value in found.items() if key not in (
         "job", "state", "why", "unit", "of", "name", "started", "updated", "elapsed_seconds", "paused_seconds", "highest_c",
         "heat_pauses", "pid", "last_c")}

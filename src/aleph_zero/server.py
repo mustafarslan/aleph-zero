@@ -336,9 +336,10 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
         meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
         said = meta.get(_VERSION_KEY) if modern else None
         stateless = said in STATELESS_VERSIONS
-        if modern and ((said is not None and not stateless) or (method == "server/discover" and not stateless)):
-            # A revision this server does not speak. Told with the ones it does: a client of an older one then opens
-            # with its handshake, a client of a newer one picks a revision both know.
+        if said is not None and not stateless and said not in PROTOCOL_VERSIONS:
+            # A revision this server does not speak. Told with the ones it does: a client then picks one both know.
+            # A request that names a handshake revision, or none, is answered as those revisions are: what is
+            # spoken is not refused, and a question about what is spoken (`server/discover`) is answered however asked.
             send({"jsonrpc": "2.0", "id": ident, "error": {
                 "code": _UNSUPPORTED_VERSION, "message": f"Unsupported protocol version: {said}",
                 "data": {"supported": [*STATELESS_VERSIONS, *PROTOCOL_VERSIONS], "requested": said if isinstance(said, str) else ""}}})

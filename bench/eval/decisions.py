@@ -153,9 +153,9 @@ def main(argv: list[str] | None = None) -> int:
         decision_records.B = 0.4
     if args.fields:
         decision_records.FIELDS = tuple(float(part) for part in args.fields.split(","))
-    if args.subject:
+    if args.subject is not None:
         decision_records.SUBJECT = args.subject
-    if args.b:
+    if args.b is not None:
         decision_records.B = args.b
     labels = json.loads((args.workdir / args.labels).read_text())
     rows: list[dict] = []

@@ -141,9 +141,21 @@ def reading() -> dict:
             "hottest": round(max(found.values()), 1) if found else None, "groups": summary, "pressure": pressure()}
 
 
+_CHIP = ("die_max", "cpu_max", "gpu_max", "hottest")
+
+
 def hottest_chip(found: dict) -> float:
     """The hottest reading on the processor: die, CPU cores or GPU, whichever this machine names."""
-    return max((found[key] or 0.0) for key in ("die_max", "cpu_max", "gpu_max", "hottest"))
+    return max((found[key] or 0.0) for key in _CHIP)
+
+
+def chip_now() -> float | None:
+    """The chip's temperature now, or None when no sensor can be read: a guard would then see nothing."""
+    try:
+        found = reading()
+    except Exception:  # noqa: BLE001 - not a Mac, or the sensors are gone
+        return None
+    return hottest_chip(found) if any(found.get(key) is not None for key in _CHIP) else None
 
 
 def line(found: dict) -> str:
@@ -173,7 +185,14 @@ class Guard:
     With nobody at the machine, waiting is not always enough. At `stop_at` degrees it does not
     wait: it raises TooHot. And a job that has had to wait more than `max_pauses` times within
     `within` seconds is on a machine that is not shedding its heat (a closed lid, a hot room):
-    TooHot again. `while_waiting(degrees)` is called at every look while it waits; True ends the wait."""
+    TooHot again. `while_waiting(degrees)` is called at every look while it waits; True ends the wait.
+
+    A chip that cannot be read is not a cool chip. One look that fails may be a hiccup; `BLIND` in a row
+    are sensors that are gone. With nobody there (`stop_at` or `max_pauses` given) the job is then given
+    up, as for heat: it can be taken up again, and a job that cannot see the heat should not run alone.
+    Otherwise it says so, once, and goes on: somebody is at the machine, or it has no such sensors."""
+
+    BLIND = 3
 
     def __init__(self, limit: float = 95.0, resume: float = 80.0, every: float = 15.0, say=print,
                  stop_at: float | None = None, max_pauses: int | None = None, within: float = 1800.0,
@@ -184,14 +203,34 @@ class Guard:
         self.pauses = 0
         self._next = 0.0
         self._paused_at: list[float] = []
+        self._blind = 0
+        self._told_blind = False
+
+    def _look(self) -> dict | None:
+        """A reading, or None when there is none to act on (said, or the job given up, as the class says)."""
+        try:
+            found = reading()
+        except Exception:  # noqa: BLE001 - one sensor that could not be read must not end a job
+            found = None
+        if found is not None and any(found.get(key) is not None for key in _CHIP):
+            self._blind = 0
+            return found
+        self._blind += 1
+        if self._blind >= self.BLIND:
+            if self.stop_at is not None or self.max_pauses is not None:
+                raise TooHot(f"the chip's temperature could not be read {self._blind} times in a row: "
+                             "nobody is there, and a job that cannot see the heat is given up")
+            if not self._told_blind:
+                self._told_blind = True
+                self.say("the chip's temperature could not be read: going on without the heat guard")
+        return None
 
     def __call__(self, *_ignored) -> None:
         if time.monotonic() < self._next:
             return
         self._next = time.monotonic() + self.every
-        try:
-            found = reading()
-        except Exception:  # noqa: BLE001 - a job must not die because a sensor could not be read
+        found = self._look()
+        if found is None:
             return
         hot = hottest_chip(found)
         self.highest = max(self.highest, hot)
@@ -211,10 +250,11 @@ class Guard:
             if self.while_waiting is not None and self.while_waiting(hot):
                 return
             time.sleep(self.every)
-            try:
-                found = reading()
-            except Exception:  # noqa: BLE001
-                return
+            found = self._look()
+            if found is None:
+                if self._blind >= self.BLIND:
+                    return                  # somebody is there and was told; it was hot when last seen
+                continue                    # hot when last seen: not "cool" because one look failed
             hot = hottest_chip(found)
             self.highest = max(self.highest, hot)
             if self.stop_at is not None and hot >= self.stop_at:

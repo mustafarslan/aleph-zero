@@ -9,7 +9,8 @@ git's object store (no checkout), so `prepare` can index and embed every commit 
 and `run` can then compare configurations without touching a working tree.
 
 `prepare` uses the network (it fetches each base commit by id from GitHub) and the
-embedding worker (GPU, about a hundred chunks a second). `run` uses neither.
+embedding worker (GPU, about a hundred chunks a second). `run` does not use the network; it embeds each
+question with the same worker (one text a question), and has no heat guard of its own.
 
 Both run for a long time and are made to be left alone and looked after from another shell:
 
@@ -25,9 +26,11 @@ with another repository added, or after an interruption, works out only what is 
 and gives the job up at `--temp-stop` or when it has had to wait `--max-pauses` times within
 half an hour. `--away` sets these for a machine nobody is sitting at (85, 97, 6), and
 `--hours 19-7` keeps the work to those hours. It does not start with less than 20 GB of
-free disk or on battery, and it waits while the machine is on battery. To start it so that it outlives the connection:
+free disk, on battery, with a pause left over in the work directory, or on a machine whose chip
+temperature cannot be read; it waits while the machine is on battery, and with `--away` it gives the job up
+when the temperature can no longer be read. To start it so that it outlives the connection:
 
-    caffeinate -i nohup uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR --away ... > WORKDIR/prepare.log 2>&1 &
+    nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare WORKDIR --away ... > WORKDIR/prepare.log 2>&1 &
 
 Configurations compared on the same questions:
   bm25     one FTS5 row per file, default tokenizer, every word OR-ed (fixed in advance)
@@ -180,7 +183,9 @@ def prepare(workdir: Path, rows: list[dict], max_chunks: int, temp_limit: float 
           f"{len(rows) - done - partial} skipped, not fetched or not reached", flush=True)
     if hasattr(cool, "highest"):
         print(f"chip temperature: highest {cool.highest:.0f} C, paused {cool.pauses} times to cool", flush=True)
-    return job.finish(done=finished)
+    # Not "done" while a repository is partly embedded: `run` would measure it with vectors missing.
+    return job.finish(done=finished and not partial,
+                      why=f"{partial} left partly embedded: the same command finishes them" if finished and partial else "")
 
 
 def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Control, counts: dict) -> bool:
@@ -206,19 +211,31 @@ def _prepare(workdir: Path, rows: list[dict], max_chunks: int, job: longrun.Cont
             print(f"{number:4}/{len(rows)} {row['instance_id']:40} skipped: {total} chunks is over the limit", flush=True)
             index.conn.close()
             continue
-        sock = worker.ensure()  # a long fetch may have outlasted the worker's idle limit
-        pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
         try:
-            report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=job,
-                                            stop=job.stop_wanted)
+            for attempt in (1, 2):
+                # Asked for each time: a long fetch outlasts the worker's idle limit, and so does a wait inside the
+                # embedding (a pause, the hours, the chip cooling). The worker is then gone at the next batch, which
+                # the report says; the same repository is tried once more with a worker started again.
+                sock = worker.ensure()
+                pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
+                try:
+                    report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=job,
+                                                    stop=job.stop_wanted)
+                finally:
+                    pool.close()
+                if not (report.remaining and report.reason) or job.stop_wanted() or attempt == 2:
+                    break
+                print(f"{number:4}/{len(rows)} {row['instance_id']:40} {report.reason}: trying it once more", flush=True)
         finally:
-            pool.close()
             index.conn.close()
         counts["done"] += report.remaining == 0
         counts["partial"] += report.remaining > 0
         job.note(prepared=counts["done"], partly=counts["partial"])
         print(f"{number:4}/{len(rows)} {row['instance_id']:40} files {len(view.files):6} chunks {total:7} "
               f"embedded {report.embedded:6} left {report.remaining} {time.monotonic() - started:6.1f} s {report.reason}", flush=True)
+    if job.stop_wanted():           # asked for while the last repository was embedded: that one is not finished
+        print("stopped on request; the same command takes it up here", flush=True)
+        return False
     return True
 
 
@@ -425,6 +442,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="run: as if files without a language profile had no vectors")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
+    try:
+        hours = longrun.parse_hours(args.hours)     # before anything is fetched, written or started
+    except ValueError as wrong:
+        parser.error(str(wrong))
     workdir = args.workdir.resolve()
     if args.action in ("status", "pause", "resume", "stop"):
         return longrun.main([args.action, str(workdir)])
@@ -437,8 +458,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{count:4}  {repo}")
         print(f"{len(rows)} instances in {len(counts)} repositories")
     elif args.action == "prepare":
-        hours = tuple(int(part) for part in args.hours.split("-")) if args.hours else None
-        limit, stop_at, pauses = (85.0, 97.0, 6) if args.away else (args.temp_limit, None, None)
+        # Nobody there: the lower of the limit asked for and 85 C, never a higher one than was asked.
+        limit, stop_at, pauses = (min(args.temp_limit, 85.0), 97.0, 6) if args.away else (args.temp_limit, None, None)
         problems = [] if args.no_preflight else longrun.preflight(workdir)
         if problems:
             print("not started:\n  " + "\n  ".join(problems) + "\n(--no-preflight starts it anyway)", file=sys.stderr)

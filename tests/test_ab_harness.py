@@ -140,3 +140,53 @@ def test_a_run_taken_up_again_does_only_the_sessions_that_are_missing():
     assert ab.sessions_left(chosen, arms, []) == [(task["id"], arm) for task in chosen for arm in arms]
     assert ab.sessions_left(chosen, arms, done + [{"task": "b", "arm": "L1", "ok": True}, {"task": "c", "arm": "none", "ok": True},
                                                   {"task": "c", "arm": "L1", "ok": True}]) == []
+
+
+def test_taking_up_a_run_refuses_another_plan_s_file_and_does_not_ask_a_failing_session_for_ever():
+    chosen, arms = [{"id": "c"}, {"id": "d"}], ["none", "L1"]
+    other = [{"task": "a", "arm": "none", "ok": True}, {"task": "b", "arm": "L1", "ok": True}]
+    assert ab.foreign_tasks(chosen, other) == ["a", "b"] and ab.foreign_tasks(chosen, [{"task": "c", "arm": "none", "ok": True}]) == []
+    failing = [{"task": "c", "arm": "L1", "ok": False}, {"task": "c", "arm": "L1", "ok": False}]
+    assert ("c", "L1") not in ab.sessions_left(chosen, arms, failing)             # two failures: not a third paid session
+    assert ("c", "L1") in ab.sessions_left(chosen, arms, failing[:1])             # one failure is asked again
+
+
+def test_a_run_is_steered_through_its_results_directory_and_no_other_job_is_paused_by_mistake(tmp_path, capsys):
+    import longrun
+
+    gpu, results = tmp_path / "benchc", tmp_path / "results"
+    longrun.Control(gpu, "prepare", total=3, say=lambda text: None)                # the GPU job: `run` is given this directory
+    assert ab.main(["pause", str(gpu)]) == 2 and not (gpu / longrun.PAUSE).exists()
+    assert "another job (prepare)" in capsys.readouterr().err
+    assert ab.main(["stop", str(tmp_path / "nowhere")]) == 2 and not (tmp_path / "nowhere").exists()
+    longrun.Control(results, "A/B run into x.jsonl", total=2, say=lambda text: None)
+    (results / "x.jsonl").write_text("")
+    assert ab.main(["pause", str(results / "x.jsonl")]) == 0 and (results / longrun.PAUSE).exists()      # the file names its directory
+    assert ab.main(["resume", str(results)]) == 0 and not (results / longrun.PAUSE).exists()
+
+
+def test_taking_up_counts_and_runs_only_what_is_missing(tmp_path, monkeypatch, capsys):
+    import pytest
+
+    chosen = [{"id": "c"}, {"id": "d"}]
+    monkeypatch.setattr(ab, "tasks", lambda *_: chosen)
+    asked = []
+
+    def one(workdir, task, arm, *_):
+        asked.append((task["id"], arm))
+        return _row(task["id"], arm, 100, 3, True)
+
+    monkeypatch.setattr(ab, "run_one", one)
+    out = tmp_path / "ab" / "run.jsonl"
+    out.parent.mkdir()
+    out.write_text(json.dumps(_row("c", "none", 100, 3, True)) + "\n" + json.dumps(_row("c", "L1", 1, 1, False, ok=False)) + "\n")
+    with pytest.raises(SystemExit):                  # three are missing: a limit of two is still a limit
+        ab.main(["run", str(tmp_path), "--take-up", str(out), "--max-sessions", "2"])
+    assert asked == []
+    assert ab.main(["run", str(tmp_path), "--take-up", str(out), "--max-sessions", "3"]) == 0       # the plan is four: three are run
+    assert sorted(asked) == [("c", "L1"), ("d", "L1"), ("d", "none")] and len(out.read_text().splitlines()) == 5
+    other = tmp_path / "ab" / "other.jsonl"
+    other.write_text(json.dumps(_row("z", "none", 100, 3, True)) + "\n")
+    with pytest.raises(SystemExit):
+        ab.main(["run", str(tmp_path), "--take-up", str(other)])
+    assert "another" in capsys.readouterr().err and len(asked) == 3
