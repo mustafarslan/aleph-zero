@@ -96,6 +96,22 @@ most of a query's time. Git can remember untracked files between calls:
 On Django (7,000 files) this takes a query from about 80 ms to about 30 ms.
 `aleph doctor` shows whether it is on. Aleph never changes your git configuration itself.
 
+## Who calls what
+
+    uv run aleph callers TokenStore.get      # every call that reaches it
+    uv run aleph callees refresh_token       # what it calls
+
+Each answer says how it was found. A call is listed as certain when the code itself says
+where it goes: the same file, an import followed to the file that declares the name, the
+class the call sits in or one it is built on, a parameter or field whose type is stated.
+A call on a value whose type nothing states is listed apart, as one of the definitions
+that share the name. A call into a library is not listed at all.
+
+The first question about a worktree reads every file's calls and imports (a few seconds
+on a large repository); later ones take milliseconds. Searching never pays for this.
+The agent is offered the matching `references` tool only when `ALEPH_GRAPH=1` is set
+for the server: whether it helps an agent has not been measured yet.
+
 ## Where things are
 
 The index lives in `<git-common-dir>/aleph-zero/index.db` and is shared by every

@@ -80,7 +80,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Why it waits:** nothing is committed in the Aeon repository without the owner's go-ahead.
 - **This is what blocks the next milestone.** M0 to M5 are merged (2026-10-12). M6, the memory layer, is next, and ADR-006 lists three changes Aeon needs before Aleph's first write: heavy dependencies moved into optional extras (a plain install must not download PyTorch), the write-ahead log replayed before the search index is rebuilt, and event ids kept across a replay. With your go-ahead they are made on a branch off `v4` in the Aeon checkout; M6 also needs its own short design first (ADR-006 says so), which I can draft for you to read without touching Aeon.
 - **Aleph's side is built** (M6a, 2026-10-12): the catalogue, recall with staleness, the adapter (tested against the extension the M0 probe built out of tree, without touching the Aeon checkout), the `recall` and `remember` tools, `aleph memory`, and the side chat's writes. What waits for you is the three Aeon changes and the design's five decisions; until then memory works, by words and recency, and by meaning where `ALEPH_AEON_LIB` points at a build.
-- **After M6:** M7 to M10 (code graph, knowledge graph, SCIP, public release) each *ship* only if the A/B measurement improves (entry 0). M7 is being built ahead of that gate: its tools stay on demand and nothing is added to search until the measurement says it pays.
+- **After M6:** M7 to M10 (code graph, knowledge graph, SCIP, public release) each *ship* only if the A/B measurement improves (entry 0). M7 is built ahead of that gate (2026-10-12): its tools stay on demand and nothing is added to search until the measurement says it pays. What it leaves for you is entry 9.
 
 ## 6. An upper bound on tree-sitter in oxn
 
@@ -101,3 +101,12 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 
 - M4, still open: the 2026 MCP handshake (the engine still relies on the client's fallback to `initialize`); L4 of the steering ladder, if the measurement leaves a gap.
 - M2, still open: whether one query prefix serves both code and documentation (needs questions whose answers are documentation).
+
+## 9. The code graph (M7): what waits for you
+
+- **Switching it on for the agent.** `aleph callers` and `aleph callees` work now. The `references` tool is listed to the agent only when the server runs with `ALEPH_GRAPH=1`, because ADR-003 ships a graph feature only if the A/B run improves with it, and that run is yours (entry 0). To try it in a session: set the variable where the plugin starts the server. To measure it: an arm of the A/B harness with the variable set.
+- **Which bar the acceptance is read against.** Under oxn's own protocol Aleph passes all of ADR-003's bars. That protocol does not count calls into libraries; counting them, an answer found by name alone is wrong often enough (on ripgrep about three times in four) that Aleph does not call it certain. ADR-003 reports both. I recommend the stricter reading: it also passes, and it is what the tools show.
+- **Functions defined inside functions.** They are not definitions in Aleph (a decision of M1 that outline and symbol follow), so a call to one gets no answer: 36% of eslint's graded calls. Recording them would change what `symbol`, `outline` and the chunker produce and re-chunk every index. Your call; nothing here needs it.
+- **A held-out corpus for Go and Rust.** The resolver was developed against the six corpora it is graded on. Python and TypeScript were also graded on repositories it had never seen (ADR-003). For Go and Rust no such corpus is on this machine; making one needs the network (clone a repository, run its SCIP indexer).
+- **C and C++.** The readers exist; nothing grades them (no SCIP indexer for them is installed).
+
