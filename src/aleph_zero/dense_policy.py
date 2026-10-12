@@ -23,8 +23,11 @@ class Verdict:
 
 # Filled in from Benchmark C, one language at a time. A language not listed has not been measured.
 VERDICTS: dict[str, Verdict] = {
-    "python": Verdict(True, "+5.8 points of file recall@10, interval +1.5 to +10.2, on 235 Loc-Bench questions "
-                            "asked by their issue titles; ADR-002, 2026-10-12"),
+    # Provisional: the candidate pool that reaches this gain (300) was chosen on the same
+    # questions; at the first pool (50) the gain was +3.2 and the gate was not met. The
+    # 165 Loc-Bench questions not yet run are the held-out check (docs/DEFERRED.md).
+    "python": Verdict(True, "+5.5 points of file recall@10, interval +1.3 to +9.8, on 235 Loc-Bench questions "
+                            "asked by their issue titles; provisional, ADR-002, 2026-10-12"),
 }
 
 # Languages that share a verdict because they share a benchmark.

@@ -223,3 +223,38 @@ def test_the_worker_keeps_nothing_between_requests(home):
     # With the server's default prompt cache an embeddings worker slowed to a tenth of its
     # speed and grew past 1 GB over 4.5 hours of requests.
     assert "--cache-ram 0" in joined and "--no-cache-prompt" in joined
+
+
+def test_only_a_worker_or_supervisor_command_line_counts_as_ours(home):
+    sock = worker.socket_path()
+    bystander = subprocess.Popen(["sh", "-c", "sleep 20; :", "sh", str(sock)])   # merely mentions the socket
+    try:
+        assert worker.is_ours(bystander.pid) is False
+    finally:
+        bystander.kill()
+        bystander.wait()
+    worker.ensure()
+    state = worker.state()
+    assert worker.is_ours(state["worker_pid"]) and worker.is_ours(state["supervisor_pid"])
+
+
+def test_a_healthy_worker_whose_state_file_was_lost_is_adopted_not_doubled(home):
+    sock = worker.ensure()
+    first = worker.state()
+    os.kill(first["supervisor_pid"], signal.SIGKILL)
+    assert _wait(lambda: not _alive(first["supervisor_pid"]))
+    worker.state_file().unlink()
+    assert worker.ensure() == sock
+    assert _wait(lambda: worker.state().get("worker_pid") == first["worker_pid"] and _alive(worker.state().get("supervisor_pid", 0)))
+    fakes = subprocess.run(["pgrep", "-f", f"fake_worker.py.*--host {sock}"], capture_output=True, text=True)
+    assert len(fakes.stdout.split()) == 1
+
+
+def test_the_workers_log_does_not_grow_without_end(home, monkeypatch):
+    monkeypatch.setenv("ALEPH_WORKER_LOG_BYTES", "20000")
+    worker.ensure()
+    log = home / "worker.log"
+    with open(log, "ab") as handle:
+        handle.write(b"slot update: a line the server writes for every request\n" * 2000)
+    assert log.stat().st_size > 100_000
+    assert _wait(lambda: log.stat().st_size < 20_000, seconds=5)

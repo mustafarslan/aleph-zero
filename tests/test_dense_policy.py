@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 
 import pytest
@@ -51,7 +52,8 @@ def test_nothing_is_on_by_default_until_a_benchmark_says_so():
 
 
 def test_an_engine_left_to_decide_uses_vectors_only_where_the_verdict_allows(repo, fake_worker, monkeypatch):
-    monkeypatch.setattr(worker, "available", lambda: fake_worker)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
     monkeypatch.setattr(embed_setup, "installed", lambda: True)
@@ -71,7 +73,8 @@ def test_an_engine_left_to_decide_uses_vectors_only_where_the_verdict_allows(rep
 def test_command_line_settings(repo, monkeypatch, capsys):
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
     monkeypatch.setattr(embed_setup, "installed", lambda: True)
-    monkeypatch.setattr(worker, "available", lambda: None)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: None)
+    monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
     assert cli.main(["--cwd", str(repo.root), "search", "render_invoice", "--no-dense", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["dense"] == ""
     assert cli.main(["--cwd", str(repo.root), "search", "render_invoice", "--json"]) == 0
@@ -104,7 +107,8 @@ def test_a_worker_that_is_waking_does_not_hold_a_query_up(repo, fake_worker, mon
 
     from aleph_zero.embed.client import EmbedClient
 
-    monkeypatch.setattr(worker, "available", lambda: fake_worker)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
     engine = Engine(repo.root, dense=True)
     engine.search("render_invoice")

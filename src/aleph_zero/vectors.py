@@ -43,13 +43,17 @@ class VectorStore:
         self.path = Path(directory) / f"vectors.{re.sub(r'[^A-Za-z0-9._-]+', '_', kind)}.f16"
         self._map: np.memmap | None = None
         self._cache: tuple | None = None    # (key, chunk ids, rows) of the view last searched
+        self._coverage: tuple | None = None  # (key, (with a vector, should have one))
         self._recover()
 
     # ---- writing ---------------------------------------------------------------------------
 
-    def add(self, chunk_ids: list[int], matrix: np.ndarray) -> int:
+    def add(self, chunk_ids: list[int], matrix: np.ndarray, hashes: list[str] | None = None) -> int:
         """Store one unit-length row per chunk. Chunks that already have a vector of this
-        kind are skipped (another session embedded them first). Returns how many were stored."""
+        kind are skipped (another session embedded them first). With `hashes`, the content
+        hash each chunk had when its text was read: a chunk id is reused after garbage
+        collection, and a vector made from the old content must not land on the new.
+        Returns how many were stored."""
         if len(chunk_ids) != len(matrix):
             raise ValueError("one vector per chunk")
         if not chunk_ids:
@@ -59,10 +63,11 @@ class VectorStore:
             marks = ",".join("?" * len(chunk_ids))
             have = {row[0] for row in self.conn.execute(
                 f"SELECT chunk_id FROM chunk_vectors WHERE kind = ? AND chunk_id IN ({marks})", (self.kind, *chunk_ids))}
-            alive = {row[0] for row in self.conn.execute(
-                f"SELECT chunk_id FROM chunks WHERE chunk_id IN ({marks})", chunk_ids)}
+            alive = dict(self.conn.execute(
+                f"SELECT chunk_id, chunk_hash FROM chunks WHERE chunk_id IN ({marks})", chunk_ids))
             new = [(position, chunk_id) for position, chunk_id in enumerate(chunk_ids)
-                   if chunk_id not in have and chunk_id in alive]
+                   if chunk_id not in have and chunk_id in alive
+                   and (hashes is None or alive[chunk_id] == hashes[position])]
             if not new:
                 return 0
             first = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
@@ -94,11 +99,22 @@ class VectorStore:
             (self.kind, -1 if limit is None else limit))]
 
     def coverage(self, index: Index) -> tuple[int, int]:
-        """(chunks of the view with a vector, chunks of the view that should have one)."""
-        return index.conn.execute(
-            "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v JOIN chunks c ON c.chunk_id = v.chunk_id "
-            f"LEFT JOIN chunk_vectors cv ON cv.chunk_id = v.chunk_id AND cv.kind = ? WHERE {EMBEDDED}",
-            (self.kind,)).fetchall()[0]
+        """(chunks of the view with a vector, chunks of the view that should have one).
+        Counted once per state of the view and of the stored vectors: it is asked on every
+        query, and the count took 38 ms on a 51,000-chunk view."""
+        key = (index._view_epoch, self._stored())
+        if self._coverage is None or self._coverage[0] != key:
+            counted = index.conn.execute(
+                "SELECT count(cv.chunk_id), count(*) FROM temp.view_chunks v JOIN chunks c ON c.chunk_id = v.chunk_id "
+                f"LEFT JOIN chunk_vectors cv ON cv.chunk_id = v.chunk_id AND cv.kind = ? WHERE {EMBEDDED}",
+                (self.kind,)).fetchall()[0]
+            self._coverage = (key, counted)
+        return self._coverage[1]
+
+    def _stored(self) -> int:
+        """How many rows were ever given out for this kind: changes whenever a vector is added."""
+        found = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
+        return found[0][0] if found else 0
 
     def search(self, index: Index, query: np.ndarray, limit: int, scoped: bool = False) -> list[tuple[int, float]]:
         """(chunk id, cosine similarity) of the nearest chunks of the view, best first.
@@ -122,8 +138,7 @@ class VectorStore:
     def _view_rows(self, index: Index, scoped: bool) -> tuple[np.ndarray, np.ndarray]:
         """The view's chunks that have a vector, and their rows, in row order. Remembered
         until the view or the set of stored vectors changes."""
-        stored = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
-        key = (index._view_epoch, index._scope if scoped else None, stored[0][0] if stored else 0)
+        key = (index._view_epoch, index._scope if scoped else None, self._stored())
         if self._cache is None or self._cache[0] != key:
             table = "scope_chunks" if scoped else "view_chunks"
             pairs = index.conn.execute(
@@ -150,12 +165,16 @@ class VectorStore:
     def _recover(self) -> None:
         """Forget rows the file does not hold. The flush before commit makes this rare: it
         takes a file that was truncated or replaced, or a database restored without it."""
-        try:
-            on_disk = os.path.getsize(self.path) // ROW_BYTES
-        except OSError:
-            on_disk = 0
+        def rows_on_disk() -> int:
+            try:
+                return os.path.getsize(self.path) // ROW_BYTES
+            except OSError:
+                return 0
+
         beyond = self.conn.execute(
-            "SELECT 1 FROM chunk_vectors WHERE kind = ? AND row >= ? LIMIT 1", (self.kind, on_disk)).fetchall()
+            "SELECT 1 FROM chunk_vectors WHERE kind = ? AND row >= ? LIMIT 1", (self.kind, rows_on_disk())).fetchall()
         if beyond:
             with transaction(self.conn):
-                self.conn.execute("DELETE FROM chunk_vectors WHERE kind = ? AND row >= ?", (self.kind, on_disk))
+                # Measured again under the write lock: a session that was adding rows while we
+                # looked has finished, and its rows must not be taken for missing ones.
+                self.conn.execute("DELETE FROM chunk_vectors WHERE kind = ? AND row >= ?", (self.kind, rows_on_disk()))

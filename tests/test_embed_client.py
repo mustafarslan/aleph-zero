@@ -111,3 +111,17 @@ def test_a_pool_embeds_through_several_connections_and_keeps_the_order(worker):
     with pytest.raises(Unavailable):
         pool.embed(["fine", "DIE now", "fine"], kind="document")
     pool.close()
+
+
+def test_waiting_for_a_refused_connection_never_exceeds_the_clients_own_timeout(short_dir):
+    import socket as socket_module
+
+    path = short_dir / "dead.sock"
+    listener = socket_module.socket(socket_module.AF_UNIX)
+    listener.bind(str(path))
+    listener.close()            # the file stays, nothing listens: every connection is refused
+    client = EmbedClient(path, capacity=64, timeout=0.05)
+    started = time.monotonic()
+    with pytest.raises(Unavailable):
+        client.embed(["x"], kind="query")
+    assert time.monotonic() - started < 0.25

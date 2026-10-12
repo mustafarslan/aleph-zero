@@ -13,6 +13,7 @@ import fcntl
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -44,10 +45,14 @@ def socket_path() -> Path:
     if len(os.fsencode(path)) < SOCKET_LIMIT:
         return path
     short = Path(f"/tmp/aleph-zero-{os.getuid()}")  # a home directory too deep for a socket path
-    short.mkdir(mode=0o700, exist_ok=True)
-    if short.stat().st_uid != os.getuid():
-        raise Unavailable(f"{short} belongs to someone else; the worker socket cannot be placed safely")
-    short.chmod(0o700)
+    try:
+        short.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    found = os.lstat(short)  # not stat: a link planted there must not be followed
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
+        raise Unavailable(f"{short} is not a directory of ours; the worker socket cannot be placed safely")
+    os.chmod(short, 0o700)
     return short / "w.sock"
 
 
@@ -117,13 +122,29 @@ def is_ours(pid: int | None) -> bool:
         command = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
     except OSError:
         return False
-    return str(socket_path()) in command
+    # Not merely a process that mentions the socket: the server started on it with our
+    # model, or the supervisor started for it. Anything else must never be signalled.
+    sock = str(socket_path())
+    is_worker = f"--host {sock}" in command and str(model()) in command
+    is_supervisor = "aleph_zero.embed.supervisor" in command and f"--socket {sock}" in command
+    return is_worker or is_supervisor
 
 
-def available() -> Path | None:
-    """The socket, if a worker is answering right now. Starts nothing and waits for nothing."""
+def find_worker() -> int | None:
+    """The pid of a worker serving our socket, found by its command line: for when the
+    state file that should name it is gone."""
+    try:
+        listed = subprocess.run(["pgrep", "-f", "--", f"--host {socket_path()}"], capture_output=True, text=True).stdout
+    except OSError:
+        return None
+    return next((int(pid) for pid in listed.split() if pid.isdigit() and is_ours(int(pid))), None)
+
+
+def available(wait: float = 2.0) -> Path | None:
+    """The socket, if a worker answers within `wait` seconds. Starts nothing. A worker that
+    is alive but hung answers nothing, so a caller on a query's path passes a short wait."""
     path = socket_path()
-    return path if path.exists() and EmbedClient(path).healthy() else None
+    return path if path.exists() and EmbedClient(path).healthy(wait) else None
 
 
 @contextmanager
@@ -148,8 +169,11 @@ def ensure() -> Path:
         healthy = path.exists() and EmbedClient(path).healthy()
         if healthy and is_ours(known.get("supervisor_pid")):
             return path  # another session started it while we waited for the lock
-        if healthy and is_ours(known.get("worker_pid")):
-            _spawn_supervisor(["--adopt", str(known["worker_pid"])])  # its supervisor was killed
+        serving = known.get("worker_pid") if is_ours(known.get("worker_pid")) else (find_worker() if healthy else None)
+        if healthy and serving is not None:
+            # Its supervisor was killed, or the state file that named it is gone. Starting a
+            # second server would leave this one running, unreachable and unstoppable.
+            _spawn_supervisor(["--adopt", str(serving)])
             return path
         if is_ours(known.get("worker_pid")):
             if _wait_healthy(path, lambda: is_ours(known["worker_pid"])):

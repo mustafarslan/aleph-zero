@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 
 import numpy as np
@@ -12,7 +13,8 @@ from aleph_zero.engine import Engine
 @pytest.fixture
 def dense_engine(repo, fake_worker, monkeypatch):
     """An engine with semantic search on, whose worker is the stand-in."""
-    monkeypatch.setattr(worker, "available", lambda: fake_worker)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
     return Engine(repo.root, dense=True)
 
@@ -60,7 +62,8 @@ def test_without_a_worker_the_answer_is_the_lexical_one_and_says_so(dense_engine
     never = dense_engine.search("render_invoice")
     assert never.dense.startswith("no chunk of this worktree has a vector yet")
     dense_engine.embed()
-    monkeypatch.setattr(worker, "available", lambda: None)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: None)
+    monkeypatch.setattr(worker, "socket_path", lambda: Path("/tmp/az-no-such-worker.sock"))
     engine = Engine(repo.root, dense=True)
     answer = engine.search("render_invoice")
     plain = Engine(repo.root, dense=False).search("render_invoice")
@@ -91,7 +94,8 @@ def test_a_worker_that_fails_mid_query_does_not_fail_the_query(dense_engine, mon
 
 
 def test_embed_run_and_status_commands(repo, fake_worker, monkeypatch, capsys):
-    monkeypatch.setattr(worker, "available", lambda: fake_worker)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
     assert cli.main(["--cwd", str(repo.root), "embed", "run"]) == 0
     out = capsys.readouterr().out
@@ -101,3 +105,45 @@ def test_embed_run_and_status_commands(repo, fake_worker, monkeypatch, capsys):
     assert status["vectors"]["with_vector"] == status["vectors"]["chunks"] > 0
     assert cli.main(["--cwd", str(repo.root), "search", "render_invoice", "--dense", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["dense"] == "used"
+
+
+def test_a_hung_worker_does_not_hold_a_query_up(repo, fake_worker, monkeypatch):
+    import os
+    import signal
+    import subprocess
+    import time
+
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)   # the real `available`, looking at this socket
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    dense_engine = Engine(repo.root, dense=True)
+    dense_engine.search("render_invoice")
+    dense_engine.embed()
+    assert dense_engine.search("render_invoice").dense == "used"
+    pid = int(subprocess.run(["pgrep", "-f", f"fake_worker.py.*--host {fake_worker}"], capture_output=True, text=True).stdout.split()[0])
+    os.kill(pid, signal.SIGSTOP)   # alive, socket present, answering nothing
+    try:
+        started = time.monotonic()
+        answer = dense_engine.search("render_invoice")
+        took = time.monotonic() - started
+    finally:
+        os.kill(pid, signal.SIGCONT)
+    assert took < 1.0, f"{took:.2f} s"
+    assert answer.hits[0].path == "src/billing/invoice.py" and answer.dense not in ("", "used")
+
+
+def test_a_query_with_no_words_returns_nothing_even_with_vectors(dense_engine):
+    dense_engine.search("render_invoice")
+    dense_engine.embed()
+    assert dense_engine.search("???").hits == [] and dense_engine.search("   ").hits == []
+
+
+def test_how_much_of_the_view_has_vectors_is_not_recounted_for_every_query(dense_engine):
+    dense_engine.search("render_invoice")
+    dense_engine.embed()
+    index = dense_engine._indexes[dense_engine.default_cwd.resolve()]
+    counted = []
+    index.conn.exec_trace = lambda cursor, sql, bindings: counted.append(sql) or True
+    for _ in range(5):
+        assert dense_engine.search("render_invoice").dense == "used"
+    index.conn.exec_trace = None
+    assert sum("count(cv.chunk_id)" in sql for sql in counted) <= 1

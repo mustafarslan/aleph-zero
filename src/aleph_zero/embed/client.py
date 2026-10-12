@@ -43,6 +43,7 @@ class _UnixConnection(http.client.HTTPConnection):
         # (macOS does not make it wait). A pool opens several together, and two sessions
         # may do so at the same moment, so a refusal is retried briefly while the socket
         # file is there. No file means no worker: that fails immediately.
+        give_up = time.monotonic() + (self.timeout or 0)
         for pause in (*CONNECT_BACKOFF, None):
             self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.sock.settimeout(self.timeout)
@@ -51,8 +52,8 @@ class _UnixConnection(http.client.HTTPConnection):
                 return
             except ConnectionRefusedError:
                 self.sock.close()
-                if pause is None or not os.path.exists(self._path):
-                    raise
+                if pause is None or not os.path.exists(self._path) or time.monotonic() + pause > give_up:
+                    raise  # retrying must not outlast the caller's own time limit
                 time.sleep(pause)
 
 
@@ -127,9 +128,9 @@ class EmbedClient:
             raise Unavailable(f"metrics failed with HTTP {status}")
         return data.decode(errors="replace")
 
-    def healthy(self) -> bool:
+    def healthy(self, timeout: float = 2.0) -> bool:
         try:
-            return self._request("GET", "/health", None, timeout=2.0)[0] == 200
+            return self._request("GET", "/health", None, timeout=timeout)[0] == 200
         except Unavailable:
             return False
         finally:

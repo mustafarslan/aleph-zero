@@ -210,7 +210,8 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
     return statistics.mean(differences), means[int(0.025 * rounds)], means[int(0.975 * rounds)]
 
 
-def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False) -> dict:
+def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False,
+        k: int = 10) -> dict:
     sock = worker.ensure()
     client = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=60)
     results = []
@@ -252,8 +253,8 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
             text_scores = lexical.search(index.conn, question, 200)
             vector_scores = vector_search(vector, 200)
             found[form] = {
-                "lexical": first_files([hit.path for hit in search(index, view, question, k=50)]),
-                "hybrid": first_files([hit.path for hit in search(index, view, question, k=50, dense=nearest)]),
+                "lexical": first_files([hit.path for hit in search(index, view, question, k=k)]),
+                "hybrid": first_files([hit.path for hit in search(index, view, question, k=k, dense=nearest)]),
                 "dense": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores]),
                 **{f"convex{alpha}": chunk_files(index, convex_chunks(text_scores, vector_scores, alpha)) for alpha in ALPHAS},
             }
@@ -298,6 +299,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--no-bm25", action="store_true")
+    parser.add_argument("--k", type=int, default=10,
+                        help="run: results asked of Aleph per question. The product's default is 8; 10 is the "
+                             "least that can fill recall@10. The first run of this benchmark used 50, which also "
+                             "deepened the candidate pool sixfold and flattered the result")
+    parser.add_argument("--min-pool", type=int, help="run: override search.MIN_POOL, to measure a deeper candidate pool")
     parser.add_argument("--code-and-docs-only", action="store_true",
                         help="run: as if files without a language profile had no vectors")
     parser.add_argument("--out", type=Path)
@@ -314,7 +320,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "prepare":
         prepare(workdir, rows, args.max_chunks)
     else:
-        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only)
+        if args.min_pool:
+            from aleph_zero import search as search_module
+
+            search_module.MIN_POOL = args.min_pool
+        run(workdir, rows, args.out, not args.no_bm25, args.code_and_docs_only, args.k)
     return 0
 
 

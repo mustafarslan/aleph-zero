@@ -154,3 +154,11 @@ def test_files_with_no_language_get_no_vectors_and_are_not_counted_as_missing(re
     assert store.coverage(index) == (0, len(chunk_ids) - len(blocks))
     store.add(wanted, unit(21, len(wanted)))
     assert store.missing(index) == [] and store.coverage(index) == (len(wanted), len(wanted))
+
+
+def test_a_vector_is_not_stored_for_a_chunk_id_that_now_holds_other_content(repo):
+    index, store, chunk_ids = ready(repo)
+    hashes = dict(index.conn.execute("SELECT chunk_id, chunk_hash FROM chunks"))
+    claimed = [hashes[chunk_ids[0]], "the hash of what this id held when its text was read"]
+    assert store.add(chunk_ids[:2], unit(31, 2), hashes=claimed) == 1   # the second id was collected and reissued meanwhile
+    assert [row[0] for row in index.conn.execute("SELECT chunk_id FROM chunk_vectors")] == [chunk_ids[0]]

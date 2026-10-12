@@ -246,8 +246,8 @@ class Engine:
         covered, chunks = store.coverage(index)
         if covered == 0:
             return "no chunk of this worktree has a vector yet (`aleph embed run` makes them)", 0, chunks, None
-        sock = worker.available()
-        if sock is None:
+        sock = worker.socket_path()
+        if not sock.exists():  # no probe here: a hung worker would hold the query for the probe's timeout
             return "the embedding worker is not running", covered, chunks, None
         if self._embedder is None or self._embedder.socket_path != sock:
             self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)

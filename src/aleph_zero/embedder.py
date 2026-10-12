@@ -73,16 +73,16 @@ def embed_pending(index: Index, store: VectorStore, client: EmbedClient, budget_
             if not wanted:
                 break
             rows = index.conn.execute(
-                f"SELECT chunk_id, breadcrumb, signature, text FROM chunks WHERE chunk_id IN ({','.join('?' * len(wanted))}) "
-                "ORDER BY chunk_id", wanted).fetchall()
+                f"SELECT chunk_id, breadcrumb, signature, text, chunk_hash FROM chunks "
+                f"WHERE chunk_id IN ({','.join('?' * len(wanted))}) ORDER BY chunk_id", wanted).fetchall()
             if not rows:
                 break  # collected by another session between the two statements
             try:
-                matrix = client.embed([chunk_text(*row[1:]) for row in rows], kind="document")
+                matrix = client.embed([chunk_text(*row[1:4]) for row in rows], kind="document")
             except Unavailable as exc:
                 reason = str(exc)
                 break
-            stored = store.add([row[0] for row in rows], matrix)
+            stored = store.add([row[0] for row in rows], matrix, hashes=[row[4] for row in rows])
             embedded += stored
             if progress is not None:
                 progress(embedded, len(wanted))

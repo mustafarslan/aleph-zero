@@ -12,6 +12,10 @@ from .view import View
 
 RRF_K = 60
 PATH_CANDIDATES = 5
+# Candidates each generator may propose before fusion. 50 was the first value; on the 235
+# Loc-Bench questions asked by title, vectors added +3.2 points of recall@10 at 50, +4.1 at
+# 100 and +5.5 at 300, with no change for words and names alone (ADR-002).
+MIN_POOL = 300
 PATH_TIE_LIMIT = 25
 COPIES_SHOWN = 3  # places listed for one chunk that many files share
 SYMBOL_CANDIDATES = 10
@@ -158,15 +162,15 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     if not index.serves(view):
         raise ValueError("this view is not the one the index was last synced to; call index.sync(view) first")
     terms = lexical.query_terms(query)
-    if not terms and dense is None:
-        return []
+    if not terms:
+        return []  # nothing to look for: with vectors too, an empty query has no nearest neighbours worth showing
     # Filters narrow the candidates before ranking: applied afterwards, a filter that
     # few chunks pass would find nothing among the best fifty of everything.
     accept = _path_filter(path_glob, families)
     scoped = kind != "any" or accept is not None
     if scoped:
         index.narrow(view, kind, accept, (path_glob, families))
-    pool = max(50, k * 6)
+    pool = max(MIN_POOL, k * 6)
     named, bare_name = symbol_ranking(index, query, scoped)
     rankings = {
         "lexical": [chunk_id for chunk_id, _ in lexical.search(index.conn, query, pool, scoped=scoped)],

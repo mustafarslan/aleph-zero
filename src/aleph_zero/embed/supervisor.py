@@ -32,6 +32,17 @@ def _requests_served(client: EmbedClient) -> int | None:
     return None
 
 
+def _cap_log(limit: int) -> None:
+    """The server writes a line for every request: 187 MB after one benchmark run. Past the
+    limit the log starts over; it is opened for appending, so writers carry on at the new end."""
+    log = worker.home() / "worker.log"
+    try:
+        if log.stat().st_size > limit:
+            os.truncate(log, 0)
+    except OSError:
+        pass
+
+
 def _private_megabytes(pid: int) -> float | None:
     try:
         return memstat.private_bytes(pid) / 1e6
@@ -47,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     poll = worker._seconds("ALEPH_WORKER_POLL_SECONDS", 60)
     idle_exit = worker._seconds("ALEPH_WORKER_IDLE_EXIT_SECONDS", 1800)
     memory_limit = worker._seconds("ALEPH_WORKER_MEMORY_MB", worker.MEMORY_LIMIT_MB)
+    log_limit = int(worker._seconds("ALEPH_WORKER_LOG_BYTES", 8_000_000))
 
     child = None
     if args.adopt is None:
@@ -89,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(poll)
         if not alive():
             leave()
+        _cap_log(log_limit)
         used = _private_megabytes(pid)
         if used is not None and used > memory_limit:
             leave(reason=f"the worker used {used:.0f} MB, over its limit of {memory_limit:.0f} MB, and was stopped")

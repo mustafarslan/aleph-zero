@@ -98,30 +98,29 @@ M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at 
 
 **Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.
 
-## Benchmark C, Python: vectors pass the gate (2026-10-12)
+## Benchmark C, Python: vectors pass the gate, provisionally (2026-10-12)
 
-`bench/eval/benchmark_c.py`, 235 Loc-Bench questions from 18 Python repositories (Django, yt-dlp, dask, sqlglot, prefect, mypy, prowler, modin, jax, diffusers, sentence-transformers, docling, flet, pydantic, sqlfluff, moto, trl, aiohttp). Each repository is read at the issue's base commit from git's object store; every commit was indexed and embedded beforehand. File recall@10 unless stated.
+`bench/eval/benchmark_c.py`, 235 Loc-Bench questions from 18 Python repositories (Django, yt-dlp, dask, sqlglot, prefect, mypy, prowler, modin, jax, diffusers, sentence-transformers, docling, flet, pydantic, sqlfluff, moto, trl, aiohttp). Each repository is read at the issue's base commit from git's object store; every commit was indexed and embedded beforehand. Aleph is asked for ten results, as an agent would ask (the default is eight). File recall@10 unless stated.
 
-| Query form | BM25 over whole files | Aleph, words and names | Vectors only | Aleph with vectors | Gain from vectors (95% interval) |
-|---|---|---|---|---|---|
-| **Issue title** (the gate form) | | 0.670 | 0.609 | **0.728** | **+5.8 points (+1.5 to +10.2)** |
-| Whole issue text | 0.403 | 0.580 | 0.584 | 0.693 | +11.3 points (+6.8 to +15.7) |
-| The issue's 24 rarest words | | 0.565 | 0.351 | 0.577 | +1.2 points (−2.8 to +5.1) |
+| Query form | BM25 over whole files | Aleph, words and names | Aleph with vectors | Gain from vectors (95% interval) |
+|---|---|---|---|---|
+| **Issue title** (the gate form) | | 0.598 | **0.653** | **+5.5 points (+1.3 to +9.8)** |
+| Whole issue text | 0.403 | 0.516 | 0.646 | +13.0 points (+8.3 to +18.1) |
 
-First place: 0.362 → 0.372 on titles (+1.1, interval −3.4 to +5.5); 0.285 → 0.360 on the whole issue (+7.4, +2.1 to +13.0).
+On titles vectors changed the answer for 29 questions of 235 (better for 21, worse for 8); on whole issues for 40 (better for 36, worse for 4). Resampling repositories instead of questions, since 18 repositories contribute very unevenly: +0.4 to +10.8 on titles, +6.4 to +20.4 on whole issues. On the 200 questions that were not in the pilot: +7.2 (+2.5 to +12.0) on titles.
 
-**The rule was fixed on the 35-question pilot, before these numbers existed:** read the gate on the title form, the closest to what an agent types; pass at 5 points of recall@10 with a paired bootstrap interval that excludes zero. It passes: +5.8, interval +1.5 to +10.2. The margin over 5 points is thin and the lower bound is 1.5, so this is "vectors help Python" with moderate confidence, not a large effect. The deferred 400-question run would narrow the interval; it is not needed to apply the rule.
+**The rule was fixed on the 35-question pilot:** read the gate on the title form, the closest to what an agent types; pass at 5 points with a paired bootstrap interval that excludes zero. By its letter it passes: +5.5, interval +1.3 to +9.8.
+
+**Why this is provisional, and how the first reading was wrong.** The first run of this benchmark asked Aleph for 50 results per question. That also made the candidate pool six times deeper than the product's (300 candidates per generator instead of 50) and gave +5.8. The independent review of M2 caught it and re-ran the questions at the product's depth: **+3.2 (−1.1 to +7.4), which does not pass.** Vectors need the deeper pool: +3.2 at 50 candidates, +4.1 at 100, +5.5 at 300, while words and names alone do not change (0.606, 0.602, 0.598). The pool costs little (a typical query on Django goes from 2.9 to 5.2 ms at the median), so the product now uses 300. But that number was chosen on these same questions, after seeing them. The 5-point bar lies inside every interval above: the data show that vectors help Python (the interval excludes zero in every reading at this depth) and cannot tell +5.5 from +2. The 165 Loc-Bench questions in repositories not yet fetched are the held-out check; that run is in `docs/DEFERRED.md`.
 
 What else the numbers say:
 
-- **Vectors alone are worse than words and names** on short queries (0.609 against 0.670 on titles) and far worse on a bag of rare words. They earn their place in combination, where they add files that share no word with the question.
-- **The gain grows with the length and naturalness of the question** (+1.2 on rare words, +5.8 on titles, +11.3 on whole issues).
-- **Rank fusion beat the weighted sum** of normalised scores at every weight tried on titles (0.728 against 0.709 to 0.716), though the weighted sum ran without the name and path signals, so the comparison is not like for like. Rank fusion stays.
-- **Against plain BM25** on the whole issue: 0.403; Aleph by words and names 0.580; with vectors 0.693.
-- **Not embedding data files** (chunks of files with no language profile) was decided on the pilot and is part of what was measured here.
-- Still unmeasured: the 50 hand-written questions; other languages; documentation questions; the split-threshold sweep of ADR-001.
+- **The gain grows with the length and naturalness of the question**: small on a title, large on a whole issue, where it is clear of the bar in every reading. Vectors alone are worse than words and names on short queries (0.609 against 0.670 at the first depth) and earn their place only in combination.
+- **Rank fusion stays.** A weighted sum of normalised scores was below it at every weight tried, though it ran without the name and path signals, so the comparison is not like for like.
+- **Data files get no vectors** (chunks of files with no language profile). That was decided for cost: they were 58 to 72% of the text to embed in two repositories. The pilot's quality gain for it was measured on 35 questions that are part of this set and is not evidence by itself.
+- Still unmeasured: the 50 hand-written questions; other languages; documentation questions; the split-threshold sweep of ADR-001; any tuning of the text ranking, which is as untuned as the fusion.
 
-**Verdict recorded:** `dense_policy.VERDICTS["python"]` is on. With the worker installed, a Python project gets vectors by default; without it nothing changes and nothing is said in answers.
+**Verdict recorded:** `dense_policy.VERDICTS["python"]` is on, marked provisional. It takes effect only where the embedding worker has been installed, which is itself a deliberate step.
 
 ## The gate is per language (owner's instruction, 2026-10-12)
 
