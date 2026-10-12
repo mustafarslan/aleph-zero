@@ -13,9 +13,11 @@ from aleph_zero.view import build_view
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """A small project with no `.git`, and a home directory that is not the real one."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    """A small project with no `.git`, and a home directory that is not the real one. The home is changed for
+    this process's `Path.home()` only, not in the environment: the grammar package keeps its cache under HOME
+    and would fetch every grammar again, over the network, into a home that has none."""
     (tmp_path / "home").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     root = tmp_path / "work" / "project"
     (root / "src").mkdir(parents=True)
     (root / "src" / "tokens.py").write_text("def refresh_token(store):\n    return store.rotate()\n")
@@ -195,7 +197,7 @@ def test_every_command_works_or_says_why_not(project, capsys):
 def test_the_server_answers_in_a_directory_without_git(project):
     from test_server import Client
 
-    client = Client(project, env={"HOME": os.environ["HOME"]})
+    client = Client(project)
     try:
         client.start()
         assert "src/tokens.py" in client.text("search", query="refresh token")
@@ -216,10 +218,14 @@ def test_the_home_directory_is_itself_however_its_path_is_spelled(project, tmp_p
     assert plain.read(project)[1] == plain.read(tmp_path / "WORK" / "PROJECT")[1]      # one directory, one index
 
 
-def test_without_a_home_directory_to_keep_out_of_nothing_is_walked(project, monkeypatch):
-    monkeypatch.setenv("HOME", "")
+def test_without_a_home_directory_to_keep_out_of_nothing_is_walked(tmp_path, monkeypatch):
+    directory = tmp_path / "work" / "somewhere"
+    directory.mkdir(parents=True)
+    (directory / "a.py").write_text("x = 1\n")
+    monkeypatch.setenv("HOME", "")                      # refused before a single file is read (or a grammar wanted)
+    assert str(Path.home()) == "/"
     with pytest.raises(gitio.NotARepository, match="home directory is not known"):
-        build_view(project)
+        build_view(directory)
 
 
 def test_the_top_of_a_disk_and_the_temporary_directories_are_not_walked(project, monkeypatch):

@@ -98,3 +98,21 @@ def _no_real_worker(monkeypatch, tmp_path_factory):
     """Tests never see the embedding worker installed on this machine, nor its cache."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
     monkeypatch.delenv("ALEPH_DENSE", raising=False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """No test may make the grammar package fetch its grammars again. It keeps them under HOME, so a test
+    that points HOME at an empty directory and then parses anything (in this process or in a server it
+    starts) downloads them all over the network, silently. Found once (M10); this keeps it found."""
+    factory = getattr(session.config, "_tmp_path_factory", None)
+    if factory is None:
+        return
+    base = factory.getbasetemp()
+    fetched = [path for pattern in ("*/Library/Caches/tree-sitter-language-pack", "*/*/Library/Caches/tree-sitter-language-pack",
+                                    "*/*/*/Library/Caches/tree-sitter-language-pack", "*/.cache/tree-sitter-language-pack",
+                                    "*/*/.cache/tree-sitter-language-pack", "*/*/*/.cache/tree-sitter-language-pack")
+               for path in base.glob(pattern)]
+    if fetched:
+        session.exitstatus = 1
+        print(f"\nFAILED: grammars were fetched into a temporary home during the tests ({fetched[0]}): a test changed HOME "
+              f"in the environment and then parsed something. Change `Path.home` for the process instead.")
