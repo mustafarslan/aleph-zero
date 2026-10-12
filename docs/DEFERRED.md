@@ -119,6 +119,24 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 ## 11. Compiler indexes (M9): what is left for you
 
 - **TypeScript is not measured.** nest's dependencies do not install (`npm ci` ends in a dependency-resolution error, with or without the network), and I tried no other flags. Another TypeScript repository whose dependencies install would settle it: name one, or allow `--legacy-peer-deps` for nest.
-- **JavaScript is import-only by the limit.** scip-typescript took 2,295 MB on eslint against the 2,048 MB registered beforehand. `ALEPH_SCIP_MEMORY_MB` raises it for a run; I did not move the limit after seeing the figure.
+- **JavaScript is not run by default.** scip-typescript took 2,295 MB on eslint against the 2,048 MB registered beforehand; I did not move the limit after seeing the figure. It runs when you name the limit: `ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. (Until 2026-10-12 this line said so and the code refused anyway; fixed, ADR-004.)
 - **The trust rule is decided** (you asked agy and the advisor): it stays as strict as ADR-004 wrote it, with a hint how to refresh. agy also wanted a weaker stamp for out-of-date answers; measured on Flask it would add 4 calls in 100, so it is not built. ADR-004 has the three views and the figures.
 - **Like M7, off for the agent** unless `ALEPH_GRAPH=1`.
+
+## 12. M8, and where Aleph is not ahead of oxn (2026-10-12)
+
+You asked that Aleph be better than oxn in every way, within a limit so that it ends. Each row of ADR-007 was looked at again; ADR-007 ("Where each row stands") has the figures. Three rows are not ahead. Each needs a choice that is yours.
+
+- **Finding the decision that governs a change: equal, not better (0.820 at 3, twice).** By words alone Aleph's ranker and oxn's are the same function. The one change that helped on development data (stems) did not help on the 100 pairs, and I held to the limit written before that run: no third run on those pairs. What could move it, and what each costs:
+  - *More development data.* Nothing on this machine has commits that cite decision records beyond the 70 pairs already used. Public repositories with many cited decisions exist; cloning a few needs the network (I read your earlier permission as covering the benchmark's dependencies only, and did not use it for this). With a few hundred development pairs a ranker can be chosen honestly, and Aleph and oxn's ranker can also be compared on pairs neither was shaped on.
+  - *A third run on the 100.* Only worth making after a ranker is chosen on such data; it would be reported as the third.
+  - *A query that includes the files being changed.* Aleph can do this now (`aleph decisions --for PATH` reads `applies-to`). It is outside oxn's protocol, so it would be a different measure, not this one.
+- **Functions inside functions, and lambdas, are not definitions in Aleph** (entry 9 asked this already). oxn records lambdas. A call to an inner function gets no answer: 36% of eslint's graded calls. Recording them changes what `symbol` and `outline` show everywhere, and every index is read again once (the embedded vectors can be kept if chunks are left as they are; I would make sure of that first). Say yes and it is the next piece of work, graded again on all six corpora.
+- **A one-file edit on a large repository takes longer to show than the bar says.** 113 ms from a cold process on oxn's own repository (oxn: 140), 18.5 ms warm (oxn: 62). On Django's 6,833 files: 227 ms cold, 120 ms warm; with `git config core.untrackedCache true` 177 and 70. The rest is git telling what changed. Aleph does not change your git configuration; turning the untracked cache on in a large repository is yours to do (`aleph doctor` says whether it is on).
+
+Also from M8:
+
+- **The tools are off for the agent** unless `ALEPH_GRAPH=1`, like M7's and M9's: `facts` and `decisions`.
+- **Routes are not joined to mounts.** `GET /` in a router's file and `/workspace` where that router is mounted are two facts. Joining them across files needs the code graph to follow a router passed as an argument; not built.
+- **The facts were graded on two repositories, both yours, and the precision samples were read by me.** A third repository in another framework (Django, Spring, gin) would say more than another sample of these two.
+- **A flaky test, seen once:** `tests/test_embed_worker.py`, a worker over its memory limit being stopped within 6 s, failed once in a full run and passed alone and in six full runs since. Not from this branch.

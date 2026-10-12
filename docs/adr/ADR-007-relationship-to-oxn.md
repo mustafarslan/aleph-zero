@@ -36,6 +36,29 @@ Aleph does not depend on the `oxn` package: its API is unpromised, its schema ve
 | Architectural context | BM25 over constraints and ADR text; budget of 7 items; precision@3 0.82 on 100 pairs | Above 0.82 on the same 100 pairs, with a token budget |
 | Architectural facts | Layers, contracts, ADR `applies-to` | Those (read from `oxn.yaml` and ADR frontmatter when present) plus routes, ORM models and env reads |
 
+## Where each row stands (2026-10-12)
+
+The owner's instruction when told of a tie: Aleph has to be better than oxn in every row. Each row was looked at again; three are not ahead, and they are named first.
+
+**Not ahead.**
+
+- **Architectural context.** Precision at 3 on the 100 pairs is 0.820, oxn's figure exactly, in two runs (ADR-003, "Decision retrieval, measured"). By words alone the two rankers are one function. The token half of the bar is met: 355 tokens an answer. What would move the figure is not a parameter: a development set with enough cited decisions to choose a ranker on, a reranking model, or a query that includes the files being changed (outside oxn's protocol, so not comparable).
+- **Entities.** Aleph has what the bar adds (constants, variables, fields, enums, chunks) and lacks two of oxn's: lambdas, and functions defined inside functions. A call to one gets no answer (36% of eslint's graded calls). Recording them changes what `symbol` and `outline` show for every repository and means reading every index again (DEFERRED, entry 9).
+- **Latency after an edit, on a large repository.** At the size oxn measured Aleph is ahead: on oxn's own repository 113 ms median (115 at the 95th percentile) from a cold process against oxn's 140 (150), and 18.5 ms warm against 62. On Django (6,833 files) it is 227 ms cold and 120 ms warm (177 and 70 with git's untracked cache on), above the 150 ms bar. Aleph asks git what changed, which grows with the tree; oxn's hook is told which file changed and reports a flat cost (88 ms at 1,827 files; no figure at this size). Three costs were removed while measuring (275 ms to 227 ms cold); what is left is git, the interpreter's start and SQLite's per-connection tables.
+
+**Ahead, with where the figure is.**
+
+| Area | Standing |
+|---|---|
+| Languages | The six, plus C++ and C in search, symbols and outline. Their graph is not graded (no indexer for them here). |
+| Stored edges | Built differently from this row's wording: per-file facts are stored and a call is resolved when asked (an edge depends on other files; ADR-003). Every answer carries its provenance, level and whether it is certain. Compiler indexes are kept and believed only while their files are unchanged (ADR-004). |
+| Edge queries | `callers`, `callees`, the `references` tool (off for the agent until its gate; ADR-003). |
+| Resolver accuracy | Confident precision 99.9 to 100% and confident recall above oxn's in every language, on oxn's protocol and corpora (ADR-003, "Against the bars"). |
+| Known resolver gaps | Each handled and each measured switched off alone (ADR-003). |
+| Freshness, staleness | As built in M1 and M9: keyed by git blob, shared across worktrees, dirty files included; an answer says when a compiler index was not believed and why (ADR-004). |
+| SCIP | Four indexers run on request inside a measured limit; JavaScript and TypeScript run once the owner names the memory they may take (eslint: 2,332 MB of 3,072 allowed). TypeScript's memory is still unmeasured. oxn runs five with no limit. |
+| Architectural facts | Layers, contracts and `applies-to` are read (checked on oxn's own repository), plus routes, mounts, models, tables, environment names, tasks, queues and gRPC services (ADR-003). |
+
 ## What it does not mean
 
 - **A metrics gate in Aleph.** That is oxn's purpose.

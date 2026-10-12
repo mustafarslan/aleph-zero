@@ -131,9 +131,33 @@ answered by the resolver again until a new index is imported; the answer says so
 
 `aleph scip run` runs the indexer for the languages where its memory was measured under
 the limit (Python, Go, Rust, Java with Maven), watches it, and stops it above 2,048 MB
-(`ALEPH_SCIP_MEMORY_MB`). For Java and Rust this compiles the project, in a copy of its
+(`ALEPH_SCIP_MEMORY_MB`). JavaScript and TypeScript need more than that (2.3 GB on eslint)
+and run only when you name the limit yourself: `ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. For Java and Rust this compiles the project, in a copy of its
 files: your worktree is not touched, and it is only ever done when you ask. Aleph never
 installs an indexer; `aleph doctor` says which are present.
+
+## What the repository says about itself
+
+    uv run aleph facts                      # how many routes, models, environment names, tasks ... it states
+    uv run aleph facts route --like users   # each with its file and line
+    uv run aleph facts env --like REDIS     # where a setting is read, set, or declared in an example file
+    uv run aleph decisions "cache the invoice totals in redis"   # the decision records that govern a task
+    uv run aleph decisions --for src/billing/invoice.py          # the records that name this file, and its layer
+
+`aleph facts` reads what a file says in so many words: a route registered under a literal
+path (Express, FastAPI, Flask, Go's net/http, chi, gin, Spring), where a router is mounted,
+a model or a table (SQLAlchemy, Django, Alembic, JPA, Prisma), an environment name, a
+Celery task, a queue, a gRPC service. A route's path is as written in its file; a mount's
+prefix is listed as its own fact and not added to it. The first question about a worktree
+reads every file once (a couple of seconds); searching never pays for it.
+
+`aleph decisions` ranks decision records (numbered Markdown files in a directory such as
+`docs/adr`) as whole documents for a task, and answers in a few hundred tokens. With
+`--for`, it lists the records whose `applies-to` frontmatter covers a file and, when the
+repository has an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer the
+file is in and what that layer may depend on. Aleph reads these; it enforces nothing.
+
+Like `references`, the matching tools are offered to the agent only with `ALEPH_GRAPH=1`.
 
 ## Where things are
 

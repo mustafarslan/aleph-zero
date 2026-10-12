@@ -1,6 +1,6 @@
 # ADR-003: Graph scope and depth
 
-- **Status:** The code graph is built and measured (M7, 2026-10-12), ahead of its gate: it is not offered to the agent by default. The knowledge graph is deferred to M8.
+- **Status:** The code graph is built and measured (M7, 2026-10-12), ahead of its gate: it is not offered to the agent by default. The knowledge graph is built and measured (M8, 2026-10-12), behind the same switch; its bar for decision retrieval is not met (equal to oxn's figure, not above).
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -142,8 +142,54 @@ The six corpora are both what the resolver was developed against and what it is 
 - **Callers that are not found:** a caller that reaches a definition through a default export under a name of its own (`import s from './util'`), or under a name built at run time, does not mention the definition's name, and the text index is what finds callers. A name with no letter or digit in it (`$`) cannot be looked up; the answer says so.
 - **Linked sources:** an absolute Python import inside a linked repository is not followed.
 
+## The knowledge graph as built and measured (M8, 2026-10-12)
+
+### What was built
+
+- **Facts a file states** (`aleph facts`, the `facts` tool). Read from the syntax of one file, each with its file and line: routes (Express and its relatives, FastAPI, Flask, net/http, chi, gin, Spring), where routers are mounted, models and tables (SQLAlchemy, Django, Alembic, JPA, Prisma), environment names read, set or declared, Celery tasks, queues (a Celery `queue=`, a Redis list or channel named by a literal), gRPC services and methods, and the layers and contracts of an `oxn.yaml`. Kept per blob in a table that is filled when facts are first asked of a view (schema 9, brought up to date in place): an index that is only searched pays nothing.
+- **Decisions** (`aleph decisions`, the `decisions` tool). Whole records ranked by the words of a task. With a file (`--for PATH`), the records whose `applies-to` covers it, and the layer it is in with what that layer may and may not depend on.
+- **What is not done, on purpose.** A route's path is as written where it is registered, with the prefix its own file gives its router. A prefix given where a router is mounted in another file is a `mount` fact of its own and is not joined to routes: which routes pass through a mount is often decided by a router handed from one file to another, and joining them would often be a guess. A path built at run time is not reported. A call on an object named like an HTTP client (`axios`, `client`, `api`, `session`) is taken for a request, so a router given such a name is missed. `oxn.yaml` is read by a reader for its two sections in the forms oxn writes; Aleph takes no YAML parser for one optional file, and a form the reader does not know states nothing.
+
+### Facts, measured
+
+The protocol was fixed in the plan before any fact was extracted. Two of the owner's repositories, on scratch clones (Aleph's index is never written into them); names stay in git-ignored result files.
+
+| Kind | private repository A (1,315 files) | private repository B (733 files; readers unchanged, not seen before) |
+|---|---|---|
+| Routes of the documented API (OpenAPI, 61 operations) | 61 of 61 | no document |
+| Routes, read against the source | Express 50 of 50 sampled; Python 50 of 50 sampled | all 23 (net/http), 23 of 23 |
+| FastAPI decorators | 116 of 116 (a search finds 120; 4 are examples inside docstrings) | none |
+| Prisma models, Alembic tables, Celery tasks | 28 of 28, 4 of 4, 35 of 35 | none |
+| Environment names of the example files, found read in code | **187 of 197 (0.949)** in the registered run; 192 after two shapes were added | no example file |
+| Environment reads, read against the source | 49 of 50 sampled (one assignment was called a read) | 30 of 30 sampled; Go reads 23 of 23 a search finds |
+| gRPC services and methods | none | 1 of 1, 16 of 16 |
+| Queues | 13 of 13 a search finds | none |
+
+- **The ten names not found in the registered run, each looked at:** five were read in two shapes the readers did not know (`process?.env?.X`, `"X" in process.env`), two are read through a constant that holds the name (not readable from the syntax of the read), one occurs only in a comment, two occur nowhere. The two shapes and the assignment-as-read were fixed with failing tests before private repository B was looked at; 0.949 is the registered figure and 192 of 197 is from readers fixed on what this repository showed.
+- **Queues** were added after the registered run (the spec asks for broker topics and the plan had left them out), and the readers were written with the 13 lines' shapes already seen: a check, not a held-out figure. The producer in TypeScript and its consumer in Python come out under one name.
+- **Layers, contracts and record scope** were checked on oxn's own repository (a local clone): 6 of 6 records' `applies-to` with 16 of 16 patterns, 7 of 7 layers with 33 of 33 patterns, its one contract with its order. A path that two layers name is in the first of them, as oxn has it.
+- **Limits of this measurement.** Two repositories, both the owner's. The precision readings are mine, not independent of the readers' author. The oracles other than the OpenAPI document are searches of the same text: they can show a miss or an invention, not much more. oxn has no figure for any of these.
+
+### Decision retrieval, measured
+
+On oxn's 100 citation pairs and by its protocol (a commit that cites a decision is the task; the cited record is the answer). oxn's BM25: 0.610 / 0.820 / 0.726 (precision at 1, at 3, MRR); the bar is precision at 3 above 0.820.
+
+| Arm | P@1 | P@3 | MRR | Tokens of the answer |
+|---|---|---|---|---|
+| oxn's ranker in this harness (calibration) | 0.610 | 0.820 | 0.726 | |
+| Aleph's ordinary search, a record at its best chunk, words | 0.400 | 0.680 | 0.575 | 1,450 |
+| The same with vectors | 0.510 | 0.770 | 0.651 | |
+| `aleph decisions`, words alone (first run) | 0.610 | **0.820** | 0.726 | 355 |
+| `aleph decisions` with stems (second run, on the owner's instruction) | 0.560 | **0.820** | 0.699 | 355 |
+
+- **Equal, not above.** Ranking whole records by words alone is oxn's function: the same tokens, the same BM25. It scores oxn's figure to the digit. The answer is a quarter of what chunk search returns for the same question.
+- **The second attempt had its limit written before any number.** Three candidates (words reduced to stems; BM25's length normalisation lowered to 0.4; both), chosen on 70 development pairs from two repositories that are not among the graded five, one run on the 100, no third. Stems were chosen (one pair more at 3 on the development pairs) and did not carry over: still 82 of 100 at 3, fewer at 1. They are not adopted; the stemmer and the switch stay in `decisions.py`, tested and off, so the comparison can be repeated on other data.
+- **Why the development pairs could not choose.** Their repositories have 6 and about 11 records; the graded ones have up to several dozen. Only six of the 70 miss at 3. No further pairs exist on this machine (the owner's four repositories and the benchmark clones were checked).
+- **Fusing with vectors** was no better on the development pairs (0.714 / 0.900 / 0.821 against 0.743 / 0.914 / 0.834) and was not run on the 100.
+
 ## Decision
 
 - The code graph is built, graded and kept off for the agent: `aleph callers` and `aleph callees` work; the `references` tool is listed only when the server runs with `ALEPH_GRAPH=1`. Whether it ships is decided as this record's direction says, by the A/B run (ADR-011), which is the owner's.
 - Acceptance: all bars are met under oxn's protocol, and under the stricter certain stamp. The owner decides which of the two the acceptance is read against (DEFERRED, entry 9); the tools use the stricter one.
 - No automatic expansion of search results, as before.
+- The knowledge graph (M8) is built and kept behind the same switch: `aleph facts` and `aleph decisions` work; their tools are listed only with `ALEPH_GRAPH=1`. Its bar for decision retrieval is not met: equal to oxn's 0.820 in two runs. What to try next is the owner's choice (DEFERRED, entry 12).

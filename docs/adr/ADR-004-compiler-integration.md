@@ -49,8 +49,10 @@ The protocol and the limit were written into the plan before the first run; thre
 | Java | scip-java 0.12.3, Maven | spring-petclinic | 881 MB, 4 processes | 4.9 s | 0.8 MB | on request |
 | Go | scip-go 0.2.7 | go-kit | 948 MB, 18 processes | 6.8 s | 3.2 MB | on request |
 | Rust | rust-analyzer (2026-10-04) | ripgrep | 1,499 MB, 44 processes | 7.3 s | 8.3 MB | on request |
-| JavaScript | scip-typescript 0.4.0 | eslint | 2,295 MB | 19 s | 55.6 MB | import-only: over the limit |
-| TypeScript | scip-typescript 0.4.0 | nest | not measured | | | import-only until measured |
+| JavaScript | scip-typescript 0.4.0 | eslint | 2,295 MB | 19 s | 55.6 MB | over the limit: not run by default; run once the owner names a limit |
+| TypeScript | scip-typescript 0.4.0 | nest | not measured | | | not run by default; run once the owner names a limit |
+
+**Revised 2026-10-12.** `ALEPH_SCIP_MEMORY_MB` was written here as the way to raise the limit for a run, but a language measured over the default limit was refused before the limit was read. It now runs once that variable names the memory the indexer may take, watched and stopped above it like the others (eslint: 17.6 s, peak 2,332 MB of 3,072 allowed, 1,470 documents). A `tsconfig.json` the indexer infers at the root of the worktree is removed again; one that was already there is left. The default limit did not move.
 
 How these came about, in order:
 
