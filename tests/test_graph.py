@@ -219,8 +219,9 @@ def test_java_packages_inheritance_and_overloads():
         "L1", "import-resolved", [("src/main/java/org/x/owner/Util.java", "Util.help")])
     assert answers(JAVA, "src/main/java/org/x/owner/Owner.java", "Pet") == (
         "L1", "import-resolved", [("src/main/java/org/x/owner/Pet.java", "Pet")])
-    overloads = answers(JAVA, "src/main/java/org/x/owner/Owner.java", "helper")
-    assert overloads == ("L0", "syntactic", [("src/main/java/org/x/owner/Owner.java", "Owner.helper")] * 2)   # two: not confident
+    graph, sites = build(JAVA)
+    chosen = edge(graph, sites, "src/main/java/org/x/owner/Owner.java", "helper")
+    assert [(t.qualified, t.start_line) for t in chosen.targets] == [("Owner.helper", 5)]    # of two overloads, the one that takes no argument
 
 
 def test_imports_that_lead_in_circles_end():
@@ -353,3 +354,82 @@ def test_an_absolute_python_import_is_never_looked_up_inside_the_importing_packa
     assert answers(files, "src/flask/json/__init__.py", "dumps") is None
     assert answers(files, "src/flask/json/provider.py", "dumps") is None
     assert answers(files, "src/flask/json/provider.py", "ours") == ("L1", "import-resolved", [("src/flask/json/__init__.py", "dumps")])
+
+
+# ---- where two rules of a language disagree, the resolver must not pick one and call it certain -------
+# (the six shapes below were found by an adversarial review of the certain stamp)
+
+def test_python_follows_the_method_resolution_order_not_the_first_base():
+    diamond = {"m.py": "class Root:\n    def ping(self): pass\nclass A(Root): pass\nclass B(Root):\n    def ping(self): pass\n"
+                       "class C(A, B):\n    def test(self):\n        self.ping()\n        super().ping()\n"}
+    assert answers(diamond, "m.py", "ping") == ("L0", "syntactic", [("m.py", "B.ping")])
+    assert answers(diamond, "m.py", "ping", nth=1) == ("L0", "syntactic", [("m.py", "B.ping")])
+    deep_first = {"m.py": "class X:\n    def ping(self): pass\nclass A(X): pass\nclass B:\n    def ping(self): pass\n"
+                          "class C(A, B):\n    def test(self):\n        self.ping()\n"}
+    assert answers(deep_first, "m.py", "ping") == ("L0", "syntactic", [("m.py", "X.ping")])    # C, A, X, B
+
+
+def test_go_takes_the_promoted_method_of_the_shallowest_embedding():
+    files = {"go.mod": "module x\n", "p/p.go": "package p\ntype Deep struct{}\nfunc (Deep) Run() {}\ntype Container struct{ Deep }\n"
+                                                "type Shallow struct{}\nfunc (Shallow) Run() {}\ntype S struct {\n\tContainer\n\tShallow\n}\n"
+                                                "func (s S) Test() { s.Run() }\n"}
+    assert answers(files, "p/p.go", "Run") == ("L0", "syntactic", [("p/p.go", "Shallow.Run")])
+
+
+def test_java_overloads_are_told_apart_by_the_number_of_arguments_and_no_further():
+    files = {
+        "a/Base.java": "package a;\nclass Base {\n  void process(String s) {}\n  void keep(String s) {}\n  void two(int a, int b) {}\n}\n",
+        "a/Derived.java": ("package a;\nclass Derived extends Base {\n  void process(int n) {}\n  void keep(String other) {}\n  void two(int a) {}\n"
+                           "  void test() {\n    process(\"hello\");\n    keep(\"x\");\n    two(1, 2);\n    two(1);\n  }\n}\n"),
+    }
+    path = "a/Derived.java"
+    both = answers(files, path, "process")          # one argument fits both: which one depends on its type, which is not read
+    assert sorted(both[2]) == [("a/Base.java", "Base.process"), ("a/Derived.java", "Derived.process")]
+    assert answers(files, path, "keep") == ("L0", "syntactic", [("a/Derived.java", "Derived.keep")])       # an override: its own
+    assert answers(files, path, "two") == ("L1", "import-resolved", [("a/Base.java", "Base.two")])          # two arguments: the base's
+    assert answers(files, path, "two", nth=1) == ("L0", "syntactic", [("a/Derived.java", "Derived.two")])
+
+
+def test_a_name_that_two_wildcard_imports_both_bring_is_either():
+    files = {"a.py": "def ping(): pass\ndef _hidden(): pass\n", "b.py": "def ping(): pass\ndef only_b(): pass\n",
+             "app.py": "from a import *\nfrom b import *\ndef main():\n    ping()\n    only_b()\n    _hidden()\n"}
+    assert answers(files, "app.py", "ping") == ("L1", "import-resolved", [("a.py", "ping"), ("b.py", "ping")])
+    assert answers(files, "app.py", "only_b") == ("L1", "import-resolved", [("b.py", "only_b")])
+    assert answers(files, "app.py", "_hidden") is None      # a star import does not bring names that start with an underscore
+
+
+def test_a_module_that_imports_a_name_and_republishes_another_of_that_name_is_not_decided():
+    files = {"internal.ts": "export function run() {}\n", "public.ts": "export function run() {}\nexport function only() {}\n",
+             "module.ts": "import { run } from './internal';\nexport * from './public';\nrun;\n",
+             "explicit.ts": "export { run } from './internal';\nexport * from './public';\n",
+             "app.ts": "import { run, only } from './module';\nimport { run as chosen } from './explicit';\nrun();\nonly();\nchosen();\n"}
+    assert sorted(answers(files, "app.ts", "run")[2]) == [("internal.ts", "run"), ("public.ts", "run")]
+    assert answers(files, "app.ts", "only") == ("L1", "import-resolved", [("public.ts", "only")])
+    assert answers(files, "app.ts", "chosen") == ("L1", "import-resolved", [("internal.ts", "run")])   # named explicitly: it wins over the star
+
+
+def test_rust_does_not_merge_two_types_of_one_name_in_one_crate():
+    files = {"src/lib.rs": "mod model;\nmod other;\nmod more;\n",
+             "src/model.rs": "pub trait Trait { fn f(&self) {} }\npub struct Item;\nimpl Trait for Item {}\nimpl Item { fn test(&self) { self.f(); self.g(); } }\n",
+             "src/other.rs": "pub struct Item;\nimpl Item { pub fn f(&self) {} pub fn g(&self) {} }\n",
+             "src/more.rs": "use crate::model::Item;\nimpl Item { pub fn g(&self) {} }\n"}
+    assert answers(files, "src/model.rs", "f") == ("L0", "syntactic", [("src/model.rs", "Trait.f")])
+    assert answers(files, "src/model.rs", "g") == ("L1", "import-resolved", [("src/more.rs", "Item.g")])   # the impl that names this Item
+
+
+def test_an_annotation_with_arguments_before_a_method_is_not_read_as_its_parameters():
+    files = {
+        "a/Types.java": "package a;\ninterface Types {\n  @Query(\"SELECT t FROM T t ORDER BY t.name\")\n  @Transactional(readOnly = true)\n  java.util.List<String> findAll();\n  void keep(@Valid String one, final int two);\n}\n",
+        "a/Use.java": "package a;\nclass Use {\n  private final Types types;\n  void run() { this.types.findAll(); types.keep(\"x\", 2); }\n}\n",
+    }
+    assert answers(files, "a/Use.java", "findAll") == ("L1", "import-resolved", [("a/Types.java", "Types.findAll")])
+    assert answers(files, "a/Use.java", "keep") == ("L1", "import-resolved", [("a/Types.java", "Types.keep")])
+
+
+def test_a_call_through_an_import_from_outside_is_not_answered_with_a_method_that_shares_its_name():
+    files = {
+        "pkg/client.py": "class Client:\n    def post(self, url):\n        pass\n",
+        "pkg/use.py": "import requests\nimport requests.adapters as adapters\n\ndef send(url):\n    requests.post(url)\n    adapters.post(url)\n",
+    }
+    assert answers(files, "pkg/use.py", "post") is None             # requests.post, though Client.post is the tree's only `post`
+    assert answers(files, "pkg/use.py", "post", nth=1) is None

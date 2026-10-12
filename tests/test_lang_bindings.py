@@ -32,7 +32,8 @@ def test_typescript_imports_and_what_a_file_republishes():
         "import legacy = require('./legacy');\nfunction a() {}\nexport { a as b };\nexport default a;\n"
     )) == [
         ("Def", "./user", "default"), ("makeUser", "./user", "makeUser"), ("C", "./user", "B"), ("ns", "../lib/x", ""),
-        ("T", "./types", "T"), ("*", "./all", "*"), ("q", "./q", "q"), ("s", "./q", "r"), ("tools", "./tools", ""),
+        ("T", "./types", "T"), ("*", "./all", "*", "reexport"), ("q", "./q", "q", "reexport"), ("s", "./q", "r", "reexport"),
+        ("tools", "./tools", "", "reexport"),
         ("legacy", "./legacy", ""), ("b", "", "a", "export"), ("default", "", "a", "export"),
     ]
 
@@ -48,7 +49,7 @@ def test_commonjs_requires_and_exports():
     ]
     assert bound("javascript", "class Linter {}\nmodule.exports = Linter;\n") == [("default", "", "Linter", "export")]
     assert bound("javascript", "module.exports = class Rule {};\n") == [("default", "", "Rule", "export")]
-    assert bound("javascript", "module.exports = require('./other');\n") == [("*", "./other", "*")]
+    assert bound("javascript", "module.exports = require('./other');\n") == [("*", "./other", "*", "reexport")]
     assert bound("javascript", "export default function main() {}\n") == [("default", "", "main", "export")]
 
 

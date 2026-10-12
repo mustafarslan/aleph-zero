@@ -50,6 +50,7 @@ _UNNAMED = frozenset({"namespace"})
 _VALUES = frozenset({"constant", "variable"})
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
 _IMPLICIT_THIS = frozenset({"java", "cpp"})
+_OVERLOADING = frozenset({"java", "cpp"})         # one name, several methods, told apart by their arguments
 _PACKAGE_WIDE_TYPES = frozenset({"go", "rust"})   # a type's methods may be declared in another file
 _ECMA_SUFFIXES = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs")
 _RUST_ROOTS = ("lib.rs", "main.rs")
@@ -287,6 +288,7 @@ class Graph:
         self._basenames: dict[str, list[str]] | None = None  # a file's own name -> the files called so; built when first needed
         self._java_packages: dict[str, list[str]] = {}
         self._rooted: dict[str, list[tuple[str, str]]] = {}  # what `_python_rooted` has answered
+        self._orders: dict[tuple[str, str], list[tuple[str, str]]] = {}   # Python classes' method resolution orders
         self._go_names: dict[str, str] = {}                 # a Go import path -> the name its package gives itself
         self._read_layout(manifests or {})
 
@@ -466,11 +468,11 @@ class Graph:
         segments = _segments(call.receiver)
         if len(segments or ("", "")) != 1 and not call.receiver.startswith("super("):      # `self.store.save()`
             if segments is not None and "receivers" in self.features:
-                typed = self._through(path, [(path, owner)], list(segments[1:]), call.name)
+                typed = self._through(path, [(path, owner)], list(segments[1:]), call.name, call.arity)
                 if typed is not _UNSTATED:
                     return typed
             return self._by_name(path, facts, call, members=True, rule="name, on a field")
-        found = self._method((path, owner), call.name, above=call.head == "super")
+        found = self._method((path, owner), call.name, above=call.head == "super", arity=call.arity)
         return self._edge(path, found, "own type") if found else None
 
     def _qualified(self, path: str, facts: FileFacts, call: Call) -> Edge | None:
@@ -478,7 +480,8 @@ class Graph:
         segments = _segments(call.receiver)
         if call.head == "local" and call.receiver_type and segments is not None and "receivers" in self.features:
             kinds = self._value_type(path, call.receiver_type)
-            typed = _UNSTATED if kinds is None else self._through(path, kinds, list(segments[1:]), call.name) if kinds else None
+            typed = (_UNSTATED if kinds is None else
+                     self._through(path, kinds, list(segments[1:]), call.name, call.arity) if kinds else None)
             if typed is not _UNSTATED:
                 return typed
         if call.head in ("local", "value") or segments is None:
@@ -488,7 +491,7 @@ class Graph:
         local_type = [qualified for qualified, kind in self._kinds[path].items()
                       if kind not in _MEMBERS and (qualified == dotted or qualified.endswith("." + dotted))]
         if local_type:      # `Type.method()`, or an object of this file: `handlers.run()`
-            found = [target for qualified in local_type for target in self._method((path, qualified), name)]
+            found = [target for qualified in local_type for target in self._method((path, qualified), name, arity=call.arity)]
             if found:
                 return self._edge(path, found, "type in file")
         if facts.family == "rust" and call.via == "path" and (head in ("crate", "self", "super") or head not in self._bound[path]):
@@ -509,12 +512,12 @@ class Graph:
             return self._by_name(path, facts, call, members=True, rule="name, type in file lacks it")
         owner = self._owner(facts, call)
         if owner and facts.family in _IMPLICIT_THIS and "receivers" in self.features and self._field((path, owner), head):
-            typed = self._through(path, [(path, owner)], list(segments), name)      # `owners.findAll()` is `this.owners.findAll()`
+            typed = self._through(path, [(path, owner)], list(segments), name, call.arity)   # `owners.findAll()` is `this.owners.findAll()`
             if typed is not _UNSTATED:
                 return typed
         nearby = self._nearby(path, facts, head)    # a type of the same package, written without an import
         if nearby and not rest:
-            found = [target for kind in nearby for target in self._method((kind.path, kind.qualified), name)]
+            found = [target for kind in nearby for target in self._method((kind.path, kind.qualified), name, arity=call.arity)]
             if found:
                 return self._edge(path, found, "package")
         return self._by_name(path, facts, call, members=True, rule="name, on an unbound name")
@@ -557,7 +560,7 @@ class Graph:
                 if found:
                     return found
             elif kind in _TYPES and facts.family in _IMPLICIT_THIS:     # `helper()` inside a class is `this.helper()`
-                found = self._method((path, qualified), call.name)
+                found = self._method((path, qualified), call.name, arity=call.arity)
                 if found:
                     return found
         return self._top[path].get(call.name, [])
@@ -572,23 +575,123 @@ class Graph:
     # ---- types and their members ----------------------------------------------------------------
 
     def _method(self, kind: tuple[str, str], name: str, above: bool = False,
-                seen: set[tuple[str, str]] | None = None) -> list[Target]:
-        """`name` as the type `kind` (file, qualified name) has it: its own, else the nearest base's."""
+                seen: set[tuple[str, str]] | None = None, arity: int = -1) -> list[Target]:
+        """`name` as the type `kind` (file, qualified name) has it: its own, else an inherited one, looked
+        for in the order the type's language would: Python's method resolution order, Go's shallowest
+        embedding, elsewhere the first base that has it. `above` skips the type itself (`super()`).
+        Where a language tells methods of one name apart by their arguments, `arity` narrows them, and
+        what it cannot tell apart is returned together."""
+        file = self._of(kind[0])
+        family = file.family if file is not None else ""
+        if family == "python":
+            order = self._linearized(kind)
+            return next((own for each in (order[1:] if above else order) if (own := self._own_members(*each, name))), [])
+        if family == "go":
+            return self._shallowest(kind, name, above)
         seen = seen if seen is not None else set()
         if kind in seen or len(seen) > 64:
             return []
         seen.add(kind)
         path, qualified = kind
-        if not above:
-            own = self._own_members(path, qualified, name)
-            if own:
-                return own
+        own = [] if above else self._own_members(path, qualified, name)
+        if own and family not in _OVERLOADING:
+            return own
+        fitting = [target for target in own if self._fits(target, arity)]
+        inherited: list[Target] = []
         for declared_in, base in self._bases_of(path, qualified):
             for found in self._type(declared_in, base):
-                inherited = self._method(found, name, False, seen)
+                inherited = self._method(found, name, False, seen, arity)
                 if inherited:
-                    return inherited
+                    break
+            if inherited:
+                break
+        if not fitting:
+            return inherited        # nothing here takes that many arguments (or nothing here has the name at all)
+        # An inherited method of the same name that this type does not override takes part in the choice.
+        shapes = {self._parameters(target) for target in own}
+        return fitting + [target for target in inherited if self._parameters(target) not in shapes]
+
+    def _linearized(self, kind: tuple[str, str], active: frozenset[tuple[str, str]] = frozenset()) -> list[tuple[str, str]]:
+        """Python's method resolution order of a class (C3), over the bases that are classes of these files."""
+        if kind in self._orders:
+            return self._orders[kind]
+        if kind in active or len(active) > 64:
+            return [kind]
+        bases: list[tuple[str, str]] = []
+        for declared_in, base in self._bases_of(*kind):
+            found = self._type(declared_in, base)
+            if found and found[0] not in bases and found[0] != kind:
+                bases.append(found[0])
+        sequences = [list(self._linearized(base, active | {kind})) for base in bases] + [list(bases)]
+        order = [kind]
+        while any(sequences):
+            head = next((sequence[0] for sequence in sequences
+                         if sequence and not any(sequence[0] in other[1:] for other in sequences)), None)
+            if head is None:        # no consistent order exists (the classes would not load): keep what is left as written
+                order += [each for sequence in sequences for each in sequence if each not in order]
+                break
+            order.append(head)
+            for sequence in sequences:
+                if sequence and sequence[0] == head:
+                    del sequence[0]
+        if len(self._orders) > 4000:
+            self._orders.clear()
+        self._orders[kind] = order
+        return order
+
+    def _shallowest(self, kind: tuple[str, str], name: str, above: bool) -> list[Target]:
+        """Go promotes the method of the embedded type nearest the top; two at one depth are both returned."""
+        level, seen = [kind], {kind}
+        skip = above
+        while level and len(seen) <= 64:
+            found = [] if skip else [target for each in level for target in self._own_members(*each, name)]
+            if found:
+                return found
+            skip = False
+            below: list[tuple[str, str]] = []
+            for each in level:
+                for declared_in, base in self._bases_of(*each):
+                    for embedded in self._type(declared_in, base):
+                        if embedded not in seen:
+                            seen.add(embedded)
+                            below.append(embedded)
+            level = below
         return []
+
+    def _parameters(self, target: Target) -> tuple[str, ...]:
+        """The parameter types a method's signature writes, in order: what tells an override from an overload."""
+        signature = self.source.signature(target)
+        named = re.search(rf"(?<![\w$]){re.escape(target.name)}\s*\(", signature)     # not the brackets of an annotation before it
+        opening = named.end() - 1 if named else signature.find("(")
+        if opening < 0:
+            return ()
+        depth, start, parts = 0, opening + 1, []
+        for index in range(opening, len(signature)):
+            char = signature[index]
+            if char in "(<[":
+                depth += 1
+            elif char in ")>]":
+                depth -= 1
+                if depth == 0:
+                    parts.append(signature[start:index])
+                    break
+            elif char == "," and depth == 1:
+                parts.append(signature[start:index])
+                start = index + 1
+        kinds = []
+        for part in parts:
+            words = [word for word in re.sub(r"@\w+(\([^)]*\))?", " ", part).split() if word != "final"]
+            if words:
+                kinds.append(" ".join(words[:-1]) if len(words) > 1 else words[0])
+        return tuple(kinds)
+
+    def _fits(self, target: Target, arity: int) -> bool:
+        """Whether a call passing `arity` arguments can be a call of this method. Anything that is not a
+        method, and any call whose arguments are not known, fits."""
+        if arity < 0 or target.kind != "method":
+            return True
+        kinds = self._parameters(target)
+        return arity >= len(kinds) - 1 if kinds and kinds[-1].endswith("...") else arity == len(kinds)
 
     def _own_members(self, path: str, qualified: str, name: str) -> list[Target]:
         own = self._members.get(path, {}).get(f"{qualified}.{name}")
@@ -597,7 +700,7 @@ class Graph:
             return own or []
         simple = qualified.rsplit(".", 1)[-1]
         spread = self._methods.get((_group(facts.family), f"{simple}.{name}"), [])
-        return [target for target in spread if self._same_unit(path, target.path)]
+        return [target for target in spread if self._same_type(path, qualified, target.path)]
 
     def _bases_of(self, path: str, qualified: str) -> list[tuple[str, str]]:
         found = [(path, base) for base in self._bases.get((path, qualified), [])]
@@ -605,8 +708,20 @@ class Graph:
         if facts is not None and facts.family in _PACKAGE_WIDE_TYPES:    # `impl Trait for S` in another file of the crate
             simple = qualified.rsplit(".", 1)[-1]
             found += [(other, base) for other, base in self._bases_named.get((_group(facts.family), simple), [])
-                      if other != path and self._same_unit(path, other)]
+                      if other != path and self._same_type(path, qualified, other)]
         return found
+
+    def _same_type(self, path: str, qualified: str, other: str) -> bool:
+        """Whether a type of this simple name in the file `other` is the type `qualified` of `path`, declared
+        in parts. In a Go package a name is one type. A Rust crate may hold several types of one name
+        (`Error`, `Builder`), so the other file must be shown to mean this one: by its imports."""
+        if not self._same_unit(path, other):
+            return False
+        if self.files[path].family != "rust":
+            return True
+        simple = qualified.rsplit(".", 1)[-1]
+        mine, theirs = self._type(path, qualified), self._type(other, simple)
+        return len(mine) == 1 and theirs == mine
 
     def _same_unit(self, path: str, other: str) -> bool:
         """Whether two files can declare parts of one type: a Go package, a Rust crate."""
@@ -646,7 +761,8 @@ class Graph:
 
     # ---- values of a stated type -----------------------------------------------------------------
 
-    def _through(self, path: str, kinds: list[tuple[str, str]], fields: list[str], name: str) -> Edge | None | str:
+    def _through(self, path: str, kinds: list[tuple[str, str]], fields: list[str], name: str,
+                 arity: int = -1) -> Edge | None | str:
         """`name` called on a value of one of `kinds`, after going through `fields`: the edge, None when the
         source states a type that is none of these files' (or one that lacks the callee), `_UNSTATED` when a
         field on the way has no stated type."""
@@ -661,7 +777,7 @@ class Graph:
             kinds = below
             if not kinds:
                 return None
-        return self._edge(path, [target for kind in kinds for target in self._method(kind, name)], "stated type")
+        return self._edge(path, [target for kind in kinds for target in self._method(kind, name, arity=arity)], "stated type")
 
     def _field(self, kind: tuple[str, str], name: str, seen: set[tuple[str, str]] | None = None) -> tuple[str, str] | None:
         """(the file that declares it, its type as written) for a field of `kind`, its own or a base's."""
@@ -676,7 +792,7 @@ class Graph:
         facts = self.files.get(path)
         if facts is not None and facts.family in _PACKAGE_WIDE_TYPES:
             for other, field_name, stated in self._fields_named.get((_group(facts.family), qualified.rsplit(".", 1)[-1]), []):
-                if field_name == name and stated and self._same_unit(path, other):
+                if field_name == name and stated and self._same_type(path, qualified, other):
                     return other, stated
         for declared_in, base in self._bases_of(path, qualified):
             for above in self._type(declared_in, base):
@@ -767,33 +883,60 @@ class Graph:
         if (module, name) in seen or len(seen) > HOPS * 8:
             return [], []
         seen.add((module, name))
+        targets, modules, explicit = self._offered(module, name, seen)
+        file = self._of(module)
+        if "reexports" not in self.features or file is None:
+            return targets, modules
+        if (targets or modules) and (explicit or file.family not in _ECMA or not file.wild):
+            return targets, modules
+        # Not named by the module in so many words. What its stars bring counts too: an ECMAScript module
+        # that imports `run` for its own use and says `export * from './public'` offers the public one.
+        starred, inside = self._starred(module, name, seen)
+        if targets and starred and set(starred) != set(targets):
+            return targets + starred, modules
+        return (targets, modules) if targets or modules else (starred, inside)
+
+    def _offered(self, module: str, name: str, seen: set[tuple[str, str]]) -> tuple[list[Target], list[str], bool]:
+        """`name` as the module itself declares, publishes or passes on, and whether it says so explicitly
+        (an export of that name, a re-export of that name) rather than merely holding it."""
         found = self._top.get(module, {}).get(name)
         if found:
-            return found, []
+            return found, [], bool(self._published.get(module, {}).get(name))
         for published in self._published.get(module, {}).get(name, []):     # exports = { name: other }
             targets, modules = self._exported(module, published.name, seen)
             if targets or modules:
-                return targets, modules
+                return targets, modules, True
         inside = self._submodule(module, name)
         if inside:
-            return [], inside
+            return [], inside, True
         if "reexports" not in self.features or module not in self.files:
-            return [], []
+            return [], [], False
+        rust = self.files[module].family == "rust"
         for binding in self._bound[module].get(name, []):                   # the module imported it and passes it on
-            if binding.level and self.files[module].family == "rust":
+            if binding.level and rust:
                 continue    # a `use` inside an inline module is not the file's own
             targets, modules, _ = self._stands_for(module, binding, seen)
             if targets or modules:
-                return targets, modules
-        for binding in self._wild[module]:                                   # export * from, from x import *, pub use x::*
-            if binding.level and self.files[module].family == "rust":
+                return targets, modules, binding.kind == "reexport"
+        return [], [], False
+
+    def _starred(self, module: str, name: str, seen: set[tuple[str, str]]) -> tuple[list[Target], list[str]]:
+        """`name` as the modules that `module` takes everything from offer it: export * from, from x import *,
+        pub use x::*. Every one that has it, since which one wins is not always the first."""
+        file = self._of(module)
+        if file is None or file.family == "python" and name.startswith("_"):
+            return [], []       # a star import does not bring a name that starts with an underscore
+        targets: list[Target] = []
+        modules: list[str] = []
+        for binding in file.wild:
+            if binding.level and file.family == "rust":
                 continue
-            _, modules, _ = self._stands_for(module, binding, seen)
-            for inner in modules:
-                targets, deeper = self._exported(inner, name, seen)
-                if targets or deeper:
-                    return targets, deeper
-        return [], []
+            _, sources, _ = self._stands_for(module, binding, seen)
+            for inner in sources:
+                found, deeper = self._exported(inner, name, seen)
+                targets += [target for target in found if target not in targets]
+                modules += [each for each in deeper if each not in modules]
+        return targets, modules
 
     def _walk(self, targets: list[Target], modules: list[str], segments: list[str],
               seen: set[tuple[str, str]] | None = None) -> tuple[list[Target], list[str]]:
@@ -836,16 +979,12 @@ class Graph:
                     found += self._top[other].get(name, [])
         if found:
             return found
-        for binding in self._wild[path]:
-            _, modules, _ = self._stands_for(path, binding)
-            for module in modules:
-                found += self._exported(module, name)[0]
-            if not modules and facts.family == "java":      # import static a.b.Type.*
+        found, _ = self._starred(path, name, set())     # everything a star import may have brought
+        if not found and facts.family == "java":
+            for binding in self._wild[path]:            # import static a.b.Type.*
                 package, _, owner = binding.source.rpartition(".")
                 for file in self._packages.get(("java", package), []):
                     found += self._method((file, owner), name) if owner in self._top[file] else []
-            if found:
-                return found
         return found
 
     # ---- where a module lives -------------------------------------------------------------------

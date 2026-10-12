@@ -115,6 +115,7 @@ class Call:
     #                       '' nothing local: a name of the file, an import, a builtin
     receiver_type: str = ""  # for a call on a local name: the type its function declares for it (`generic.Gauge`), or
     #                       the call that built it (`Engine()`); '' when the function does not say
+    arity: int = -1       # how many arguments are passed; -1 when the call does not show them
 
 
 def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definition]) -> list[Call]:
@@ -129,7 +130,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     bound: dict[int, set[str]] = {}     # scope -> the names bound in it
     declared: dict[int, dict[str, str]] = {}  # scope -> name -> the type the scope states for it ('' when it states two)
     receivers: dict[int, str] = {}      # scope -> the name its method's receiver goes by, where the language names it
-    seen: list[tuple[Node, Node | None, str, tuple[int, ...]]] = []
+    seen: list[tuple[Node, Node | None, str, int, tuple[int, ...]]] = []
     # Only the nodes that matter are visited, found by the parser's query engine: scopes, what binds or
     # types a local name, and calls. In source order, an outer node first, so a scope is open before what
     # it holds is met; one node can play several parts, taken in the order of _PARTS.
@@ -169,16 +170,18 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
             owner = node.child_by_field_name("object") if family == "java" and node.type == "method_invocation" else None
             split = (callee, owner, "member" if owner is not None else "") if owner is not None or _is_name(callee) else _split(callee)
             if split is not None:
-                seen.append((*split, tuple(scope for _, scope in open_scopes)))
+                passed = node.child_by_field_name("arguments")
+                arity = sum(1 for child in passed.named_children if child.type != "comment") if passed is not None else -1
+                seen.append((*split, arity, tuple(scope for _, scope in open_scopes)))
     out: list[Call] = []
-    for name, owner, via, chain in seen:
+    for name, owner, via, arity, chain in seen:
         position = name.start_byte
         caller = next((index for _, start, end, index in callables if start <= position < end), None)
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
         stated = next((declared[scope].get(first, "") for scope in reversed(chain) if first in bound[scope]), "") \
             if head == "local" and owner is not None else ""
         out.append(Call(_text(name), _receiver(owner) if owner is not None else "", name.start_point[0] + 1,
-                        name.start_point[1], caller, via, head, stated))
+                        name.start_point[1], caller, via, head, stated, arity))
     out.sort(key=lambda call: (call.line, call.column))
     return out
 

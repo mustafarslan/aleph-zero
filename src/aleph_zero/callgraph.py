@@ -33,7 +33,7 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 1           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 2           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for
@@ -155,7 +155,7 @@ def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
         return _EMPTY
     shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed]
     # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
-    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type]
+    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity]
             for c in sites if c.via or c.head != "local"]
     pack = lambda value: zlib.compress(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogateescape"), 1)  # noqa: E731
     return pack(shape), pack(kept)

@@ -29,7 +29,8 @@ class Binding:
     source: str           # the module, as written; '' for the file itself (an export) or the crate's own root
     name: str             # what it is called in the module; '' when `local` stands for the module itself
     level: int = 0        # Python: the number of leading dots. Rust: how many inline `mod` blocks it is written inside
-    kind: str = "import"  # 'import'; 'export': the file publishes its own `name` as `local`;
+    kind: str = "import"  # 'import'; 'reexport': taken from a module only to be published (`export { x } from`,
+    #                       `export * from`); 'export': the file publishes its own `name` as `local`;
     #                       'module': Rust's `mod x;`; 'package': the package the file says it belongs to (in `local`)
 
 
@@ -165,13 +166,13 @@ def _export(node: Node) -> Iterator[Binding]:
             for specifier in clause.named_children:
                 name, alias = specifier.child_by_field_name("name"), specifier.child_by_field_name("alias")
                 if name is not None:
-                    yield Binding(_text(alias or name), source, _text(name))
+                    yield Binding(_text(alias or name), source, _text(name), kind="reexport")
         elif namespace is not None:
             name = next((inner for inner in namespace.named_children if "identifier" in inner.type), None)
             if name is not None:
-                yield Binding(_text(name), source, "")
+                yield Binding(_text(name), source, "", kind="reexport")
         elif any(child.type == "*" for child in node.children):
-            yield Binding("*", source, "*")
+            yield Binding("*", source, "*", kind="reexport")
         return
     if clause is not None:
         for specifier in clause.named_children:
@@ -247,7 +248,7 @@ def _commonjs_export(node: Node) -> Iterator[Binding]:
     if target == "module.exports":
         source = _require_source(right)
         if source:
-            yield Binding("*", source, "*")
+            yield Binding("*", source, "*", kind="reexport")
         elif right.type == "object":
             for pair in right.named_children:
                 if pair.type != "pair":
