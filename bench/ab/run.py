@@ -52,14 +52,17 @@ QUESTION = (
 ARMS = ("none", "L0", "L1", "L2", "L3")
 
 
-def tasks(workdir: Path, count: int, seed: int = 11) -> list[dict]:
+def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False) -> list[dict]:
     """`count` Loc-Bench issues from the repositories already prepared for Benchmark C,
-    spread over repositories, the same ones for a given seed."""
+    spread over repositories, the same ones for a given seed. Tasks the steering was
+    developed on (dev_tasks.txt) are left out unless `with_dev`."""
     sys.path.insert(0, str(ROOT / "bench" / "eval"))
     import benchmark_c
 
     prepared = {path.name.replace("__", "/", 1) for path in workdir.iterdir() if (path / ".git").exists() or path.is_symlink()}
-    rows = [row for row in benchmark_c.instances(prepared) if row["gold"]]
+    seen = {line.strip() for line in (Path(__file__).with_name("dev_tasks.txt")).read_text().splitlines()
+            if line.strip() and not line.startswith("#")} if with_dev is False else set()
+    rows = [row for row in benchmark_c.instances(prepared) if row["gold"] and row["instance_id"] not in seen]
     by_repo: dict[str, list[dict]] = {}
     for row in rows:
         by_repo.setdefault(row["repo"], []).append(row)

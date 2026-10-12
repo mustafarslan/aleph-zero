@@ -34,7 +34,7 @@ How far it goes is one option, the rung (`/config`, or `pluginConfigs` in settin
 | Rung | What it adds |
 |---|---|
 | 0 | Nothing: the tools as above |
-| 1 (default) | All four tools loaded up front with tuned descriptions, and a short standing instruction to search before recursive grep |
+| 1 (default) | All four tools loaded up front with tuned descriptions, a short standing instruction to search before recursive grep, and a pointer to it in the descriptions of Claude Code's own Grep and Glob |
 | 2 | Ranked locations ride along with the first prompt of a session, when the engine is confident |
 | 3 | A recursive `grep`, `rg`, `git grep` or `find -name` that found nothing gets ranked locations appended |
 

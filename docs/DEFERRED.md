@@ -5,7 +5,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 ## 0. The A/B run that decides whether v1 ships (spends Claude plan usage)
 
 - **What:** `bench/ab/run.py` runs Claude Code headless on Loc-Bench issues with and without the plugin and compares tokens, tool calls and whether the right files were named (ADR-011). The design's gate: the best rung gives at least 20% fewer tokens or tool calls than no plugin, with no drop in hit rate.
-- **Why it waits:** every session spends your plan usage. A pilot was run to prove the harness and to measure cost and noise (figures in ADR-011). The full run is yours to size and start.
+- **Why it waits:** every session spends your plan usage. A pilot of eight sessions (about $1.85) proved the harness and showed the cost: about $0.30 a session on the mid model, so 60 sessions are about $20. It also showed that rung 1 as first written was followed in only two sessions of four, and that run-to-run differences of 20 to 40% occur without Aleph being called at all (ADR-011). The full run is yours to size and start.
 - **Decisions that are yours:**
   1. *The baseline.* The gate says "than no plugin"; the design's ladder calls L0 "the engine without the mod". `none` answers whether Aleph helps at all, L0 what the steering adds.
   2. *The shape.* Four rungs at 30 tasks each cannot read a 20% gate (run-to-run noise is about a factor of two; ADR-011). Two arms with 60 tasks, or 30 tasks twice, come closer for the same number of sessions.

@@ -230,6 +230,17 @@ test('L1: the engine tools are loaded up front with the tuned descriptions', run
   expect(other).toEqual({ description: 'theirs', isDeferred: true })
 })
 
+test('L1: Claude Code\'s own search tools point to the engine, and nothing else about them changes', rung('1'), async ($, on) => {
+  on('tool.describe', ($, e) => ({ description: e.description, isDeferred: e.isDeferred }))
+  const grep = await $.tool.describe({ tool: 'Grep', description: 'Search file contents.', isDeferred: false })
+  expect(grep.description.startsWith('Search file contents.')).toBe(true)
+  expect(grep.description).toContain('Aleph Zero `search` tool')
+  expect(grep.isDeferred).toBe(false)
+  expect((await $.tool.describe({ tool: 'Glob', description: 'Find files.', isDeferred: false })).description).toContain('Aleph Zero')
+  expect(await $.tool.describe({ tool: 'Read', description: 'Read a file.', isDeferred: false }))
+    .toEqual({ description: 'Read a file.', isDeferred: false })
+})
+
 test('L1: one section is added to the system prompt, the same text every time', rung('1'), async ($, on) => {
   const base = [{ id: 'lean_body', text: 'You are an agent.', scope: 'shared' }]
   on('prompt.compose', () => ({ sections: base }))
@@ -246,5 +257,7 @@ test('rung 0 changes neither the descriptions nor the prompt', rung('0'), async 
   on('prompt.compose', () => ({ sections: [{ id: 'lean_body', text: 'You are an agent.', scope: 'shared' }] }))
   expect(await $.tool.describe({ tool: SEARCH, description: 'old words', isDeferred: true }))
     .toEqual({ description: 'old words', isDeferred: true })
+  expect(await $.tool.describe({ tool: 'Grep', description: 'Search file contents.', isDeferred: false }))
+    .toEqual({ description: 'Search file contents.', isDeferred: false })
   expect((await $.prompt.compose(COMPOSE)).sections.length).toBe(1)
 })

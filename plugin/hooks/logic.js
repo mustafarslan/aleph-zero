@@ -16,6 +16,13 @@ export const DESCRIPTIONS = {
   status: 'Report what is indexed for this worktree and what is not searched (files outside a sparse checkout, submodules).',
 }
 
+// Added to the descriptions of Claude Code's own search tools: the place the agent is
+// looking at the moment it chooses grep. In the pilot of the measurement the standing
+// instruction alone was followed in one session of three.
+export const GREP_NOTE = '\n\nIn this repository, to locate where something is implemented or defined, call the Aleph Zero '
+  + '`search` tool (or `symbol` for a name) first: it answers by meaning and by name, with ranked locations. '
+  + 'Use this tool for an exact string whose every occurrence matters.'
+
 export const SECTION_ID = 'aleph_zero'
 export const SECTION = [
   '# Locating code in this repository',

@@ -7,7 +7,7 @@
 //   3  a recursive grep that found nothing gets ranked locations appended
 // The meter runs on every rung.
 import {
-  DESCRIPTIONS, ENGINE_TOOL, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
+  DESCRIPTIONS, ENGINE_TOOL, GREP_NOTE, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
   promptContext, searchPattern, worthAsking,
 } from './logic.js'
 
@@ -146,6 +146,12 @@ export function register(on, options) {
     if (rung < 1) return described
     const name = e.tool.slice(e.tool.lastIndexOf('__') + 2)
     return { description: DESCRIPTIONS[name] || described.description, isDeferred: false }
+  })
+
+  on('tool.describe', { tool: ['Grep', 'Glob'] }, async ($, e, next) => {
+    const described = await next(e)
+    if (rung < 1 || !described || typeof described.description !== 'string') return described
+    return { ...described, description: described.description + GREP_NOTE }
   })
 
   on('prompt.compose', async ($, e, next) => {

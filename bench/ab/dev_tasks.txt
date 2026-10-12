@@ -1,0 +1,7 @@
+# Tasks the steering was looked at on while it was being developed (the pilot, 2026-10-12).
+# They are left out of every later run, so the run that decides is made on tasks the
+# steering was not adjusted to.
+jax-ml__jax-25114
+getmoto__moto-8401
+huggingface__trl-2433
+pydantic__pydantic-10210
