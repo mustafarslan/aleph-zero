@@ -263,4 +263,7 @@ def text(answer: Answer) -> str:
     lines = about + [listed(hit) for hit in answer.decisions]
     if answer.vectors not in ("", "used"):
         lines.append(f"note: ranked by words alone ({answer.vectors})")
+    elif answer.vectors == "used" and all(hit.sources == ("vectors",) for hit in answer.decisions):
+        # With vectors every record has a place. Nearest is not governing: said when nearness is all there is.
+        lines.append("note: no record shares a word with the task; these are only the nearest in meaning")
     return "\n".join(lines)

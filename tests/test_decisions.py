@@ -442,3 +442,20 @@ def test_a_question_with_a_time_limit_does_not_wait_longer_than_that_for_the_rec
     assert all(hit.sources == ("words",) for hit in answer.decisions) and answer.decisions[0].number == 12
     assert "timeout_ms" in server.DECISIONS_TOOL["inputSchema"]["properties"]
     assert cli.main(["--cwd", str(repo.root), "decisions", "--timeout-ms", "40", "event", "bus"]) == 0
+
+
+def test_records_found_by_nearness_alone_are_said_to_be(repo, fake_worker, monkeypatch):
+    """With vectors every record has a place, also for a task that shares no word with any of them. The reader is
+    told when that is all there is: nearest is not the same as governing."""
+    from aleph_zero import decisions
+
+    engine = _with_worker(repo, fake_worker, monkeypatch)
+    nothing_shared = engine.decisions("zzzz qqqq")
+    assert nothing_shared.vectors == "used" and nothing_shared.decisions
+    assert all(hit.sources == ("vectors",) for hit in nothing_shared.decisions)
+    said = decisions.text(nothing_shared)
+    assert "no record shares a word with the task" in said and "nearest in meaning" in said
+    shared = decisions.text(engine.decisions("publish the order events on the bus"))
+    assert "no record shares a word" not in shared and "note:" not in shared
+    by_words = decisions.text(engine.decisions("zzzz qqqq", rrf_k=0))
+    assert by_words == "none of the 4 decision records shares a word with the task"     # words alone: as before
