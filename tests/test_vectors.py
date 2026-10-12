@@ -418,6 +418,7 @@ def test_the_blocks_of_free_rows_are_given_back_and_no_row_in_use_is_touched(tmp
     assert np.array_equal(after[in_use], before[in_use])                                # every row in use, to the bit
     assert np.array_equal(after[first:whole.start], before[first:whole.start])          # free, but beside rows in use: left
     assert np.array_equal(np.asarray(mapped)[in_use], before[in_use])                    # also through a mapping made before
+    assert not np.asarray(mapped)[whole.start:whole.stop].any()                         # and what was given back reads as nothing there too: no fault
     assert store.path.stat().st_size == before.nbytes                                    # no row moved, the length stays
     assert store.path.stat().st_blocks * 512 <= before.nbytes - found["bytes"] + 16 * 4096
     index._view_epoch = 2
