@@ -87,6 +87,12 @@ class View:
         return readers.reader(root).read(self.files[path], max_bytes)
 
 
+def forget_trees() -> None:
+    """Drop the remembered trees (a session over its memory share); they are read again when needed."""
+    _TREE_CACHE.clear()
+    _SPARSE_CACHE.clear()
+
+
 def _tree(root: Path, common_dir: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
     key = (str(common_dir), tree)
     if key not in _TREE_CACHE:

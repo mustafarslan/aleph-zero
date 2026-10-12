@@ -6,6 +6,7 @@ what the machine-wide budget in ADR-005 is written in.
 """
 from __future__ import annotations
 
+import ctypes
 import os
 import re
 import subprocess
@@ -34,10 +35,33 @@ def _smaps_rollup(pid: int) -> dict[str, int]:
     return fields
 
 
+_libproc = None
+
+
+def _footprint(pid: int) -> int | None:
+    """macOS: the kernel's own figure for a process's footprint, the number `footprint` and
+    Activity Monitor show. One system call, where the `footprint` tool takes 30 ms.
+    None when the call is refused (another user's process) or missing."""
+    global _libproc
+    try:
+        if _libproc is None:
+            _libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        # struct rusage_info_v0: a 16-byte uuid, then 64-bit fields; ri_phys_footprint is the eighth.
+        buffer = (ctypes.c_uint64 * 48)()
+        if _libproc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(0), ctypes.byref(buffer)) != 0:
+            return None
+        return int(buffer[2 + 7])
+    except (OSError, AttributeError):
+        return None
+
+
 def private_bytes(pid: int | None = None) -> int:
     """Memory owned by the process alone: clean file-backed pages are excluded."""
     pid = os.getpid() if pid is None else pid
     if sys.platform == "darwin":
+        found = _footprint(pid)
+        if found:
+            return found
         proc = subprocess.run(["/usr/bin/footprint", str(pid)], capture_output=True, text=True)
         match = _FOOTPRINT.search(proc.stdout)
         if match is None:

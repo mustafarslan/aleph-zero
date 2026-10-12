@@ -195,6 +195,12 @@ class Index:
         self._version = version
         return SyncReport(indexed, skipped, left, time.monotonic() - started, len(self._unreadable))
 
+    def release_memory(self) -> None:
+        """Drop what is rebuilt on demand: the words of every path, SQLite's cached pages."""
+        self._path_words = None
+        self._path_names = frozenset()
+        self.conn.pragma("shrink_memory")
+
     @property
     def unreadable(self) -> int:
         """Blobs of the view that git does not have."""

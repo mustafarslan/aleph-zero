@@ -190,6 +190,10 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 engine.resume()
             if result is not None:
                 send({"jsonrpc": "2.0", "id": ident, "result": result})
+            try:
+                engine.relieve()  # after the answer has gone out: over its share, the session gives memory back
+            except Exception:  # noqa: BLE001 - housekeeping must not end the thread that answers calls
+                pass
 
     worker = threading.Thread(target=work, name="aleph-calls", daemon=True)
     worker.start()

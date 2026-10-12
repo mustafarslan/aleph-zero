@@ -8,7 +8,9 @@ any number of worktrees and repositories.
 from __future__ import annotations
 
 import functools
+import gc
 import hashlib
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -17,10 +19,12 @@ from pathlib import Path
 
 import apsw
 
-from . import dense_policy, gitio, lang, render, sources, symbols
+from . import dense_policy, gitio, lang, memstat, render, sources, symbols
+from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
 from .indexer import Index, collect_if_due
+from .lang.parse import forget_parsers
 from .search import search as run_search
 from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db
 from .store import db as store_db
@@ -32,6 +36,9 @@ SHOWN_LIMIT = 5000       # texts remembered as shown before the memory starts ov
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
+# A session's share of the machine-wide budget (ADR-005): four sessions and the worker's
+# 490 MB worst case inside 1,024 MB. A session usually holds 40 to 60 MB.
+SESSION_MEMORY_MB = 130
 _LANGUAGES = {
     "py": ("python",), "ts": ("typescript", "tsx"), "typescript": ("typescript", "tsx"), "js": ("javascript",),
     "golang": ("go",), "rs": ("rust",), "c++": ("cpp",), "md": ("markdown",), "rst": ("prose",),
@@ -91,6 +98,7 @@ class Engine:
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._last: Path | None = None          # the worktree the running operation uses
+        self.memory_releases = 0
         self._shown: set[tuple] = set()
         self._stop = threading.Event()
 
@@ -106,6 +114,41 @@ class Engine:
         """Close every index connection. The engine can be used again; it reopens what it needs."""
         for root in list(self._indexes):
             self._forget(root)
+
+    def relieve(self) -> dict | None:
+        """Read this process's private memory; over the session's share, let go of what can
+        be rebuilt: connections to worktrees other than the one in use, SQLite's page cache,
+        the remembered trees and path words, the mapped vector file. Call between
+        operations, on the thread that runs them. Returns what happened, or None when
+        under the limit or when memory cannot be read here."""
+        limit = float(os.environ.get("ALEPH_SESSION_MEMORY_MB", SESSION_MEMORY_MB))
+        try:
+            before = memstat.private_bytes()
+        except memstat.MemstatError:
+            return None
+        if before <= limit * 1e6:
+            return None
+        for root in [root for root in self._indexes if root != self._last]:
+            self._forget(root)
+        for index in self._indexes.values():
+            index.release_memory()
+        for store in self._stores.values():
+            store.release_memory()
+        views.forget_trees()
+        forget_parsers()
+        self._shown.clear()
+        gc.collect()
+        self.memory_releases += 1
+        return {"before_mb": round(before / 1e6, 1), "after_mb": round(memstat.private_bytes() / 1e6, 1),
+                "limit_mb": limit}
+
+    def _memory(self) -> dict:
+        try:
+            used = round(memstat.private_bytes() / 1e6, 1)
+        except memstat.MemstatError:
+            used = None
+        return {"private_mb": used, "limit_mb": float(os.environ.get("ALEPH_SESSION_MEMORY_MB", SESSION_MEMORY_MB)),
+                "releases": self.memory_releases}
 
     def _forget(self, root: Path) -> None:
         index = self._indexes.pop(root, None)
@@ -218,6 +261,7 @@ class Engine:
             "main_language": next(iter(shares), None),
             "language_share": {name: round(share, 3) for name, share in shares.items()},
             "vectors": self._vector_status(index, view),
+            "memory": self._memory(),
         }
 
     # ---- text for an agent, with the session's memory ----------------------------------------

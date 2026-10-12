@@ -127,6 +127,12 @@ class VectorStore:
         found = self.conn.execute("SELECT writes FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
         return found[0][0] if found else 0
 
+    def release_memory(self) -> None:
+        """Forget the mapping and the remembered row lists; the next search makes them again."""
+        self._map = None
+        self._cache = None
+        self._coverage = None
+
     def rows(self) -> dict[str, int]:
         """The file in numbers: its rows, how many belong to no chunk, and its size."""
         found = self.conn.execute("SELECT next_row FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()

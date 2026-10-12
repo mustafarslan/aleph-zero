@@ -18,6 +18,12 @@ def parser(profile: LanguageProfile) -> Parser:
     return found
 
 
+def forget_parsers() -> None:
+    """Drop the parsers (a session over its memory share). They are made again on first use;
+    the grammars themselves stay loaded."""
+    _PARSERS.clear()
+
+
 def language(profile: LanguageProfile) -> Language:
     found = _LANGUAGES.get(profile.grammar)
     if found is None:
