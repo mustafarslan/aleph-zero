@@ -24,6 +24,26 @@ Useful options for `search`: `--kind code|docs`, `--glob "src/api/*"`, `--lang p
 The server offers four tools. `search` is always loaded; `symbol`, `outline` and
 `status` load on demand. Each takes `cwd`, so one server answers for any worktree.
 
+### As a plugin, with steering
+
+    claude --plugin-dir /absolute/path/to/aleph-zero/plugin
+
+The plugin starts the same server and adds a mod that steers Claude Code towards it.
+How far it goes is one option, the rung (`/config`, or `pluginConfigs` in settings):
+
+| Rung | What it adds |
+|---|---|
+| 0 | Nothing: the tools as above |
+| 1 (default) | All four tools loaded up front with tuned descriptions, and a short standing instruction to search before recursive grep |
+| 2 | Ranked locations ride along with the first prompt of a session, when the engine is confident |
+| 3 | A recursive `grep`, `rg`, `git grep` or `find -name` that found nothing gets ranked locations appended |
+
+Rungs 2 and 3 have the mod itself ask the engine, which Claude Code allows only if the
+engine's tools are allowed: add `"mcp__plugin_aleph-zero_aleph__*"` to `permissions.allow`.
+`/aleph check` says whether the mod can reach the engine; `/aleph stats` shows the session's
+tokens, tool calls and how often search was used before grep (`/aleph stats last` for the
+session before). Which rungs pay is being measured (ADR-011); until then the default is 1.
+
 ## Documentation that lives in another repository
 
     uv run aleph source add ../team-docs --name docs        # read in place, follows that clone
