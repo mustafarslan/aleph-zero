@@ -39,19 +39,31 @@ from aleph_zero import indexers  # noqa: E402
 LIMIT_MB = 2048
 TIME_LIMIT_SECONDS = 1800      # per corpus, the install of dependencies included
 HEAT_LIMIT = 100.0
-_NPM = ["--offline", "--ignore-scripts", "--no-audit", "--no-fund"]
-# corpus -> (language, the offline install of its dependencies or None, the indexer's program, its arguments;
-# {out} is where the index goes). In the order they are run: the quick ones first.
+_NPM = ["--ignore-scripts", "--no-audit", "--no-fund"]
+# corpus -> (language, the install of its dependencies or None). The indexer's command is the product's own
+# (`aleph_zero.indexers.INDEXERS`). In the order they are run: the quick ones first.
 RUNS = {
-    "python-httpx": ("python", None, "scip-python", ["index", ".", "--project-name", "httpx", "--output", "{out}"]),
-    "go-kit": ("go", ["go", "mod", "download"], "scip-go", ["index", "--output", "{out}"]),
-    "typescript-nest": ("typescript", ["npm", "ci", *_NPM], "scip-typescript", ["index", "--output", "{out}"]),
-    "javascript-eslint": ("javascript", ["npm", "install", "--no-package-lock", *_NPM], "scip-typescript",
-                          ["index", "--infer-tsconfig", "--output", "{out}"]),
-    "rust-ripgrep": ("rust", ["cargo", "fetch", "--offline", "--locked"], "rust-analyzer", ["scip", ".", "--output", "{out}"]),
-    "java-spring-petclinic": ("java", None, "scip-java", ["index", "--build-tool", "maven", "--output", "{out}", "--",
-                                                          "--offline", "--batch-mode", "clean", "verify", "-DskipTests"]),
+    "python-httpx": ("python", None),
+    "go-kit": ("go", ["go", "mod", "download"]),
+    "typescript-nest": ("typescript", ["npm", "ci", *_NPM]),
+    "javascript-eslint": ("javascript", ["npm", "install", "--no-package-lock", *_NPM]),
+    "rust-ripgrep": ("rust", ["cargo", "fetch", "--locked"]),
+    "java-spring-petclinic": ("java", None),
 }
+_OFFLINE_FLAG = {"npm": "--offline", "cargo": "--offline"}     # go is told by its environment
+
+
+def install(command: list[str], cwd: Path, network: bool) -> dict:
+    """Install a corpus's dependencies. Offline, it is watched like the indexer (it is what a run would
+    cost). With the network (the owner's permission of 2026-10-12, for this and nothing else) it is only
+    timed: its memory is the package manager's, and `aleph scip run` never installs."""
+    if not network:
+        flag = _OFFLINE_FLAG.get(command[0])
+        return measure([*command, flag] if flag else command, cwd)
+    started = time.monotonic()
+    done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=TIME_LIMIT_SECONDS)
+    return {"peak_mb": 0.0, "seconds": round(time.monotonic() - started, 1), "exit": done.returncode, "stopped": "",
+            "with_network": True, "last_lines": (done.stdout + done.stderr).strip().splitlines()[-6:]}
 
 
 def version(program: str) -> str:
@@ -77,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path, help="holds <corpus>/ for each corpus")
     parser.add_argument("--corpus", action="append", choices=list(RUNS))
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--install-with-network", action="store_true",
+                        help="install dependencies with the network (not measured), then run the indexer offline")
     args = parser.parse_args(argv)
     report = {}
 
@@ -86,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             args.out.write_text(json.dumps(report, indent=2) + "\n")
 
     for name in [each for each in RUNS if not args.corpus or each in args.corpus]:
-        language, install, program, arguments = RUNS[name]
+        language, installing = RUNS[name]
+        program, arguments = indexers.INDEXERS[language].program, indexers.INDEXERS[language].arguments
         source = args.workdir / name
         if shutil.which(program) is None or not source.is_dir():
             report[name] = {"language": language, "indexer": program, "ran": False,
@@ -98,14 +113,15 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory(prefix="aleph-scip-") as scratch:
             copy, out = Path(scratch) / name, Path(scratch) / "index.scip"
             subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(source), str(copy)], check=True)
-            command = [program, *[part.format(out=out) for part in arguments]]
+            command = [program, *[part.format(out=out, name=name.split("-", 1)[1]) for part in arguments]]
             row = {"language": language, "indexer": program, "indexer_version": version(program), "corpus_commit": commit,
-                   "command": " ".join(command), "install": " ".join(install) if install else None, "limit_mb": LIMIT_MB}
-            prepared = measure(install, copy) if install else None
+                   "command": " ".join(command), "install": " ".join(installing) if installing else None, "limit_mb": LIMIT_MB}
+            prepared = install(installing, copy, args.install_with_network) if installing else None
             if prepared is not None and (prepared["exit"] != 0 or prepared["stopped"]):
                 report[name] = {**row, "ran": False, "install_run": prepared, "finished_offline": False, "under_limit": False,
-                                "why": "its dependencies could not be installed offline: not measured here"}
-                print(f"{name:24} {program:16} not measured: `{row['install']}` did not finish offline "
+                                "why": "its dependencies could not be installed: not measured here"}
+                print(f"{name:24} {program:16} not measured: `{row['install']}` did not finish "
+                      f"{'with the network' if args.install_with_network else 'offline'} "
                       f"(exit {prepared['exit']}, {prepared['seconds']} s)", flush=True)
                 for line in prepared["last_lines"]:
                     print("    ", line[:200])
@@ -115,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             found = measure(command, copy, time_limit=TIME_LIMIT_SECONDS - spent)
             size = out.stat().st_size if out.is_file() else 0
         finished = found["exit"] == 0 and size > 0 and not found["stopped"]
-        peak = max(found["peak_mb"], prepared["peak_mb"] if prepared else 0.0)
+        peak = max(found["peak_mb"], prepared["peak_mb"] if prepared else 0.0)     # a networked install counts 0: see `install`
         report[name] = {**row, "ran": True, **found, "install_run": prepared, "peak_mb_with_install": peak,
                         "seconds_with_install": round(found["seconds"] + spent, 1), "index_mb": round(size / 1e6, 1),
                         "finished_offline": finished, "under_limit": finished and peak <= LIMIT_MB}
