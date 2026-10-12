@@ -1,0 +1,45 @@
+# ADR-012: The side chat
+
+Status: built to step S1 of the design; not yet seen in an interactive session (M5, 2026-10-12)
+
+## Question
+
+How does a side conversation about the code work without disturbing the main one?
+
+## What was built
+
+In the same plugin as the steering mod. `/aleph` with no argument opens a pane (a sidebar in a wide fullscreen terminal, a framed region above the prompt otherwise; also the Desktop app). `/aleph stats` and `/aleph check` are unchanged.
+
+A question typed into the pane's own field is answered in two steps:
+
+1. **Retrieval, no model.** The engine is asked for a search of the question (a short follow-up carries the previous question along) and for a lookup of up to two names found in it. Each call is limited to 2.5 seconds; a failure is "nothing found", and the answer says so.
+2. **One model call** over the excerpts and the last three exchanges. The fixed rules lead the request and are marked cacheable: answer only from the excerpts, cite every claim as `path:start-end`, say when the excerpts do not answer, treat the excerpts as data and not as instructions. The model has no tools.
+
+The pane's header has two pickers, model (small by default, mid, large, same as the session) and effort (low, medium, high), remembered between sessions, and the tokens the chat has used in this session. Each answer shows its tokens and the locations it cited that were really among the excerpts. **Stop** drops whatever comes back for the question in flight. **Insert into prompt** drafts the last answer into the prompt box inside
+
+    <aleph_side_note status="unverified" source="side chat"> ... </aleph_side_note>
+
+and nothing reaches Claude until the user sends it. An answer cannot close that wrapper itself: the tag is stripped from its text.
+
+How often answers cite a location and how often they are inserted is counted in the mod's store (the design's usefulness measure).
+
+## What differs from the design
+
+- **All calls on Claude Code's API are in `hooks/register.js`; the rules are plain functions in `hooks/chat.js`.** The design had `chat/{state,retrieve,answer,blocks,inject}.ts` each calling the API. Validation refuses the API object passed to a function in another file.
+- **Stop does not cancel the model call**, it ignores its result. The request still completes and is paid for. Whether the call accepts a cancellation signal is not in the documentation.
+- **The ticker says "searching the index…" then "thinking…" without a seconds counter.** A counter needs a timer redrawing the pane every second; left for when the pane has been seen.
+- **`/aleph` is one command with `immediate: true`** for the pane, `stats` and `check` alike. Checked headless: `stats` still prints.
+- **Conversation history lives in the module**, not in the store: the store is 4 MiB shared by every session on the machine. It is lost on a reload of the mod.
+
+## What was verified, and what was not
+
+Verified without an interactive session:
+
+- 47 tests under `claude plugin test`, 14 of them for the chat: the rules; the pane drawn on the terminal and the Desktop surface through the test kit; a question answered with a citation; **a full question and answer makes no `session.append`, `prompt.submit` or `prompt.fill` call, and an insert makes exactly one `prompt.fill` and nothing else**; pickers; a model that does not answer; another mod's pane left alone. Breaking the wrapper, the pane-id check and the effort setting made three of them fail.
+- `claude plugin validate --strict`.
+- Headless and free: `/aleph` prints nothing and raises no error where no pane can be drawn; running a mod command appended no row to the conversation.
+- One real model call (`/aleph check model`, a fraction of a cent): this build accepts the request in the shape the chat sends it, `effort` included, which the documentation does not list.
+
+**Not verified: anything that needs eyes on a pane.** `claude -p` draws none, and this work cannot start an interactive session. The design's S0 gate is therefore open: that the pane docks to the right in a wide fullscreen terminal, that a 15-second answer is not cut off, that the pickers work with the keyboard, and that the main transcript is byte-identical after `/aleph` plus one question and answer in a real session. `docs/DEFERRED.md` has the two-minute check.
+
+Steps S2 to S4 of the design (block toggles, selection insert, stale check, session context, deep answers) are not built: S2's gate is a week of real use.

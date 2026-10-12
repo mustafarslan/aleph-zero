@@ -40,6 +40,10 @@ How far it goes is one option, the rung (`/config`, or `pluginConfigs` in settin
 
 The pointer in Grep and Glob has its own switch (`grep_pointer`: on or off).
 
+`/aleph` with no argument opens a side chat about the repository: questions are answered from
+the index with `path:line` citations, by a model and effort you pick in the pane, and nothing
+reaches the main conversation unless you press Insert (ADR-012).
+
 Rungs 2 and 3 have the mod itself ask the engine, which Claude Code allows only if the
 engine's tools are allowed: add `"mcp__plugin_aleph-zero_aleph__*"` to `permissions.allow`.
 `/aleph check` says whether the mod can reach the engine; `/aleph stats` shows the session's

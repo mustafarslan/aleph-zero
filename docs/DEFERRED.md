@@ -20,6 +20,13 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Also yours, one minute:** run `claude --plugin-dir plugin` once in this repository, interactively. Claude Code then writes the type declarations for your build into `plugin/.claude-plugin/types/`; the mod was written without them (ADR-011). And allow the engine's tools (`"mcp__plugin_aleph-zero_aleph__*"` in `permissions.allow`), or rungs 2 and 3 add nothing.
 - **Status:** harness and pilot done; full run not started.
 
+## 0b. Two minutes with the side chat (it has never been seen)
+
+- **What:** the side chat (ADR-012) was built and tested without an interactive session; nobody has looked at its pane.
+- **How:** in this repository run `claude --plugin-dir plugin`, then `/aleph`. Check: the pane opens (to the right in a wide fullscreen terminal, above the prompt otherwise); a question typed into it is answered with `path:line` citations; the model and effort pickers work from the keyboard; **Insert into prompt** drafts a wrapped note into the prompt box and sends nothing; and after closing the pane the transcript shows no trace of the question or the answer. `/aleph check model` says whether the chat can call the model at all.
+- **If the pane's command leaves a row in the transcript:** the design's fallback is a button in the band above the prompt instead of a command. Headless, a mod command appended no row.
+- **After that:** a week of real use decides whether the next steps are worth building (block toggles, inserting a selection, a stale check before insert). The mod counts how often answers cite a location and how often they are inserted.
+
 ## 1. The long GPU run for Benchmark C (decides whether semantic search is on by default)
 
 - **What:** embed the large Loc-Bench repositories so the Python benchmark has about 400 questions instead of 235. This decides Python only (see 1b for the other languages). The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.

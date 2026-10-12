@@ -8,8 +8,9 @@
 // The meter runs on every rung.
 import {
   DESCRIPTIONS, ENGINE_TOOL, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  promptContext, readSearch, worthAsking,
+  promptContext, readSearch, resultText, worthAsking,
 } from './logic.js'
+import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 
 const SERVER = 'aleph'
 const ENGINE_MS = 400   // what the engine is given to answer
@@ -48,6 +49,87 @@ async function ask($, tool, args) {
   return Promise.race([answered, waited])
 }
 
+// ---- the side chat ---------------------------------------------------------------------------
+// A conversation about the code beside the main one. Nothing here reaches the main
+// conversation except an explicit insert, which only drafts text into the prompt box.
+
+const CHAT_SETTINGS = 'aleph-zero.chat-settings'   // the pickers, kept between sessions
+const CHAT_USE = 'aleph-zero.chat-use'             // how often answers were cited and inserted
+const CHAT_ENGINE_MS = 2500                        // the chat may wait longer for the engine than a hook may
+const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: DEFAULTS.effort, tokens: 0, loaded: false, note: '' }
+
+// One engine call for the chat: as in `ask`, never longer than its limit, and null for any failure.
+async function lookup($, tool, args) {
+  const answered = reach($, tool, { ...args, format: 'json', timeout_ms: CHAT_ENGINE_MS - 500 }).catch(() => null)
+  const waited = $.clock.sleep(CHAT_ENGINE_MS).then(() => null)
+  return Promise.race([answered, waited])
+}
+
+function symbolsOf(answer) {
+  try {
+    const parsed = JSON.parse(resultText(answer))
+    return Array.isArray(parsed.symbols) ? parsed.symbols : []
+  } catch {
+    return []
+  }
+}
+
+async function count($, field) {
+  // Read just before writing: every session on the machine shares the store.
+  const kept = (await $.store.get(CHAT_USE)) || {}
+  await $.store.set(CHAT_USE, { ...kept, [field]: (kept[field] || 0) + 1 })
+}
+
+// One question: retrieval through the engine (no model), then one model call over the excerpts.
+async function answerQuestion($, question) {
+  const serial = chat.serial + 1
+  chat.serial = serial
+  const turn = { question, answer: '', cited: [], tokens: 0, state: 'searching', seconds: 0 }
+  chat.turns.push(turn)
+  chat.busy = turn
+  chat.note = ''
+  $.ui.invalidate('ui.render')
+  const previous = chat.turns.length > 1 ? chat.turns[chat.turns.length - 2].question : null
+  const wanted = plan(question, previous)
+  const [searched, ...named] = await Promise.all([
+    lookup($, 'search', { query: wanted.search, k: 6, detail: 'full' }),
+    ...wanted.symbols.map((name) => lookup($, 'symbol', { name, k: 3 })),
+  ])
+  if (chat.serial !== serial) return  // stopped, or a newer question took over
+  const found = excerpts(hitsOf(searched), named.flatMap(symbolsOf))
+  turn.state = 'thinking'
+  $.ui.invalidate('ui.render')
+  const asked = request(question, found, chat.turns.slice(0, -1).filter((earlier) => earlier.state === 'answered'))
+  const model = chat.model === 'session' ? await $.session.model() : chat.model
+  let reply
+  try {
+    reply = await $.model.complete({
+      model,
+      effort: chat.effort,
+      prompt: [{ text: asked.rules, cache: true }, { text: asked.body }],
+      maxTokens: 1200,
+      timeoutMs: 90000,
+    })
+  } catch (error) {
+    reply = { isAnswered: false, reason: error && error.message ? error.message : String(error) }
+  }
+  if (chat.serial !== serial) return
+  turn.tokens = tokensOf(reply.usage)
+  chat.tokens += turn.tokens
+  if (reply.isAnswered) {
+    turn.answer = reply.text
+    turn.cited = citations(reply.text, found)
+    turn.state = 'answered'
+    await count($, 'answers')
+    if (turn.cited.length) await count($, 'cited')
+  } else {
+    turn.answer = 'No answer: ' + (reply.reason || 'the model did not answer') + (searched === null ? ' (the engine did not answer either; `/aleph check` says why)' : '')
+    turn.state = 'failed'
+  }
+  chat.busy = null
+  $.ui.invalidate('ui.render')
+}
+
 function add(into, counted) {
   if (!counted) return
   into.requests += 1
@@ -83,17 +165,52 @@ export function register(on, options) {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'aleph',
-      description: 'Aleph Zero: `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
-      argumentHint: 'stats [last] | check',
+      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
+      argumentHint: '[stats [last] | check [model]]',
+      immediate: true,
     })
     return next(e)
   })
 
   on('command.run', { command: 'aleph' }, async ($, e) => {
+    const args = String(e.args || '').trim()
+    if (!args || args === 'chat') {
+      // Open the side chat. Nothing is printed, and nothing enters the conversation.
+      if (!chat.loaded) {
+        const kept = await $.store.get(CHAT_SETTINGS)
+        if (kept && typeof kept === 'object') {
+          if (MODELS.some((choice) => choice.value === kept.model)) chat.model = kept.model
+          if (EFFORTS.some((choice) => choice.value === kept.effort)) chat.effort = kept.effort
+        }
+        chat.loaded = true
+      }
+      await $.ui.open({ id: PANE, title: 'Aleph side chat', focus: true, closeOnEscape: true, columns: 64 })
+      return {}
+    }
     if (/\blast\b/.test(String(e.args || ''))) {
       // The session before this one (any session on this machine): a headless run cannot be asked afterwards.
       const kept = await $.store.get(LAST)
       return { text: kept ? 'last session · ' + report(kept.rung, kept.meter) : 'no session has been recorded yet' }
+    }
+    if (/\bcheck\s+model\b/.test(args)) {
+      // One small real request in the shape the side chat sends (it costs a fraction of a cent):
+      // says whether this build accepts it, without printing anything the model wrote.
+      try {
+        const reply = await $.model.complete({
+          model: chat.model === 'session' ? await $.session.model() : chat.model,
+          effort: chat.effort,
+          prompt: [{ text: 'Reply with the single word ok.', cache: true }, { text: 'Question: are you there?' }],
+          maxTokens: 20,
+          timeoutMs: 30000,
+        })
+        return {
+          text: reply.isAnswered
+            ? 'the side chat can call the model (' + chat.model + ', effort ' + chat.effort + ', ' + tokensOf(reply.usage) + ' tokens)'
+            : 'the model did not answer the side chat: ' + reply.reason,
+        }
+      } catch (error) {
+        return { text: 'the side chat\'s request was refused: ' + (error && error.message ? error.message : String(error)) }
+      }
     }
     if (/\bcheck\b/.test(String(e.args || ''))) {
       // Can the mod reach the engine at all? Says what came back, or why nothing did.
@@ -110,6 +227,88 @@ export function register(on, options) {
       }
     }
     return { text: report(rung, meter) }
+  })
+
+  // ---- the side chat's pane ------------------------------------------------------------------
+
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE) return next(e)
+    const { Box, Text, Button, Input, Select, Markdown } = $.ui.resolve(e)
+    const last = chat.turns.length ? chat.turns[chat.turns.length - 1] : null
+    const header = Box({
+      flexDirection: 'row',
+      columnGap: 2,
+      children: [
+        Select({
+          key: 'model', label: 'model', options: MODELS, value: chat.model,
+          onSelect: async (value) => {
+            chat.model = value
+            $.ui.invalidate('ui.render')
+            await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
+          },
+        }),
+        Select({
+          key: 'effort', label: 'effort', options: EFFORTS, value: chat.effort,
+          onSelect: async (value) => {
+            chat.effort = value
+            $.ui.invalidate('ui.render')
+            await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
+          },
+        }),
+        Text({ dimColor: true, children: [chat.tokens + ' tokens this session'] }),
+      ],
+    })
+    const turns = chat.turns.slice(-4).flatMap((turn) => [
+      Text({ bold: true, children: ['> ' + turn.question] }),
+      turn.state === 'searching' ? Text({ dimColor: true, children: ['searching the index…'] })
+        : turn.state === 'thinking' ? Text({ dimColor: true, children: ['thinking…'] })
+          : Markdown({ text: turn.answer }),
+      ...(turn.state === 'answered'
+        ? [Text({ dimColor: true, children: [turn.tokens + ' tokens · ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited')] })]
+        : []),
+    ])
+    const controls = []
+    if (chat.busy) {
+      controls.push(Button({
+        key: 'stop', label: 'Stop', hotkey: 's', plain: true,
+        onPress: () => {
+          chat.serial += 1  // whatever comes back for the question in flight is dropped
+          chat.busy.state = 'failed'
+          chat.busy.answer = 'Stopped.'
+          chat.busy = null
+          $.ui.invalidate('ui.render')
+        },
+      }))
+    } else if (last && last.state === 'answered') {
+      controls.push(Button({
+        key: 'insert', label: 'Insert into prompt', hotkey: 'i', plain: true,
+        onPress: async () => {
+          // Drafts the note into the prompt box. Nothing reaches Claude until the user sends it.
+          const filled = await $.prompt.fill({ text: note(last.answer, last.cited), mode: 'insert' })
+          chat.note = filled && filled.isFilled === false ? 'The prompt box could not be filled.' : 'Drafted into the prompt box; edit or send it.'
+          await count($, 'inserted')
+          $.ui.invalidate('ui.render')
+        },
+      }))
+    }
+    return Box({
+      flexDirection: 'column',
+      rowGap: 1,
+      children: [
+        header,
+        ...turns,
+        ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
+        ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
+        Input({
+          key: 'question', label: 'Ask', placeholder: 'about this repository, then Enter', value: '', submitLabel: 'ask', autoFocus: true,
+          onSubmit: async (value) => {
+            const question = String(value || '').trim()
+            if (!question || chat.busy) return
+            await answerQuestion($, question)
+          },
+        }),
+      ],
+    })
   })
 
   // ---- the meter ------------------------------------------------------------------------------
