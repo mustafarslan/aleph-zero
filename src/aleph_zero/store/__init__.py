@@ -1,4 +1,6 @@
 """The index database."""
-from .db import SCHEMA_VERSION, StoreError, index_file, index_path, open_db, transaction
+from .db import (DAMAGED, SCHEMA_VERSION, StoreError, index_file, index_note, index_path, open_db, state_dir,
+                 state_reason, transaction)
 
-__all__ = ["SCHEMA_VERSION", "StoreError", "index_file", "index_path", "open_db", "transaction"]
+__all__ = ["DAMAGED", "SCHEMA_VERSION", "StoreError", "index_file", "index_note", "index_path", "open_db",
+           "state_dir", "state_reason", "transaction"]

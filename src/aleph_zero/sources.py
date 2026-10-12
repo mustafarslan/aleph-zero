@@ -5,7 +5,7 @@ path is read in place and follows that clone's working tree. One added by URL is
 explicit choice to use the network: it is cloned bare into the user's cache directory
 and is as fresh as the last `aleph source refresh`. A query never touches the network.
 
-The list is kept beside the index, in `<git-common-dir>/aleph-zero/sources.json`, so
+The list is kept beside the index (`store.state_dir`), so
 every worktree of a repository sees the same sources.
 """
 from __future__ import annotations
@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import gitio
+from .store import state_dir
 from .view import Mount, tree_files, worktree_files
 
 CLONE_SECONDS = 300
@@ -44,7 +45,7 @@ class Source:
 
 
 def _file(common_dir: Path) -> Path:
-    return common_dir / "aleph-zero" / "sources.json"
+    return state_dir(common_dir) / "sources.json"
 
 
 def _load(common_dir: Path) -> list[Source]:

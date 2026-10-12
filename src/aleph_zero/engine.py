@@ -7,6 +7,7 @@ any number of worktrees and repositories.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import threading
 import time
@@ -21,7 +22,8 @@ from . import outline as outlines
 from .chunking import CHUNKER_VERSION
 from .indexer import Index
 from .search import search as run_search
-from .store import SCHEMA_VERSION, index_file, open_db
+from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db
+from .store import db as store_db
 from .view import View, build_view
 
 SYNC_SECONDS = 5.0       # how long a query without a time limit may spend indexing first
@@ -64,6 +66,19 @@ def deadline(conn: apsw.Connection, until: float | None, stop: threading.Event |
         conn.set_progress_handler(None)
 
 
+def _rebuilding(method):
+    """Run an operation; if the index file turns out to be damaged, set it aside, start a
+    new index and run the operation once more. The index is a cache of what git holds."""
+    @functools.wraps(method)
+    def call(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except DAMAGED:
+            self._discard_damaged()
+            return method(self, *args, **kwargs)
+    return call
+
+
 class Engine:
     def __init__(self, default_cwd: Path | None = None, dense: bool | None = None) -> None:
         self.default_cwd = Path(default_cwd) if default_cwd is not None else Path.cwd()
@@ -74,6 +89,8 @@ class Engine:
         self._decisions: dict[int, tuple] = {}
         self._embedder = None  # the connection to the worker used for queries
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
+        self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
+        self._last: Path | None = None          # the worktree the running operation uses
         self._shown: set[tuple] = set()
         self._stop = threading.Event()
 
@@ -85,8 +102,35 @@ class Engine:
         """Forget a cancellation, before the next operation."""
         self._stop.clear()
 
+    def close(self) -> None:
+        """Close every index connection. The engine can be used again; it reopens what it needs."""
+        for root in list(self._indexes):
+            self._forget(root)
+
+    def _forget(self, root: Path) -> None:
+        index = self._indexes.pop(root, None)
+        self._stores.pop(root, None)
+        self._files.pop(root, None)
+        if index is not None:
+            self._decisions.pop(id(index), None)
+            try:
+                index.conn.close()
+            except apsw.Error:
+                pass
+
+    def _discard_damaged(self) -> None:
+        """The index file used by the running operation is damaged: drop every connection
+        to it and move it out of the way, unless another session already has."""
+        if self._last is None or self._last not in self._files:
+            raise
+        path, opened = self._files[self._last]
+        for root in [root for root, (file, _) in self._files.items() if file == path]:
+            self._forget(root)
+        store_db.set_aside(path, opened)
+
     # ---- the four operations --------------------------------------------------------------
 
+    @_rebuilding
     def search(self, query: str, k: int = 8, kind: str = "any", path_glob: str | None = None,
                lang: str | None = None, cwd: Path | str | None = None,
                timeout_ms: int | None = None) -> render.Answer:
@@ -110,6 +154,7 @@ class Engine:
             raise Cancelled
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
 
+    @_rebuilding
     def embed(self, cwd: Path | str | None = None, budget_seconds: float = float("inf"), batch: int | None = None,
               stop=None, progress=None, sync_seconds: float = SYNC_SECONDS):
         """Give the chunks of this worktree their vectors (slow: about a hundred a second).
@@ -132,6 +177,7 @@ class Engine:
         finally:
             pool.close()
 
+    @_rebuilding
     def symbol(self, name: str, k: int = 20, cwd: Path | str | None = None,
                timeout_ms: int | None = None) -> SymbolAnswer:
         started, until = _limits(timeout_ms)
@@ -156,6 +202,7 @@ class Engine:
         with gitio.until(_limits(timeout_ms)[1]):
             return outlines.of(self._view(cwd), path)
 
+    @_rebuilding
     def status(self, cwd: Path | str | None = None, timeout_ms: int | None = None) -> dict:
         """Never indexes. Raises gitio.GitTimeout when the worktree cannot be read within the limit."""
         with gitio.until(_limits(timeout_ms)[1]):
@@ -172,6 +219,7 @@ class Engine:
             "root": str(view.root), "files_in_view": len(view.files), "dirty": len(view.dirty), "pending": pending,
             "chunks_in_view": counts["chunks_in_view"], "symbols_in_view": counts["symbols_in_view"],
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
+            "index_note": index_note(view.common_dir),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(), "untracked_cache": gitio.untracked_cache_enabled(view.root),
             "sources": linked, **({"sources_error": problem} if problem else {}),
@@ -259,9 +307,12 @@ class Engine:
                                                                store.search(index, vector, limit, scoped)]
 
     def _index(self, view: View) -> Index:
+        self._last = view.root
         index = self._indexes.get(view.root)
         if index is None:
-            index = self._indexes[view.root] = Index(open_db(index_file(view.common_dir)))
+            path = index_file(view.common_dir)
+            index = self._indexes[view.root] = Index(open_db(path))
+            self._files[view.root] = (path, store_db.inode(path))
         return index
 
     def _ready(self, cwd: Path | str | None, started: float, until: float | None,

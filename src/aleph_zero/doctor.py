@@ -11,7 +11,7 @@ import apsw
 
 from . import gitio, lang
 from .lang import parse
-from .store import SCHEMA_VERSION, index_file
+from .store import SCHEMA_VERSION, index_file, state_reason
 from .store.db import MIN_SQLITE
 from .view import build_view
 
@@ -31,6 +31,8 @@ def check(cwd: Path) -> list[Row]:
         rows.append(Row("note", "repository", "not inside a git repository: nothing to check for this directory"))
         return rows
     rows.append(_index(index_file(info.common_dir)))
+    if state_reason(info.common_dir):
+        rows.append(Row("note", "index location", f"the index is kept in the cache directory: {state_reason(info.common_dir)}"))
     rows.append(_untracked_cache(info.root))
     return rows
 
@@ -93,9 +95,9 @@ def _index(path: Path) -> Row:
         finally:
             conn.close()
     except apsw.Error as exc:
-        return Row("FAIL", "index", f"index: {path} cannot be read ({type(exc).__name__}); it is a cache: delete it and it is rebuilt")
+        return Row("FAIL", "index", f"index: {path} cannot be read ({type(exc).__name__}); it is a cache: the next search sets it aside and builds a new one")
     if verdict != "ok":
-        return Row("FAIL", "index", f"index: {path} is damaged ({verdict}); it is a cache: delete it and it is rebuilt")
+        return Row("FAIL", "index", f"index: {path} is damaged ({verdict}); it is a cache: the next search sets it aside and builds a new one")
     age = "" if version == SCHEMA_VERSION else f", schema {version} (this build writes {SCHEMA_VERSION} and will rebuild it)"
     return Row("ok", "index", f"index: {path} ({path.stat().st_size / 1e6:.1f} MB{age})")
 

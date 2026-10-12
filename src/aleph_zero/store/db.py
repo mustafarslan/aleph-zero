@@ -1,6 +1,10 @@
 """Opening the index: one SQLite database per repository, shared by all its worktrees."""
 from __future__ import annotations
 
+import ctypes
+import hashlib
+import os
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,8 +22,145 @@ class StoreError(RuntimeError):
     """The index cannot be opened as it is."""
 
 
+# Raised by SQLite when the file is not a database any more: overwritten, cut short, or with
+# damaged pages. The index is a cache, so the answer is to set the file aside and build again.
+DAMAGED = (apsw.CorruptError, apsw.NotADBError)
+_NETWORK_FILESYSTEMS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "afs", "ceph", "glusterfs", "lustre",
+                        "ncpfs", "fuse.sshfs"}
+_decided: dict[Path, tuple[Path, str]] = {}
+_notes: dict[Path, str] = {}
+
+
+def is_local(path: Path) -> bool:
+    """False on a network filesystem. SQLite's write-ahead log shares memory between
+    processes through a mapped file, which network filesystems do not give reliably."""
+    try:
+        if sys.platform == "darwin":
+            class Statfs(ctypes.Structure):
+                _fields_ = [("f_bsize", ctypes.c_uint32), ("f_iosize", ctypes.c_int32),
+                            ("f_blocks", ctypes.c_uint64), ("f_bfree", ctypes.c_uint64),
+                            ("f_bavail", ctypes.c_uint64), ("f_files", ctypes.c_uint64),
+                            ("f_ffree", ctypes.c_uint64), ("f_fsid", ctypes.c_int32 * 2),
+                            ("f_owner", ctypes.c_uint32), ("f_type", ctypes.c_uint32),
+                            ("f_flags", ctypes.c_uint32), ("f_fssubtype", ctypes.c_uint32),
+                            ("f_fstypename", ctypes.c_char * 16), ("f_mntonname", ctypes.c_char * 1024),
+                            ("f_mntfromname", ctypes.c_char * 1024), ("f_flags_ext", ctypes.c_uint32),
+                            ("f_reserved", ctypes.c_uint32 * 7)]
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            call = getattr(libc, "statfs$INODE64", None) or libc.statfs
+            found = Statfs()
+            if call(os.fsencode(path), ctypes.byref(found)) != 0:
+                return True
+            return bool(found.f_flags & 0x1000)  # MNT_LOCAL
+        best, kind = "", ""
+        target = os.path.realpath(path)
+        with open("/proc/self/mountinfo", encoding="utf-8", errors="replace") as mounts:
+            for line in mounts:
+                left, _, right = line.partition(" - ")
+                mount_point = left.split()[4]
+                if (target == mount_point or target.startswith(mount_point.rstrip("/") + "/")) \
+                        and len(mount_point) >= len(best):
+                    best, kind = mount_point, right.split()[0]
+        return kind not in _NETWORK_FILESYSTEMS
+    except (OSError, AttributeError, IndexError):
+        return True  # no way to tell: behave as before
+
+
+def _writable(directory: Path) -> bool:
+    """Whether files can be created in `directory`, creating it if its parent allows."""
+    probe = directory / f".probe-{os.getpid()}"
+    try:
+        directory.mkdir(exist_ok=True)
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _cache_dir(common_dir: Path) -> Path:
+    base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    key = hashlib.sha256(str(common_dir).encode()).hexdigest()[:16]
+    return base / "aleph-zero" / "index" / key
+
+
+def _decide(common_dir: Path) -> tuple[Path, str]:
+    beside = common_dir / "aleph-zero"
+    if not is_local(common_dir):
+        reason = "the repository is on a network filesystem, where the index cannot be shared safely"
+    elif _writable(beside):
+        return beside, ""
+    else:
+        reason = f"{common_dir} cannot be written"
+    cache = _cache_dir(common_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+    label = cache / "repository"
+    if not label.exists():
+        label.write_text(f"{common_dir}\n")  # so a person can tell whose state this is
+    return cache, reason
+
+
+def state_dir(common_dir: Path) -> Path:
+    """Where everything Aleph keeps for a repository lives: beside git's own data, shared by
+    all its worktrees, or in the user's cache directory when that is not possible. Decided
+    once per process: every session of one user comes to the same answer, since it depends
+    only on the repository's directory."""
+    found = _decided.get(common_dir)
+    if found is None:
+        found = _decided[common_dir] = _decide(common_dir)
+    return found[0]
+
+
+def state_reason(common_dir: Path) -> str:
+    """Why the state is not beside git's data; empty when it is."""
+    state_dir(common_dir)
+    return _decided[common_dir][1]
+
+
+def forget_state_dirs() -> None:
+    """Decide again on next use (tests, and a session that outlives a permission change)."""
+    _decided.clear()
+    _notes.clear()
+
+
 def index_file(common_dir: Path) -> Path:
-    return common_dir / "aleph-zero" / "index.db"
+    return state_dir(common_dir) / "index.db"
+
+
+def index_note(common_dir: Path) -> str:
+    """What a person should know about this index: why it is where it is, and whether it
+    was rebuilt after damage in this session."""
+    parts = [state_reason(common_dir), _notes.get(index_file(common_dir), "")]
+    return "; ".join(part for part in parts if part)
+
+
+def inode(path: Path) -> int:
+    try:
+        return path.stat().st_ino
+    except OSError:
+        return 0
+
+
+def set_aside(path: Path, opened: int) -> bool:
+    """Move a damaged index file out of the way, keeping it for a look. `opened` is the
+    inode this session had open: if the file at `path` is a different one by now, another
+    session has already rebuilt it and nothing is moved. Returns whether it moved."""
+    if opened and inode(path) != opened:
+        return False
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.damaged-{stamp}-{os.getpid()}")
+    try:
+        os.replace(path, target)
+    except FileNotFoundError:
+        return False
+    for extra in ("-wal", "-shm"):  # they belong to the damaged file and would be replayed into a new one
+        try:
+            os.replace(str(path) + extra, str(target) + extra)
+        except FileNotFoundError:
+            pass
+    _notes[path] = f"rebuilt on {time.strftime('%Y-%m-%d %H:%M')}: the index file was damaged and is kept as {target.name}"
+    return True
 
 
 def index_path(cwd: Path) -> Path:
@@ -64,6 +205,17 @@ def _drop_everything(conn: apsw.Connection) -> None:
 
 
 def open_db(path: Path) -> apsw.Connection:
+    """Open the index, creating it if needed. A file that is not a database any more is set
+    aside and a new index started."""
+    before = inode(path)
+    try:
+        return _open(path)
+    except DAMAGED:
+        set_aside(path, before)  # not moved if another session has replaced it meanwhile
+        return _open(path)
+
+
+def _open(path: Path) -> apsw.Connection:
     version = tuple(int(part) for part in apsw.sqlite_lib_version().split("."))
     if version < MIN_SQLITE:
         raise StoreError(f"SQLite {apsw.sqlite_lib_version()} is older than {'.'.join(map(str, MIN_SQLITE))}")

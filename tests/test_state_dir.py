@@ -1,0 +1,135 @@
+"""Where a repository's state lives, and what happens when the index file is damaged."""
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from aleph_zero import sources, store
+from aleph_zero.engine import Engine
+from aleph_zero.store import db
+
+
+@pytest.fixture(autouse=True)
+def _fresh_decisions():
+    db.forget_state_dirs()
+    yield
+    db.forget_state_dirs()
+
+
+@pytest.fixture
+def read_only(repo):
+    """The repository with a git directory nothing can be created in."""
+    git_dir = repo.root / ".git"
+    git_dir.chmod(git_dir.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+    yield repo
+    git_dir.chmod(git_dir.stat().st_mode | stat.S_IWUSR)
+
+
+def test_state_lives_beside_gits_data_by_default(repo):
+    common = repo.root / ".git"
+    assert store.state_dir(common) == common / "aleph-zero"
+    assert store.index_file(common) == common / "aleph-zero" / "index.db"
+    assert store.state_reason(common) == ""
+
+
+def test_a_git_directory_that_cannot_be_written_sends_state_to_the_cache(read_only, tmp_path):
+    common = read_only.root / ".git"
+    where = store.state_dir(common)
+    cache = Path(os.environ["XDG_CACHE_HOME"])
+    assert cache in where.parents and where.is_dir()
+    assert "cannot be written" in store.state_reason(common)
+    assert (where / "repository").read_text().strip() == str(common)  # a person can tell whose state this is
+
+
+def test_search_sources_and_status_work_with_a_read_only_git_directory(read_only, make_repo, tmp_path):
+    other = make_repo(tmp_path / "other")
+    other.write("notes.md", "# Notes\n\nThe zeppelin protocol is documented here.\n")
+    other.commit()
+    engine = Engine(read_only.root)
+    assert [hit.path for hit in engine.search("refresh token").hits][0] == "src/auth/token_store.py"
+    sources.add(read_only.root, str(other.root), name="other")
+    assert [hit.path for hit in engine.search("zeppelin protocol").hits] == ["other:notes.md"]
+    status = engine.status()
+    assert Path(os.environ["XDG_CACHE_HOME"]) in Path(status["index"]).parents
+    assert "cannot be written" in status["index_note"]
+    assert not (read_only.root / ".git" / "aleph-zero").exists()
+
+
+def test_a_filesystem_that_is_not_local_sends_state_to_the_cache(repo, monkeypatch):
+    monkeypatch.setattr(db, "is_local", lambda path: False)
+    common = repo.root / ".git"
+    assert Path(os.environ["XDG_CACHE_HOME"]) in store.state_dir(common).parents
+    assert "network" in store.state_reason(common)
+    assert not (common / "aleph-zero").exists()
+
+
+def test_this_machines_disk_counts_as_local(tmp_path):
+    assert db.is_local(tmp_path) is True
+
+
+def test_another_process_decides_the_same_place(read_only):
+    common = read_only.root / ".git"
+    ours = store.state_dir(common)
+    theirs = subprocess.run(
+        [sys.executable, "-c", "import sys; from aleph_zero import store; from pathlib import Path; "
+                               "print(store.state_dir(Path(sys.argv[1])))", str(common)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert theirs == str(ours)
+
+
+def test_two_repositories_never_share_a_cache_directory(read_only, make_repo, tmp_path, monkeypatch):
+    other = make_repo(tmp_path / "second")
+    monkeypatch.setattr(db, "is_local", lambda path: False)
+    assert store.state_dir(read_only.root / ".git") != store.state_dir(other.root / ".git")
+
+
+@pytest.mark.parametrize("damage", ["garbage", "truncated", "middle"])
+def test_a_damaged_index_is_set_aside_and_rebuilt(repo, damage):
+    engine = Engine(repo.root)
+    assert engine.search("refresh token").hits
+    index = Path(engine.status()["index"])
+    engine.close()
+    size = index.stat().st_size
+    for extra in ("-wal", "-shm"):
+        Path(str(index) + extra).unlink(missing_ok=True)
+    if damage == "garbage":
+        index.write_bytes(b"this is not a database at all\n" * 400)
+    elif damage == "truncated":
+        os.truncate(index, 5000)
+    else:
+        with open(index, "r+b") as handle:  # the header survives; pages in the middle do not
+            handle.seek(8192)
+            handle.write(os.urandom(size - 8192 - 4096))
+    engine = Engine(repo.root)
+    answer = engine.search("refresh token")
+    assert [hit.path for hit in answer.hits][0] == "src/auth/token_store.py"
+    assert "rebuilt" in engine.status()["index_note"]
+    kept = [path.name for path in index.parent.iterdir() if path.name.startswith("index.db.damaged")]
+    assert kept, "the damaged file is kept for a look, not deleted"
+
+
+def test_a_fresh_index_made_by_another_session_is_not_set_aside(repo):
+    """Two sessions meet the same damaged file. The second must not throw away the index
+    the first has just rebuilt."""
+    first = Engine(repo.root)
+    first.search("refresh token")
+    index = Path(first.status()["index"])
+    second = Engine(repo.root)
+    second.search("refresh token")          # both hold the file open
+    for engine in (first, second):
+        conn = next(iter(engine._indexes.values())).conn
+        conn.pragma("wal_checkpoint", "TRUNCATE")   # everything is in the main file
+        conn.pragma("shrink_memory")                # and nothing is answered from memory
+    with open(index, "r+b") as handle:
+        handle.seek(8192)
+        handle.write(os.urandom(index.stat().st_size - 8192 - 4096))
+    assert first.search("render invoice").hits        # first rebuilds
+    rebuilt = index.stat().st_ino
+    assert second.search("render invoice").hits       # second reopens what first made
+    assert index.stat().st_ino == rebuilt
+    aside = [p for p in index.parent.iterdir() if p.name.startswith("index.db.damaged") and p.suffix not in ("", ".db")
+             and not p.name.endswith(("-wal", "-shm"))]
+    assert len(aside) == 1

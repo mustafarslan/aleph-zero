@@ -32,7 +32,7 @@ def test_a_damaged_index_fails_the_check(repo, capsys):
         extra.unlink(missing_ok=True)
     index.write_bytes(b"this is not a database" * 100)
     code, out = run(capsys, "--cwd", str(repo.root), "doctor")
-    assert code == 1 and "FAIL  index:" in out and "delete it" in out
+    assert code == 1 and "FAIL  index:" in out and "sets it aside" in out
 
 
 def test_outside_a_repository_the_tools_are_still_checked(tmp_path, capsys):
@@ -63,3 +63,15 @@ def test_fetching_grammars_is_one_flag(repo, capsys, monkeypatch):
 def test_the_report_is_also_available_as_data(repo):
     report = doctor.check(repo.root)
     assert {row.level for row in report} <= {"ok", "note", "FAIL"} and any(row.name == "git" for row in report)
+
+
+def test_doctor_says_when_the_index_is_not_beside_gits_data(repo, monkeypatch):
+    from aleph_zero.store import db
+
+    db.forget_state_dirs()
+    monkeypatch.setattr(db, "is_local", lambda path: False)
+    try:
+        rows = {row.name: row for row in doctor.check(repo.root)}
+    finally:
+        db.forget_state_dirs()
+    assert rows["index location"].level == "note" and "network" in rows["index location"].detail
