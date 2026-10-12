@@ -139,3 +139,21 @@ def test_an_import_only_language_runs_when_its_owner_names_the_memory_it_may_tak
     (repo.root / "tsconfig.json").write_text("{\"mine\": true}")
     Engine(repo.root).scip_run("python")
     assert (repo.root / "tsconfig.json").read_text() == "{\"mine\": true}"   # one that was the owner's is not
+
+
+def test_naming_less_memory_than_the_default_does_not_unlock_an_indexer_measured_above_it(project, tmp_path, monkeypatch):
+    import dataclasses
+
+    repo, made = project
+    over = dataclasses.replace(stand_in(tmp_path, f"import shutil, sys\nshutil.copy({str(made)!r}, sys.argv[-1])\n"),
+                               on_demand=False, why_not="it was measured at 2,295 MB on eslint, over the limit")
+    monkeypatch.setitem(indexers.INDEXERS, "python", over)
+    monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", "1024")              # set to lower the ceiling, not to ask for this
+    with pytest.raises(indexers.CannotRun, match="above 2048"):
+        Engine(repo.root).scip_run("python")
+    monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", "3072")
+    engine = Engine(repo.root)
+    engine.search("own")                                            # indexed: python is the worktree's main language
+    with pytest.raises(indexers.CannotRun, match="--lang python"):  # and never because it happens to be the main language
+        engine.scip_run()
+    assert Engine(repo.root).scip_run("python")["imported"]["documents"] == 4

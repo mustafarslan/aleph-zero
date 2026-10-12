@@ -132,7 +132,8 @@ answered by the resolver again until a new index is imported; the answer says so
 `aleph scip run` runs the indexer for the languages where its memory was measured under
 the limit (Python, Go, Rust, Java with Maven), watches it, and stops it above 2,048 MB
 (`ALEPH_SCIP_MEMORY_MB`). JavaScript and TypeScript need more than that (2.3 GB on eslint)
-and run only when you name the limit yourself: `ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. For Java and Rust this compiles the project, in a copy of its
+and run only when you name both the language and a limit above the default:
+`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. For Java and Rust this compiles the project, in a copy of its
 files: your worktree is not touched, and it is only ever done when you ask. Aleph never
 installs an indexer; `aleph doctor` says which are present.
 
@@ -149,7 +150,12 @@ path (Express, FastAPI, Flask, Go's net/http, chi, gin, Spring), where a router 
 a model or a table (SQLAlchemy, Django, Alembic, JPA, Prisma), an environment name, a
 Celery task, a queue, a gRPC service. A route's path is as written in its file; a mount's
 prefix is listed as its own fact and not added to it. The first question about a worktree
-reads every file once (a couple of seconds); searching never pays for it.
+reads every file once (2.5 s on a repository of 1,300 files); searching never pays for it.
+A call like `x.get("/users", handler)` is read as a route only when `x` is known for a router
+(the file makes it one, or it is called `app`, `router`, `apiRouter` and the like): a lookup
+reported as an endpoint would be the worse mistake. Express, FastAPI, Prisma, Alembic, Celery,
+Go's net/http and gRPC were measured on real repositories; the other readers are covered by
+tests only (ADR-003).
 
 `aleph decisions` ranks decision records (numbered Markdown files in a directory such as
 `docs/adr`) as whole documents for a task, and answers in a few hundred tokens. With

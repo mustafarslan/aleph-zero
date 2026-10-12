@@ -414,6 +414,7 @@ class Engine:
         while it ran (an index of files that have moved on is not stamped as if it were of these)."""
         view = self._view(cwd)
         index = self._index(view)
+        named = language is not None
         if language is None:
             index.sync(view, budget_seconds=0.0)
             language = next(iter(index.languages()), None)
@@ -423,7 +424,7 @@ class Engine:
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
             report = indexers.run(view.root, language, out, limit_mb, time_limit,
-                                  files=[path for path in view.files if path not in view.mounted])
+                                  files=[path for path in view.files if path not in view.mounted], named=named)
             now = self._view(cwd)
             moved = [path for path, oid in view.files.items() if now.files.get(path) != oid]
             if moved:

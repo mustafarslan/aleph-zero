@@ -52,7 +52,7 @@ The protocol and the limit were written into the plan before the first run; thre
 | JavaScript | scip-typescript 0.4.0 | eslint | 2,295 MB | 19 s | 55.6 MB | over the limit: not run by default; run once the owner names a limit |
 | TypeScript | scip-typescript 0.4.0 | nest | not measured | | | not run by default; run once the owner names a limit |
 
-**Revised 2026-10-12.** `ALEPH_SCIP_MEMORY_MB` was written here as the way to raise the limit for a run, but a language measured over the default limit was refused before the limit was read. It now runs once that variable names the memory the indexer may take, watched and stopped above it like the others (eslint: 17.6 s, peak 2,332 MB of 3,072 allowed, 1,470 documents). A `tsconfig.json` the indexer infers at the root of the worktree is removed again; one that was already there is left. The default limit did not move.
+**Revised 2026-10-12.** `ALEPH_SCIP_MEMORY_MB` was written here as the way to raise the limit for a run, but a language measured over the default limit was refused before the limit was read. It now runs when it is asked for twice over: the language is named (`--lang`; it is never picked as the worktree's main language) and that variable names a limit above the default (a variable set to lower the ceiling on a small machine asks for nothing). It is then watched and stopped above the limit like the others (eslint: 17.6 s, peak 2,332 MB of 3,072 allowed, 1,470 documents). A `tsconfig.json` the indexer infers at the root of the worktree is removed again; one that was already there is left. The default limit did not move.
 
 How these came about, in order:
 

@@ -7,6 +7,17 @@ only looks like one is left out: a commented-out route is not syntax, a request 
 HTTP client is not a route served, a `get("/x")` with nothing to handle it is a lookup. A path
 built at run time has no literal to read and is not reported.
 
+Whether `x.get("/users", y)` registers a route or looks something up is not in the syntax of
+the call. It is read as a route only when `x` is known for a router: the file makes it one
+(`express()`, `Router()`, `new Hono()`; `FastAPI()`, `APIRouter()`, `Blueprint()`), or its name
+says so (`app`, `router`, `server`, `apiRouter`, `users_router`, `bp`). A router under another
+name that reaches the file as an argument is missed: a route not reported is a smaller error
+than a key-value lookup reported as an endpoint. In Go, where the methods are `Get` and `Post`
+on any type, a route needs something that can be a handler after the path, and a holder that
+is not named for a client or a store. `publish` and `subscribe` are read as a broker's only on
+an object named for one (`redis`, `nats`, `mqtt`, `kafka`, `amqp`): an event bus inside the
+process has the same methods.
+
 A route's path is as written where it is registered, with the prefix its own file gives the
 router. A prefix given where a router is mounted (`app.use("/api", router)`,
 `include_router(router, prefix="/x")`) is a fact of its own, a `mount`: which routes pass
@@ -41,8 +52,17 @@ class Fact:
 
 _ECMA = frozenset({"typescript", "tsx", "javascript"})
 _METHODS = {"get": "GET", "post": "POST", "put": "PUT", "delete": "DELETE", "patch": "PATCH", "head": "HEAD", "options": "OPTIONS"}
-# Objects whose `.get("/x", …)` is a request made, not a route served.
-_CLIENTS = frozenset({"axios", "http", "https", "got", "request", "superagent", "ky", "fetch", "client", "api", "$", "jQuery", "session", "requests", "httpx"})
+# What a router is called when nothing in the file says what it is, and what makes one.
+_ROUTER_ENDINGS = ("app", "router", "routes", "server")
+_PY_ROUTER_ENDINGS = ("app", "router", "routes", "bp", "blueprint", "api")
+_ECMA_ROUTER_MAKERS = frozenset({"express", "Router", "fastify", "Hono", "Koa", "polka", "createServer"})
+_PY_ROUTER_MAKERS = frozenset({"FastAPI", "APIRouter", "Flask", "Blueprint", "Sanic", "Starlette", "Quart", "APIFlask", "Bottle"})
+# In Go any type may have a `Get(string, …)`: holders that are a client or a store by their name.
+_GO_NOT_ROUTERS = frozenset({"http", "client", "kv", "cache", "store", "conn", "db", "redis", "rdb", "consul", "etcd", "zk", "s3"})
+_GO_HANDLERS = frozenset({"identifier", "selector_expression", "func_literal", "call_expression"})
+_BROKER = re.compile(r"redis|nats|mqtt|kafka|amqp|rabbit|broker", re.IGNORECASE)
+_BROKER_ONLY = frozenset({"publish", "subscribe", "psubscribe"})     # methods an in-process event bus has too
+_OS_IMPORT = re.compile(rb"^[ \t]*from[ \t]+os[ \t]+import[ \t]+\(?([^\n)]*)", re.MULTILINE)
 _GO_ROUTES = {"HandleFunc": "ANY", "Handle": "ANY", "Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH",
               "GET": "GET", "POST": "POST", "PUT": "PUT", "DELETE": "DELETE", "PATCH": "PATCH"}
 _SPRING = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE", "PatchMapping": "PATCH",
@@ -56,7 +76,7 @@ _ENVIRONMENT = ("process.env", "import.meta.env")
 _WRITTEN_LIMIT = 80
 _GO_PATTERN = re.compile(r"^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/.*)$")
 _KINDS = {
-    "ecma": ("call_expression", "member_expression", "subscript_expression"),
+    "ecma": ("call_expression", "new_expression", "member_expression", "subscript_expression"),
     "python": ("decorator", "call", "subscript", "class_definition", "assignment", "comparison_operator"),
     "go": ("call_expression",),
     "rust": ("call_expression",),
@@ -73,7 +93,9 @@ def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Fact]:
     nodes = sorted(query.find(profile.name, tree, kinds), key=lambda node: (node.start_byte, -node.end_byte))
     found: list[tuple[int, Fact]] = []
     read = {"ecma": _ecma, "python": _python, "go": _go, "rust": _rust, "java": _java}[family]
-    state: dict = {}
+    # `from os import environ, getenv`: only then is a bare `environ` the process's (a WSGI handler has one too).
+    state: dict = {"os_names": {name.split(b" as ")[-1].strip().decode("utf-8", "replace")
+                                for found in _OS_IMPORT.findall(data) for name in found.split(b",")} if family == "python" else set()}
     for node in nodes:
         for fact in read(node, state):
             found.append((node.start_byte, fact))
@@ -149,8 +171,8 @@ def _literal(node: Node | None) -> str | None:
 
 def _path(written: str) -> str:
     """A route's path as every framework's reader would compare it: `:id` and `<id>` as `{id}`."""
-    written = re.sub(r":([A-Za-z_]\w*)", r"{\1}", written)
-    return re.sub(r"<(?:\w+:)?(\w+)>", r"{\1}", written)
+    written = re.sub(r"<(?:\w+:)?(\w+)>", r"{\1}", written)       # first: Flask's `<int:id>` has a colon of its own
+    return re.sub(r":([A-Za-z_]\w*)", r"{\1}", written)
 
 
 def _join(prefix: str, path: str) -> str:
@@ -182,16 +204,23 @@ def _assigned(node: Node, kinds: tuple[str, ...]) -> bool:
 
 def _ecma(node: Node, state: dict) -> list[Fact]:
     kind = node.type
-    if kind == "call_expression":
-        function, arguments = node.child_by_field_name("function"), node.child_by_field_name("arguments")
-        if function is None or arguments is None or function.type != "member_expression":
+    if kind in ("call_expression", "new_expression"):
+        function, arguments = node.child_by_field_name("function" if kind == "call_expression" else "constructor"), node.child_by_field_name("arguments")
+        if function is not None and _text(function).rsplit(".", 1)[-1] in _ECMA_ROUTER_MAKERS:
+            made = node.parent        # const admin = express.Router()
+            named = made.child_by_field_name("name" if made.type == "variable_declarator" else "left") \
+                if made is not None and made.type in ("variable_declarator", "assignment_expression") else None
+            if named is not None and named.type == "identifier":
+                state.setdefault("routers", set()).add(_text(named))
+        if kind == "new_expression" or function is None or arguments is None or function.type != "member_expression":
             return []
         holder, called = function.child_by_field_name("object"), _text(function.child_by_field_name("property"))
         method = _METHODS.get(called)
         given = [argument for argument in arguments.named_children if argument.type != "comment"]
         if called in _QUEUE_CALLS:
-            return _queue(node, called, _literal(given[0]) if given else None)
-        if holder is None or holder.type != "identifier" or _text(holder) in _CLIENTS or len(given) < 2:
+            return _queue(node, called, _literal(given[0]) if given else None, _text(holder))
+        if holder is None or holder.type != "identifier" or len(given) < 2 \
+                or not (_text(holder) in state.get("routers", ()) or _text(holder).lower().endswith(_ROUTER_ENDINGS)):
             return []
         path = _literal(given[0])
         if called == "use" and path is not None and path.startswith("/"):
@@ -212,7 +241,9 @@ def _ecma(node: Node, state: dict) -> list[Fact]:
     return [Fact("env", name, _line(node), detail)] if _ENV_NAME.match(name) else []
 
 
-def _queue(node: Node, called: str, name: str | None) -> list[Fact]:
+def _queue(node: Node, called: str, name: str | None, holder: str = "") -> list[Fact]:
+    if called in _BROKER_ONLY and not _BROKER.search(holder):
+        return []
     return [Fact("queue", name, _line(node), called)] if name and _QUEUE_NAME.match(name) else []
 
 
@@ -249,8 +280,8 @@ def _python(node: Node, state: dict) -> list[Fact]:
     if kind == "assignment":        # router = APIRouter(prefix="/workspaces"); bp = Blueprint("x", __name__, url_prefix="/x")
         left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
         if left is not None and left.type == "identifier" and right is not None and right.type == "call":
-            made = _text(right.child_by_field_name("function"))
-            if made.endswith(("APIRouter", "Blueprint")):
+            if _text(right.child_by_field_name("function")).rsplit(".", 1)[-1] in _PY_ROUTER_MAKERS:
+                state.setdefault("routers", set()).add(_text(left))
                 prefix = _keyword(right, "prefix") or _keyword(right, "url_prefix")
                 if prefix:
                     state.setdefault("prefixes", {})[_text(left)] = prefix
@@ -258,14 +289,14 @@ def _python(node: Node, state: dict) -> list[Fact]:
     if kind == "decorator":
         return _python_decorator(node, state)
     if kind == "call":
-        function = _text(node.child_by_field_name("function"))
+        function = _of_os(state, _text(node.child_by_field_name("function")))
         first = _first_argument(node)
-        if function in ("os.getenv", "getenv", "os.environ.get", "environ.get") and first and _ENV_NAME.match(first):
+        if function in ("os.getenv", "os.environ.get") and first and _ENV_NAME.match(first):
             return [Fact("env", first, _line(node), "read")]
-        if function in ("os.environ.setdefault", "environ.setdefault", "os.putenv") and first and _ENV_NAME.match(first):
+        if function in ("os.environ.setdefault", "os.putenv") and first and _ENV_NAME.match(first):
             return [Fact("env", first, _line(node), "set")]
         if "." in function and function.rsplit(".", 1)[-1] in _QUEUE_CALLS:
-            return _queue(node, function.rsplit(".", 1)[-1], first)
+            return _queue(node, function.rsplit(".", 1)[-1], first, function.rsplit(".", 1)[0])
         if function.endswith((".include_router", ".register_blueprint")):
             prefix = _keyword(node, "prefix") or _keyword(node, "url_prefix")
             arguments = node.child_by_field_name("arguments")
@@ -276,18 +307,23 @@ def _python(node: Node, state: dict) -> list[Fact]:
             return [Fact("table", first, _line(node), "alembic")]
         return []
     if kind == "subscript":
-        if _text(node.child_by_field_name("value")) in ("os.environ", "environ"):
+        if _of_os(state, _text(node.child_by_field_name("value"))) == "os.environ":
             name = _literal(node.child_by_field_name("subscript")) or ""
             detail = "set" if _assigned(node, ("assignment", "augmented_assignment")) else "read"
             return [Fact("env", name, _line(node), detail)] if _ENV_NAME.match(name) else []
         return []
     if kind == "comparison_operator":       # "NAME" in os.environ
         sides = node.named_children
-        if len(sides) == 2 and _text(sides[1]) in ("os.environ", "environ") and any(child.type in ("in", "not in") for child in node.children):
+        if len(sides) == 2 and _of_os(state, _text(sides[1])) == "os.environ" and any(child.type in ("in", "not in") for child in node.children):
             name = _literal(sides[0]) or ""
             return [Fact("env", name, _line(node), "read")] if _ENV_NAME.match(name) else []
         return []
     return _python_class(node)
+
+
+def _of_os(state: dict, written: str) -> str:
+    """`environ.get` as `os.environ.get` when the file imports `environ` from `os`; anything else as written."""
+    return "os." + written if written.split(".", 1)[0] in state["os_names"] else written
 
 
 def _keyword(call: Node, name: str) -> str | None:
@@ -323,6 +359,8 @@ def _python_decorator(node: Node, state: dict) -> list[Fact]:
     path = _first_argument(written)
     if path is None or not (path.startswith("/") or path == ""):
         return []
+    if holder not in state.get("routers", ()) and not holder.rsplit(".", 1)[-1].lower().endswith(_PY_ROUTER_ENDINGS):
+        return []
     full = _path(_join(state.get("prefixes", {}).get(holder, ""), path))
     if attribute in _METHODS:
         return [Fact("route", f"{_METHODS[attribute]} {full}", _line(node), "fastapi")]
@@ -345,7 +383,7 @@ def _python_class(node: Node) -> list[Fact]:
             member = member.named_children[0]
         if member.type == "assignment":
             members.append(member)
-    if "BaseSettings" in bases:
+    if re.search(r"\bBaseSettings\b", bases):
         for member in members:
             left = member.child_by_field_name("left")
             field = _text(left)
@@ -382,6 +420,8 @@ def _go(node: Node, state: dict) -> list[Fact]:
     method = _GO_ROUTES.get(called)
     if method is None or len(given) < 2:
         return []
+    if method != "ANY" and (given[1].type not in _GO_HANDLERS or _text(function.child_by_field_name("operand")) in _GO_NOT_ROUTERS):
+        return []       # `kv.Get("/foo", nil)`, `http.Post("/api", "application/json", body)`: a lookup, a request
     patterned = _GO_PATTERN.match(first)       # Go 1.22: "POST /v1/jobs"
     if patterned:
         method, first = patterned.group(1), patterned.group(2)

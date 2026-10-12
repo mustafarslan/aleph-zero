@@ -256,8 +256,9 @@ def test_queues_named_where_work_is_handed_over():
     )
     assert found("a.py", python) == [("task", "audio.transcribe", 1, "celery"), ("queue", "audio", 1, "celery"),
                                      ("queue", "audio_jobs", 4, "blpop")]
-    assert found("a.ts", "await redis.lpush('audio_jobs', JSON.stringify(job));\nstream.subscribe((value) => use(value));\nbus.publish(\"orders.created\", order);\n") == [
-        ("queue", "audio_jobs", 1, "lpush"), ("queue", "orders.created", 3, "publish")]
+    assert found("a.ts", "await redis.lpush('audio_jobs', JSON.stringify(job));\nstream.subscribe((value) => use(value));\nredisPublisher.publish(\"orders.created\", order);\n"
+                          "pubsub.publish(\"userLoggedIn\", data);\nemitter.subscribe(\"tick\", fn);\nsocket.subscribe(\"room:1\");\n") == [
+        ("queue", "audio_jobs", 1, "lpush"), ("queue", "orders.created", 3, "publish")]       # an event bus inside the process is not a broker
 
 
 OXN_YAML = '''# what may depend on what
@@ -294,3 +295,41 @@ def test_layers_and_contracts_of_an_oxn_yaml_are_facts():
     assert found("oxn.yaml", block) == [("contract", "a", 2, "layered: x > y"), ("contract", "b", 7, "layered: y > z")]
     assert found("oxn.yaml", "layers: {a: [b]}\n: : :\n\t- x\n") == []          # a form the reader does not know states nothing
     assert found("config/other.yaml", OXN_YAML) == []
+
+
+def test_flask_converters_are_written_as_any_other_parameter():
+    source = ('bp = Blueprint("u", __name__)\n@bp.route("/u/<int:uid>/<path:rest>")\ndef u(uid, rest): ...\n'
+              '@bp.route("/t/<uuid:id>", methods=["POST"])\ndef t(id): ...\n')
+    assert found("a.py", source) == [("route", "GET /u/{uid}/{rest}", 2, "flask"), ("route", "POST /t/{id}", 4, "flask")]
+
+
+def test_a_lookup_or_a_request_is_not_a_route():
+    script = (
+        'const svc = axios.create();\n'
+        'svc.get("/users", cfg);\n'
+        'backend.delete("/users/1", opts);\n'
+        'sftp.get("/remote", "/local");\n'
+        'map.get("/k", fallback);\n'
+        'apiClient.get("/v1/things", requestConfig);\n'
+        'const admin = express.Router();\n'
+        'admin.get("/admin", list);\n'
+        'function mount(apiRouter, server) { apiRouter.post("/x", make); server.put("/y", put); }\n'
+        'const site = new Hono();\n'
+        'site.get("/z", show);\n'
+    )
+    assert found("a.js", script) == [("route", "GET /admin", 8, "express"), ("route", "POST /x", 9, "express"),
+                                     ("route", "PUT /y", 9, "express"), ("route", "GET /z", 11, "express")]
+    go = ('package a\nfunc f() {\n\tkv.Get("/foo", nil)\n\tconn.Get("/path", true)\n\tcache.Get("/k", 1)\n'
+          '\thttp.Post("/api", "application/json", body)\n\tclient.Get("/x", opts)\n\tr.Get("/jobs", h.list)\n\tv1.GET("/users", listUsers)\n}\n')
+    assert found("a.go", go) == [("route", "GET /jobs", 8, "go"), ("route", "GET /users", 9, "go")]
+    python = ('@client.get("/x")\ndef a(): ...\n@cache.get("/x")\ndef b(): ...\n@retry.route("/y")\ndef c(): ...\n'
+              'service = FastAPI()\n@service.get("/ok")\ndef d(): ...\n@users_router.post("/u")\ndef e(): ...\n')
+    assert found("a.py", python) == [("route", "GET /ok", 8, "fastapi"), ("route", "POST /u", 10, "fastapi")]
+
+
+def test_a_mapping_called_environ_is_not_the_process_environment():
+    wsgi = 'def application(environ, start_response):\n    path = environ.get("PATH_INFO")\n    host = environ["HTTP_HOST"]\n'
+    assert found("a.py", wsgi) == []
+    assert found("a.py", 'from os import environ, getenv\nA = environ["A_KEY"]\nB = getenv("B_KEY")\n') == [
+        ("env", "A_KEY", 2, "read"), ("env", "B_KEY", 3, "read")]
+    assert found("a.py", "class T(MyBaseSettingsBase):\n    z: int = 1\n") == []

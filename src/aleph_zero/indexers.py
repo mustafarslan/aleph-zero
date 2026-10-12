@@ -203,7 +203,7 @@ def watch(command: list[str], cwd: Path, limit: float | None = None, time_limit:
 
 
 def run(root: Path, language: str, out: Path, limit: float | None = None, time_limit: float | None = None,
-        files: list[str] | None = None) -> dict:
+        files: list[str] | None = None, named: bool = True) -> dict:
     """Run the indexer for `language` on the worktree at `root`, writing to `out`. An indexer that runs
     the project's build works on a copy of `files` (the paths of the view), so that nothing it cleans
     or writes touches the worktree. Raises CannotRun when the language is import-only, the indexer is
@@ -211,11 +211,15 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
     indexer = INDEXERS.get(language)
     if indexer is None:
         raise CannotRun(f"no SCIP indexer is known for {language}")
-    if not indexer.on_demand and limit is None and os.environ.get("ALEPH_SCIP_MEMORY_MB") is None:
-        raise CannotRun(f"{language} is import-only by default: {indexer.program} is not run here because {indexer.why_not}. "
-                        f"To run it anyway, say how much memory it may take, and it is stopped above that: "
-                        f"`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang {language}`. "
-                        f"Or run it elsewhere (CI) and keep the result with `aleph scip import`")
+    if not indexer.on_demand:
+        # Asked for twice over: the language by its name (`named`: not picked as the worktree's main one), and a
+        # limit above the default. A variable set to lower the ceiling on a small machine asks for nothing.
+        allowed = limit if limit is not None else limit_mb() if os.environ.get("ALEPH_SCIP_MEMORY_MB") is not None else 0.0
+        if not named or allowed <= LIMIT_MB:
+            raise CannotRun(f"{language} is import-only by default: {indexer.program} is not run here because {indexer.why_not}. "
+                            f"To run it anyway, name the language and a memory limit above {LIMIT_MB:.0f} MB, and it is stopped above that: "
+                            f"`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang {language}`. "
+                            f"Or run it elsewhere (CI) and keep the result with `aleph scip import`")
     if shutil.which(indexer.program) is None:
         raise CannotRun(f"{indexer.program} is not installed. Aleph does not install it; to get it: {indexer.how_to_get}")
     if indexer.needs and not (root / indexer.needs).is_file():

@@ -145,3 +145,20 @@ def test_a_ranker_that_stems_finds_the_record_by_another_form_of_its_word():
                decisions.parse("docs/adr/0002-b.md", 2, "# 2. Queues carry the work\n\nA queue.\n")]
     assert [hit.number for hit in decisions.Records(records, stems=False).rank("caching of a response")] == [2]    # only "a" is shared
     assert [hit.number for hit in decisions.Records(records, stems=True).rank("caching of a response")] == [1, 2]
+
+
+def test_the_ranking_that_was_measured_is_the_default():
+    """The figure on oxn's pairs is of words alone with BM25's usual constants: the switches tried later stay off."""
+    from aleph_zero import decisions
+
+    assert (decisions.STEMS, decisions.K1, decisions.B) == (False, 1.5, 0.75)
+    records = [decisions.parse(f"docs/adr/000{n}-x.md", n, text) for n, text in enumerate((
+        "# 1. Responses are cached at the edge\n\nWe cache responses. Caching is cheap.\n",
+        "# 2. Queues carry the work\n\nA queue per kind of work, and a cache of results for the queue.\n" + "More about queues. " * 40,
+        "# 3. The cache is invalidated by events\n\nEvents.\n"), 1)]
+    task = "invalidate the response cache when an order event arrives"
+    default = [(hit.number, hit.score) for hit in decisions.Records(records).rank(task)]
+    assert default == [(hit.number, hit.score) for hit in decisions.Records(records, stems=False, b=0.75).rank(task)]
+    assert [number for number, _ in default] == [3, 1, 2]
+    assert default != [(hit.number, hit.score) for hit in decisions.Records(records, stems=True).rank(task)]
+    assert default != [(hit.number, hit.score) for hit in decisions.Records(records, b=0.4).rank(task)]

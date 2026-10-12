@@ -206,16 +206,28 @@ def test_without_a_binary_or_model_the_worker_is_unavailable_with_a_hint(home):
 
 def test_a_worker_that_outgrows_its_memory_limit_is_stopped_and_the_reason_is_kept(home, monkeypatch):
     monkeypatch.setenv("ALEPH_WORKER_MEMORY_MB", "1")   # any real process is over this
-    sock = worker.ensure()
-    state = worker.state()
-    assert _wait(lambda: not _alive(state["worker_pid"]) and not _alive(state["supervisor_pid"]), seconds=6)
-    assert not sock.exists()
+    try:
+        sock = worker.ensure()
+    except Unavailable as early:    # on a busy machine it is stopped before it is ready: for the same reason
+        assert "over its limit of 1 MB" in str(early)
+    else:
+        state = worker.state()
+        assert _wait(lambda: not _alive(state["worker_pid"]) and not _alive(state["supervisor_pid"]), seconds=6)
+        assert not sock.exists()
     assert "over its limit of 1 MB" in worker.state().get("reason", "")
     with pytest.raises(Unavailable, match="over its limit"):   # and it is not restarted in a loop
         worker.ensure()
     monkeypatch.setenv("ALEPH_WORKER_MEMORY_MB", "100000")
     monkeypatch.setenv("ALEPH_WORKER_COOLDOWN_SECONDS", "0")
     assert EmbedClient(worker.ensure(), capacity=64).healthy()
+
+
+def test_a_worker_stopped_for_its_memory_while_it_loads_is_said_to_be_so(home, monkeypatch):
+    monkeypatch.setenv("ALEPH_WORKER_MEMORY_MB", "1")
+    monkeypatch.setenv("FAKE_WORKER_LOAD_SECONDS", "3")     # still loading when the supervisor first looks at its memory
+    with pytest.raises(Unavailable, match="over its limit of 1 MB"):
+        worker.ensure()
+    assert "over its limit of 1 MB" in worker.state().get("reason", "")
 
 
 def test_the_worker_keeps_nothing_between_requests(home):

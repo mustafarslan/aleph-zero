@@ -189,7 +189,8 @@ def ensure() -> Path:
         supervisor = _spawn_supervisor([])
         if _wait_healthy(path, lambda: supervisor.poll() is None):
             return path
-        reason = _log_tail() or "it did not become ready in time"
+        # A supervisor that stopped the worker itself (over its memory limit while loading) has said why.
+        reason = state().get("reason") or _log_tail() or "it did not become ready in time"
         supervisor.terminate()
         _kill(state().get("worker_pid"))
         path.unlink(missing_ok=True)
