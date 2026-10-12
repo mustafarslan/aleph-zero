@@ -71,8 +71,11 @@ def _compiler_indexes() -> Row:
     for indexer, found in indexers.present():
         how = ("on request" + (f" ({indexer.note})" if indexer.note else "")) if indexer.on_demand else "import-only (not measured under the limit)"
         parts.append(f"{indexer.language}: {indexer.program} {'found' if found else 'not installed'}, {how}")
-    return Row("note", "compiler indexes", "SCIP indexers for `aleph scip run`: " + "; ".join(parts)
-               + f". A run may use {indexers.limit_mb():.0f} MB (ALEPH_SCIP_MEMORY_MB)")
+    try:
+        allowed = f"A run may use {indexers.limit_mb():.0f} MB (ALEPH_SCIP_MEMORY_MB)"
+    except indexers.CannotRun as exc:
+        allowed = f"No run is possible: {exc}"
+    return Row("note", "compiler indexes", "SCIP indexers for `aleph scip run`: " + "; ".join(parts) + ". " + allowed)
 
 
 def _git() -> Row:

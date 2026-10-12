@@ -101,6 +101,7 @@ def text(value: bytes | int) -> str:
 # --- Index ---
 _DOCUMENTS = 2
 _EXTERNAL_SYMBOLS = 3
+_POSITION_ENCODING = 6
 # --- Document ---
 _RELATIVE_PATH = 1
 _OCCURRENCES = 2
@@ -176,6 +177,9 @@ class ScipDocument:
     relative_path: str
     occurrences: list[ScipOccurrence] = field(default_factory=list)
     symbols: list[ScipSymbol] = field(default_factory=list)
+    #: How the document counts columns: 1 UTF-8 bytes, 2 UTF-16 units, 3 characters; 0 when it does not
+    #: say (most indexers do not; of five tried, only rust-analyzer does).
+    position_encoding: int = 0
 
     def definitions(self) -> Iterator[ScipOccurrence]:
         return (occurrence for occurrence in self.occurrences if occurrence.is_definition)
@@ -244,6 +248,8 @@ def _parse_document(data: bytes) -> ScipDocument:
                 document.occurrences.append(occurrence)
         elif number == _SYMBOLS and isinstance(value, bytes):
             document.symbols.append(_parse_symbol(value))
+        elif number == _POSITION_ENCODING and isinstance(value, int):
+            document.position_encoding = value if value in (1, 2, 3) else 0
     return document
 
 
@@ -360,13 +366,36 @@ def tool_name(data: bytes) -> str:
     return ""
 
 
+CONSTRUCTORS = ("__init__", "<init>", "<constructor>", "constructor")
+_OWNER = re.compile(r"(?:`([^`]+)`|([A-Za-z_$][\w$]*))#(?:`?<?[A-Za-z_]+>?`?)\([^)]*\)\.$")
+
+
+def constructed_type(symbol: str) -> str:
+    """For a constructor's symbol, the type it constructs (`Client#__init__().` -> `Client`):
+    `Client(...)` writes the type, `super().__init__(...)` writes the method. Else ''."""
+    if symbol_name(symbol) not in CONSTRUCTORS:
+        return ""
+    owner = _OWNER.search(symbol.rsplit(" ", 1)[-1])
+    return (owner.group(1) or owner.group(2)) if owner else ""
+
+
+def package_of(symbol: str) -> str:
+    """`scheme manager package version descriptors` -> 'manager package'; '' for a symbol local to its file."""
+    parts = symbol.split(" ", 4)
+    return "" if symbol.startswith("local ") or len(parts) < 5 else f"{parts[1]} {parts[2]}"
+
+
 @dataclass(frozen=True)
 class Reduced:
-    """One document, reduced to what answers "what does this refer to": lines and columns count from 0."""
+    """One document, reduced to what answers "what does this refer to": lines and columns count from 0,
+    columns in the unit the document says (`encoding`: see `ScipDocument.position_encoding`)."""
     path: str
-    references: list[tuple[int, int, str, int, str]]   # (line, column, the defining file, the line of the definition's name, its name)
-    outside: list[tuple[int, int]]                     # where it refers to something no document of the index defines: a library
+    # (line, column, the defining file, the line of the definition's name, its name). A constructor's name
+    # is the type it constructs followed by '#': the source may write the type or the constructor.
+    references: list[tuple[int, int, str, int, str]]
+    outside: list[tuple[int, int]]                     # where it refers to something of another package: a library
     depends_on: list[str]                              # the other documents whose definitions it refers to
+    encoding: int = 0
 
 
 def is_inside(path: str) -> bool:
@@ -384,6 +413,9 @@ def reduce(index: ScipIndex) -> tuple[list[Reduced], int]:
         for occurrence in document.definitions():
             scope = document.relative_path if occurrence.symbol.startswith("local ") else ""
             sites.setdefault((scope, occurrence.symbol), (document.relative_path, occurrence.start_line))
+    # A symbol of a package this index defines things in, but with no definition in any document, is of this
+    # tree and merely not covered (an index of one package of several): not a library, and not said to be one.
+    ours = {package_of(symbol) for _, symbol in sites} - {""}
     out: list[Reduced] = []
     for document in kept_documents:
         references: list[tuple[int, int, str, int, str]] = []
@@ -395,12 +427,13 @@ def reduce(index: ScipIndex) -> tuple[list[Reduced], int]:
             local = occurrence.symbol.startswith("local ")
             site = sites.get((document.relative_path if local else "", occurrence.symbol))
             if site is None:
-                if not local:
+                if not local and package_of(occurrence.symbol) not in ours:
                     outside.append((occurrence.start_line, occurrence.start_char))
                 continue
-            references.append((occurrence.start_line, occurrence.start_char, site[0], site[1], symbol_name(occurrence.symbol)))
+            built = constructed_type(occurrence.symbol)
+            references.append((occurrence.start_line, occurrence.start_char, site[0], site[1],
+                               built + "#" if built else symbol_name(occurrence.symbol)))
             if site[0] != document.relative_path:
                 depends.add(site[0])
-        out.append(Reduced(document.relative_path, references, outside, sorted(depends)))
+        out.append(Reduced(document.relative_path, references, outside, sorted(depends), document.position_encoding))
     return out, len(index.documents) - len(kept_documents)
-

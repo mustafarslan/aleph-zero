@@ -71,3 +71,49 @@ def test_doctor_says_which_indexers_are_here_and_which_languages_are_import_only
     repo, _ = project
     rows = {row.name: row for row in doctor.check(repo.root)}
     assert "compiler indexes" in rows and "import-only" in rows["compiler indexes"].detail
+
+
+def test_a_child_that_outlives_the_indexer_is_stopped_too(project, tmp_path, monkeypatch):
+    """The indexer starts something in a session of its own and ends at once: nobody's child any more."""
+    repo, made = project
+    marker = "aleph-test-orphan-" + tmp_path.name
+    leaves = ("import shutil, subprocess, sys, time\n"
+              f"subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)  # {marker}'], start_new_session=True)\n"
+              f"time.sleep(0.5)\nshutil.copy({str(made)!r}, sys.argv[-1])\n")
+    monkeypatch.setitem(indexers.INDEXERS, "python", stand_in(tmp_path, leaves))
+    Engine(repo.root).scip_run("python")
+    assert subprocess.run(["pgrep", "-f", marker], capture_output=True).stdout == b""
+
+
+def test_a_guard_that_cannot_see_stops_the_run(project, tmp_path, monkeypatch):
+    repo, made = project
+    monkeypatch.setitem(indexers.INDEXERS, "python", stand_in(tmp_path, "import time\nheld = bytearray(300 * 1024 * 1024)\ntime.sleep(20)\n"))
+    monkeypatch.setattr(indexers, "PS", ["false"])               # `ps` fails: nothing can be measured
+    with pytest.raises(indexers.CannotRun, match="could not watch"):
+        Engine(repo.root).scip_run("python", limit_mb=150)
+
+
+def test_a_limit_that_is_not_a_number_is_refused_and_doctor_still_answers(project, monkeypatch):
+    from aleph_zero import doctor
+
+    repo, _ = project
+    for bad in ("abc", "nan", "0", "-5"):
+        monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", bad)
+        with pytest.raises(indexers.CannotRun, match="ALEPH_SCIP_MEMORY_MB"):
+            Engine(repo.root).scip_run("python")
+        assert any(row.name == "compiler indexes" for row in doctor.check(repo.root))
+
+
+def test_a_java_run_builds_in_a_copy_and_leaves_the_worktree_as_it_found_it(project, tmp_path, monkeypatch):
+    repo, made = project
+    repo.write("pom.xml", "<project/>\n")
+    (repo.root / "target").mkdir()
+    (repo.root / "target" / "kept.class").write_text("the owner's build output")
+    cleans = ("import os, shutil, sys\nshutil.rmtree('target', ignore_errors=True)\nopen('made-here.txt', 'w').write('x')\n"
+              f"shutil.copy({str(made)!r}, sys.argv[-1])\n")
+    indexer = stand_in(tmp_path, cleans)
+    monkeypatch.setitem(indexers.INDEXERS, "java", indexers.Indexer("java", indexer.program, indexer.arguments, True, "", needs="pom.xml",
+                                                                    in_a_copy=True))
+    report = Engine(repo.root).scip_run("java")
+    assert report["imported"]["documents"] == 4
+    assert (repo.root / "target" / "kept.class").read_text() == "the owner's build output" and not (repo.root / "made-here.txt").exists()

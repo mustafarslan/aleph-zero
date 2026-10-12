@@ -77,7 +77,7 @@ def _scip(args) -> int:
     if args.action == "import":
         try:
             kept = engine.scip_import(args.file, tree=args.tree, worktree=args.worktree)
-        except scipstore.NotAnIndex as exc:
+        except (scipstore.NotAnIndex, scipstore.Unstamped) as exc:
             print(str(exc), file=sys.stderr)
             return 1
         except gitio.GitError as exc:

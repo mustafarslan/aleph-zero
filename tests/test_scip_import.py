@@ -118,7 +118,7 @@ def test_an_index_made_on_the_worktree_as_it_is_can_be_stamped_so(project):
     repo, made = project
     repo.write("src/alone.py", ALONE_PY + "\n# not committed\n")
     engine = Engine(repo.root)
-    engine.scip_import(made)                            # stamped with HEAD: alone.py on disk is not what HEAD holds
+    engine.scip_import(made, tree="HEAD")               # stamped with HEAD: alone.py on disk is not what HEAD holds
     assert callees(repo, "caller")[0][2] != "L2"
     engine.scip_import(made, worktree=True)
     assert callees(repo, "caller") == [("own", "own", "L2", "scip", True, False)]
@@ -191,3 +191,87 @@ def test_an_index_of_schema_7_gets_the_import_tables_in_place(project):
     assert conn.pragma("user_version") == SCHEMA_VERSION == 8
     assert conn.execute("SELECT count(*) FROM graph_facts").fetchall() == facts
     assert Engine(repo.root).scip_import(made)["documents"] == 4
+
+
+# ---- found by the independent review ----------------------------------------------------------------
+
+def test_a_call_after_non_ascii_text_on_its_line_is_joined_to_its_own_occurrence(repo, tmp_path):
+    """Aleph counts columns in bytes; most indexers count characters. `("éé", a(b(1)))`: in bytes `a`
+    stands where, in characters, `b` does."""
+    repo.write("wide.py", 'def a(x):\n    return x\n\ndef b(x):\n    return x\n\ndef both():\n    s = ("éé", a(b(1)))\n    return s\n')
+    repo.commit("wide")
+    a, b = P + "wide/a().", P + "wide/b()."
+    made = tmp_path / "wide.scip"
+    made.write_bytes(index(document("wide.py", occurrence(a, [0, 4, 5], DEF), occurrence(b, [3, 4, 5], DEF),
+                                    occurrence(a, [7, 15, 16]), occurrence(b, [7, 17, 18]))))     # columns in characters
+    Engine(repo.root).scip_import(made)
+    found = Engine(repo.root).references("both", direction="callees").callees
+    assert [(r.written, r.target, r.level) for r in found] == [("a", "a", "L2"), ("b", "b", "L2")]
+
+
+def test_a_target_aleph_does_not_record_is_not_replaced_by_a_namesake_above_it(repo, tmp_path):
+    repo.write("nested.py", "class A:\n    def go(self):\n        return 1\n\ndef use():\n    class B:\n        def go(self):\n            return 2\n    return B().go()\n")
+    repo.commit("nested")
+    a_go, b_go = P + "nested/A#go().", P + "nested/use().B#go()."
+    made = tmp_path / "nested.scip"
+    made.write_bytes(index(document("nested.py", occurrence(a_go, [1, 8, 10], DEF), occurrence(b_go, [6, 12, 14], DEF),
+                                    occurrence(b_go, [8, 15, 17]))))
+    Engine(repo.root).scip_import(made)
+    found = Engine(repo.root).references("use", direction="callees").callees
+    assert all(r.level != "L2" for r in found)              # B.go is inside a function: no recorded definition is it
+    assert Engine(repo.root).references("A.go", direction="callers").callers == [] or \
+        all(not r.certain for r in Engine(repo.root).references("A.go", direction="callers").callers)
+
+
+def test_a_later_import_of_part_of_the_tree_does_not_lend_its_blobs_to_an_earlier_one(project, tmp_path):
+    repo, made = project
+    engine = Engine(repo.root)
+    engine.scip_import(made)                                     # the whole tree, at the first commit
+    repo.write("src/app/store.py", "class Store:\n    def save(self, item):\n        return item\n\nclass Other:\n    def save(self, item):\n        return item\n")
+    repo.commit("Cache is gone; line 6 is Other.save now")
+    partial = tmp_path / "partial.scip"
+    partial.write_bytes(index(document("src/app/store.py", occurrence(SAVE, [1, 8, 12], DEF),
+                                       occurrence(P + "app/store/Other#save().", [5, 8, 12], DEF))))
+    engine.scip_import(partial)                                  # only store.py, at the second commit
+    # service.py has not changed, and store.py's row now matches the view: but service's references were
+    # worked out against the old store.py.
+    assert all(row[2] != "L2" and row[5] for row in callees(repo))
+
+
+def test_an_index_of_part_of_the_tree_does_not_call_the_rest_a_library(project, tmp_path):
+    repo, _ = project
+    partial = tmp_path / "service-only.scip"
+    partial.write_bytes(index(document("src/app/service.py", occurrence(HELPER, [10, 4, 10], DEF), occurrence(SAVE, [6, 19, 23]),
+                                       occurrence(HELPER, [7, 8, 14]), occurrence(CACHE_SAVE, [8, 14, 18]))))
+    Engine(repo.root).scip_import(partial)
+    found = callees(repo)
+    # `save` is of the index's own package (demo), only not in a document it holds: the resolver still answers.
+    assert ("self.store.save", "Store.save", "L1", "import-resolved", True, False) in found and ("helper", "helper", "L2", "scip", True, False) in found
+
+
+def test_a_constructor_is_joined_to_the_class_or_its_constructor(repo, tmp_path):
+    repo.write("a/Owner.java", "package a;\npublic class Owner {\n  public Owner() {}\n}\n")
+    repo.write("a/Pet.java", "package a;\npublic class Pet {\n}\n")
+    repo.write("a/Use.java", "package a;\nclass Use {\n  void run() { new Owner(); new Pet(); }\n}\n")
+    repo.commit("java")
+    j = "semanticdb maven demo 0.1 a/"
+    made = tmp_path / "java.scip"
+    made.write_bytes(index(
+        document("a/Owner.java", occurrence(j + "Owner#", [1, 13, 18], DEF), occurrence(j + "Owner#`<init>`().", [2, 9, 14], DEF)),
+        document("a/Pet.java", occurrence(j + "Pet#", [1, 13, 16], DEF), occurrence(j + "Pet#`<init>`().", [1, 13, 16], DEF)),
+        document("a/Use.java", occurrence(j + "Owner#`<init>`().", [2, 19, 24]), occurrence(j + "Pet#`<init>`().", [2, 32, 35]))))
+    Engine(repo.root).scip_import(made)
+    found = Engine(repo.root).references("Use.run", direction="callees").callees
+    assert [(r.written, r.target, r.level) for r in found] == [("Owner", "Owner.Owner", "L2"), ("Pet", "Pet", "L2")]
+
+
+def test_with_uncommitted_changes_the_import_must_be_told_what_the_index_was_made_from(project):
+    from aleph_zero import scipstore
+
+    repo, made = project
+    repo.write("src/alone.py", ALONE_PY + "\n# not committed\n")
+    with pytest.raises(scipstore.Unstamped, match="--worktree"):
+        Engine(repo.root).scip_import(made)             # made from HEAD, or from this edit? Reverting later must not make a guess true
+    assert Engine(repo.root).scip_import(made, tree="HEAD")["stamped"] == "HEAD"
+    assert cli.main(["--cwd", str(repo.root), "scip", "forget", "--all"]) == 0
+    assert cli.main(["--cwd", str(repo.root), "scip", "import", str(made)]) == 1

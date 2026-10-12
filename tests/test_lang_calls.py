@@ -193,3 +193,12 @@ def test_a_loop_variable_at_file_level_is_not_the_function_of_the_same_name():
 def test_calls_name_the_innermost_definition_they_sit_in_whatever_the_order():
     source = "class A:\n    def m(self):\n        one()\n    class B:\n        def n(self):\n            two()\n    def o(self):\n        three()\nfour()\n"
     assert found("python", source) == [("one", "", 3, "A.m"), ("two", "", 6, "A.B.n"), ("three", "", 8, "A.o"), ("four", "", 9, None)]
+
+
+def test_a_call_records_its_column_in_characters_too_where_that_differs_from_bytes():
+    profile = lang.PROFILES["python"]
+    data = 'x = ("éé", a(1), "😇", b(2))\ny = c(3)\n'.encode()
+    tree = parse.tree(profile, data)
+    found = {call.name: (call.column, call.column16, call.column32) for call in calls(profile, tree, data, definitions(profile, tree, data))}
+    # Before `b`: two é (two bytes each, one unit) and an emoji (four bytes, two UTF-16 units, one character).
+    assert found == {"a": (13, 11, 11), "b": (27, 23, 22), "c": (4, -1, -1)}     # -1: the same as in bytes

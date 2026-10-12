@@ -124,6 +124,8 @@ class Call:
     receiver_type: str = ""  # for a call on a local name: the type its function declares for it (`generic.Gauge`), or
     #                       the call that built it (`Engine()`); '' when the function does not say
     arity: int = -1       # how many arguments are passed; -1 when the call does not show them
+    column16: int = -1    # the column in UTF-16 units and in characters, where text before the name on its line
+    column32: int = -1    # makes them differ from the byte column (-1: the same). Other tools count that way
 
 
 def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definition]) -> list[Call]:
@@ -192,10 +194,18 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     for (name, owner, via, arity, chain), caller in zip(seen, inside):
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
         kind = _type_of(first, chain, bound, stated, generic) if head == "local" and owner is not None else ""
+        before = data[name.start_byte - name.start_point[1]:name.start_byte]
+        wide = (-1, -1) if before.isascii() else _columns(before)
         out.append(Call(_text(name), _receiver(owner) if owner is not None else "", name.start_point[0] + 1,
-                        name.start_point[1], caller, via, head, kind, arity))
+                        name.start_point[1], caller, via, head, kind, arity, *wide))
     out.sort(key=lambda call: (call.line, call.column))
     return out
+
+
+def _columns(before: bytes) -> tuple[int, int]:
+    """Where a name stands on its line, counted in UTF-16 units and in characters, given the bytes before it."""
+    text = before.decode("utf-8", "replace")
+    return len(text.encode("utf-16-le")) // 2, len(text)
 
 
 def _innermost(found: list[Definition], positions: list[int]) -> list[int | None]:

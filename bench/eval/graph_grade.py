@@ -180,7 +180,10 @@ def grade_file(grade: Grade, path: str, source: bytes, document: scip.ScipDocume
     at = {(occurrence.start_line, occurrence.start_char): occurrence for occurrence in document.occurrences
           if not occurrence.is_definition}
     for call in found:
-        occurrence = at.get((call.line - 1, call.column))
+        # SCIP counts columns in the unit its document says, or in UTF-16 units when it says none (four of the
+        # five indexers); Aleph in bytes. They differ only on a line with non-ASCII text before the call.
+        column = {1: call.column, 2: call.column16, 3: call.column32}.get(document.position_encoding, call.column16)
+        occurrence = at.get((call.line - 1, column if column >= 0 else call.column))
         if occurrence is None:
             continue  # SCIP resolved nothing here
         scope = path if occurrence.symbol.startswith("local ") else ""

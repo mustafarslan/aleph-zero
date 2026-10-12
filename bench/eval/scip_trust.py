@@ -41,7 +41,16 @@ def census(engine: Engine) -> tuple[Counter, dict[str, str]]:
         for call in callgraph._calls(index, (oid, of_file.family)):
             edge, downgraded = callgraph.resolve(graph, compiled, path, call)
             kind = "no answer" if edge is None else "compiler index" if edge.level == "L2" else "resolver"
-            counts[(kind, "file not believed" if downgraded else "file believed" if state == "" else "file not covered")] += 1
+            where = "file not believed" if state else "file believed" if state == "" else "file not covered"
+            if state == "" and downgraded:
+                kind += ", the index points at something not recorded"
+            counts[(kind, where)] += 1
+            if edge is not None and edge.level == "L2":
+                # "Answered with the index's target": the answer must be the definition that holds the line the index names.
+                said = compiled.target(path, call.line - 1, (call.column, call.column16, call.column32), call.name)
+                target = edge.targets[0]
+                agrees = bool(said) and said[0] == target.path and target.start_line <= said[1] + 1 <= target.end_line
+                counts[("of which the answer is the definition the index names" if agrees else "of which it is NOT", where)] += 1
     return counts, reasons
 
 

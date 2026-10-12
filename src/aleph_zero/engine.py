@@ -301,6 +301,11 @@ class Engine:
         Raises scipstore.NotAnIndex for a file that cannot be read as one."""
         view = self._view(cwd)
         index = self._index(view)
+        if tree is None and not worktree and view.dirty:
+            # Stamped with HEAD, an index made from an uncommitted edit would be believed the day that edit is undone.
+            raise scipstore.Unstamped(
+                f"the worktree has {len(view.dirty)} uncommitted changes: say what the index was made from, "
+                "--worktree (the worktree as it is now) or --tree REV (a commit)")
         kept, skipped, tool = scipstore.read(Path(file))
         if worktree:
             stamps, stamped = view.files, "worktree"
@@ -327,7 +332,8 @@ class Engine:
         out = state_dir(view.common_dir) / f"scip-run-{os.getpid()}.scip"
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
-            report = indexers.run(view.root, language, out, limit_mb, time_limit)
+            report = indexers.run(view.root, language, out, limit_mb, time_limit,
+                                  files=[path for path in view.files if path not in view.mounted])
             now = self._view(cwd)
             moved = [path for path, oid in view.files.items() if now.files.get(path) != oid]
             if moved:

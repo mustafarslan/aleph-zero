@@ -24,11 +24,17 @@ from . import scip
 from .store import transaction
 
 DEPENDENCY_LIMIT = 2000         # files looked at to trust one document; a file that depends on more is not trusted
-MAX_INDEX_BYTES = 1 << 30       # an index file larger than this is refused: it is read whole
+# An index is read whole, and reading one takes about five times its size in memory (measured: 266 MB for
+# eslint's 54 MB). 200 MB of file is about 1 GB for the seconds an import takes; a larger one is refused.
+MAX_INDEX_BYTES = 200 * 1024 * 1024
 
 
 class NotAnIndex(ValueError):
     """The file given is not a SCIP index this build can read."""
+
+
+class Unstamped(ValueError):
+    """The import was not told what the index was made from, and the worktree does not say."""
 
 
 def read(path: Path) -> tuple[list[scip.Reduced], int, str]:
@@ -36,7 +42,7 @@ def read(path: Path) -> tuple[list[scip.Reduced], int, str]:
     try:
         size = path.stat().st_size
         if size > MAX_INDEX_BYTES:
-            raise NotAnIndex(f"{path} is {size / 1e9:.1f} GB; the largest index read is {MAX_INDEX_BYTES / 1e9:.0f} GB")
+            raise NotAnIndex(f"{path} is {size / 1e6:.0f} MB; the largest index read is {MAX_INDEX_BYTES / 1e6:.0f} MB")
         data = path.read_bytes()
         kept, skipped = scip.reduce(scip.parse_index(data))
     except (OSError, scip.WireFormatError) as exc:
@@ -67,12 +73,15 @@ def store(conn: apsw.Connection, kept: list[scip.Reduced], skipped: int, tool: s
             paths = sorted({target for _, _, target, _, _ in document.references})
             number = {path: at for at, path in enumerate(paths)}
             refs = {"files": paths, "to": [[line, column, number[target], at, name] for line, column, target, at, name in document.references],
-                    "outside": [list(site) for site in document.outside]}
+                    "outside": [list(site) for site in document.outside], "encoding": document.encoding}
+            # Each dependency with the blob it had when this document was made: what a later import says of
+            # that path is another index's business, and must not vouch for this one.
+            depends = [[each, stamps.get(each, "")] for each in document.depends_on]
             conn.execute(
                 "INSERT INTO scip_documents(path, import_id, blob_oid, depends, refs) VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(path) DO UPDATE SET import_id = excluded.import_id, blob_oid = excluded.blob_oid, "
                 "depends = excluded.depends, refs = excluded.refs",
-                (document.path, import_id, stamps[document.path], _pack(document.depends_on), _pack(refs)))
+                (document.path, import_id, stamps[document.path], _pack(depends), _pack(refs)))
         conn.execute("DELETE FROM scip_imports WHERE import_id NOT IN (SELECT DISTINCT import_id FROM scip_documents)")
     return {"import_id": import_id, "tool": tool, "stamped": stamped, "documents": len(known),
             "references": sum(len(document.references) for document in known),
@@ -102,12 +111,12 @@ class Compiled:
 
     def __init__(self, conn: apsw.Connection, files: dict[str, str]) -> None:
         self._conn, self._files = conn, files
-        self._stamps: dict[str, tuple[str, list[str]] | None] = {}     # path -> (blob it was made from, what it depends on)
+        self._stamps: dict[str, tuple[str, list[list[str]]] | None] = {}   # path -> (blob it was made from, [dependency, its blob then])
         self._state: dict[str, str] = {}                               # path -> '' believed, else why not
-        self._sites: dict[str, tuple[dict, set]] = {}
+        self._sites: dict[str, tuple[dict, set, int]] = {}
         self.any = bool(conn.execute("SELECT 1 FROM scip_documents LIMIT 1").fetchall())
 
-    def _stamp(self, path: str) -> tuple[str, list[str]] | None:
+    def _stamp(self, path: str) -> tuple[str, list[list[str]]] | None:
         if path not in self._stamps:
             rows = self._conn.execute("SELECT blob_oid, depends FROM scip_documents WHERE path = ?", (path,)).fetchall()
             self._stamps[path] = (rows[0][0], _unpack(rows[0][1])) if rows else None
@@ -126,41 +135,52 @@ class Compiled:
             why = f"{path} has changed since the compiler index was made"
         else:
             why = ""
-            waiting, seen = list(own[1]), {path}
+            waiting, seen = [tuple(each) for each in own[1]], {path}
             while waiting and not why:
-                each = waiting.pop()
+                each, then = waiting.pop()
                 if each in seen:
                     continue
                 seen.add(each)
-                if self._state.get(each) == "":
-                    continue        # already found whole, with all it depends on
                 if len(seen) - 1 > DEPENDENCY_LIMIT:
                     why = f"{path} depends on more than {DEPENDENCY_LIMIT} files: too many to check against the compiler index"
                     break
-                stamp = self._stamp(each)
-                if stamp is None:
-                    why = f"{path} depends on {each}, which the compiler index does not cover"
-                elif self._files.get(each) != stamp[0]:
+                if not then or self._files.get(each) != then:
                     why = f"{path} depends on {each}, which has changed since the compiler index was made"
+                    break
+                if self._state.get(each) == "":
+                    continue        # already found whole, with all it depends on
+                stamp = self._stamp(each)
+                if stamp is None or stamp[0] != then:
+                    # The same file as then, but what the index knew of *its* dependencies is gone: a later
+                    # import replaced that document with one made from other content.
+                    why = f"{path} depends on {each}, whose part of the compiler index was replaced by a later import"
                 else:
-                    waiting.extend(stamp[1])
+                    waiting.extend(tuple(inner) for inner in stamp[1])
         self._state[path] = why
         return why
 
-    def target(self, path: str, line: int, column: int) -> tuple[str, int, str] | None | bool:
-        """What the document says stands at that place (lines and columns from 0): (the defining file, the
-        line of the definition's name, its name); False for something outside the tree; None when it
-        says nothing there."""
+    def target(self, path: str, line: int, columns: tuple[int, int, int], name: str) -> tuple[str, int, str] | None | bool:
+        """What the document says stands where a call's name does: (the defining file, the line of the
+        definition's name, its name); False for something of another package; None when it says nothing
+        there. `line` counts from 0; `columns` is the name's column in bytes, UTF-16 units and characters
+        (-1: as in bytes). The document's own unit is used; when it names none and the units differ on
+        this line, a place counts only if what stands there has the call's name."""
         if path not in self._sites:
             rows = self._conn.execute("SELECT refs FROM scip_documents WHERE path = ?", (path,)).fetchall()
             refs = _unpack(rows[0][0]) if rows else {"files": [], "to": [], "outside": []}
             files = refs["files"]
             self._sites[path] = ({(row[0], row[1]): (files[row[2]], row[3], row[4]) for row in refs["to"]},
-                                 {(row[0], row[1]) for row in refs["outside"]})
+                                 {(row[0], row[1]) for row in refs["outside"]}, refs.get("encoding", 0))
             if len(self._sites) > 400:
                 self._sites.pop(next(iter(self._sites)))
-        inside, outside = self._sites[path]
-        found = inside.get((line, column))
-        if found is not None:
-            return found
-        return False if (line, column) in outside else None
+        inside, outside, encoding = self._sites[path]
+        in_bytes, in_utf16, in_characters = columns[0], columns[1] if columns[1] >= 0 else columns[0], columns[2] if columns[2] >= 0 else columns[0]
+        if encoding or in_bytes == in_utf16 == in_characters:
+            column = {1: in_bytes, 2: in_utf16, 3: in_characters}.get(encoding, in_bytes)
+            found = inside.get((line, column))
+            return found if found is not None else (False if (line, column) in outside else None)
+        for column in dict.fromkeys((in_utf16, in_characters, in_bytes)):      # most indexers count UTF-16 units
+            found = inside.get((line, column))
+            if found is not None and (found[2] == name or found[2] == name + "#"):
+                return found
+        return None

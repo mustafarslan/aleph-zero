@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import apsw
 
-from . import filters, gitio, lang, symbols
+from . import filters, gitio, lang, scip, symbols
 from .graph import MANIFESTS, Defined, Edge, FileFacts, Graph, Source, Target, _group
 from .indexer import Index, symbol_key
 from .lang import parse
@@ -34,7 +34,7 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 3           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 4           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for
@@ -157,9 +157,12 @@ def extract(profile: lang.LanguageProfile, text: str) -> tuple[bytes, bytes]:
         bound, built_on, typed = facts(profile, tree, source)
     except Exception:  # noqa: BLE001 - a grammar that fails to load, or a shape a reader does not know
         return _EMPTY
-    shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed]
+    # The last list is where each definition starts and ends, in the symbols' order: the index's symbols
+    # table keeps only where one starts, and an answer taken from a compiler index must fall inside one.
+    shape = [[[b.local, b.source, b.name, b.level, b.kind] for b in bound], built_on, typed,
+             [[d.start_line, d.end_line] for d in found]]
     # A plain call of a local name (a parameter, a closure) can never be answered: not kept.
-    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity]
+    kept = [[c.name, c.receiver, c.line, c.column, c.caller, c.via, c.head, c.receiver_type, c.arity, c.column16, c.column32]
             for c in sites if c.via or c.head != "local"]
     pack = lambda value: zlib.compress(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogateescape"), 1)  # noqa: E731
     return pack(shape), pack(kept)
@@ -204,11 +207,13 @@ class Indexed(Source):
         if oid is None or family not in FAMILIES:
             return None
         conn = self._index.conn
-        defined = [Defined(kind, name, qualified, "", line, line) for name, qualified, kind, line in conn.execute(
-            "SELECT name, qualified, kind, line FROM symbols WHERE blob_oid = ? AND family = ? ORDER BY ord", (oid, family))]
+        rows = conn.execute("SELECT name, qualified, kind, line FROM symbols WHERE blob_oid = ? AND family = ? ORDER BY ord",
+                            (oid, family)).fetchall()
         shape = conn.execute("SELECT shape FROM graph_facts WHERE blob_oid = ? AND family = ? AND version = ?",
                              (oid, family, GRAPH_VERSION)).fetchall()
-        bound, built_on, typed = _unpack(shape[0][0]) if shape else ([], [], [])
+        bound, built_on, typed, spans = _unpack(shape[0][0]) if shape else ([], [], [], [])
+        ends = [end for _, end in spans] if len(spans) == len(rows) else [line for _, _, _, line in rows]
+        defined = [Defined(kind, name, qualified, "", line, end) for (name, qualified, kind, line), end in zip(rows, ends)]
         return FileFacts(family, defined, [Binding(*row) for row in bound], [tuple(row) for row in built_on],
                          [tuple(row) for row in typed])
 
@@ -290,24 +295,33 @@ def resolve(graph: Graph, compiled, path: str, call: Call) -> tuple[Edge | None,
     state = compiled.status(path) if compiled is not None else None
     if state != "":
         return graph.resolve(path, call), state or ""
-    said = compiled.target(path, call.line - 1, call.column)
+    said = compiled.target(path, call.line - 1, (call.column, call.column16, call.column32), call.name)
     if said is False:
         return None, ""
     if said is not None:
         target = _defined_at(graph, *said)
         if target is not None:
             return Edge((target,), "L2", "scip", "compiler index"), ""
+        return graph.resolve(path, call), ("the compiler index points at something that is not a recorded definition "
+                                           "(a function or class inside a function)")
     return graph.resolve(path, call), ""
 
 
 def _defined_at(graph: Graph, path: str, line: int, name: str) -> Target | None:
-    """The definition the index points at: it gives the line of the name (from 0), the graph knows
-    where each definition starts (from 1, decorators included): the nearest one of that name at or above."""
+    """The definition the index points at. It gives the line of the definition's name (from 0) and its name;
+    the graph knows each definition's lines (from 1). The answer is the innermost definition of that name
+    that holds the line: a namesake further up is another thing, and what the index means may be something
+    not recorded at all (a class inside a function), which is then no answer."""
     of_file = graph.files.get(path)
-    if of_file is None:
+    if of_file is None or not name:
         return None
-    above = [each for each in of_file.definitions if each.start_line <= line + 1 and (not name or each.name == name)]
-    return max(above, key=lambda each: each.start_line) if above else None
+    if name.endswith("#"):      # a constructor: the type itself, or the method that constructs it
+        kind = name[:-1]
+        fits = lambda each: each.name == kind or (each.name in scip.CONSTRUCTORS and each.qualified.split(".")[-2:-1] == [kind])  # noqa: E731
+    else:
+        fits = lambda each: each.name == name  # noqa: E731
+    holding = [each for each in of_file.definitions if each.start_line <= line + 1 <= each.end_line and fits(each)]
+    return max(holding, key=lambda each: each.start_line) if holding else None
 
 
 def _reference(path: str, of_file: FileFacts, call: Call, edge: Edge, target: Target, downgraded: str = "") -> Reference:
@@ -424,8 +438,9 @@ def text(answer: Answer) -> str:
                     lines.append(where + why)
     stale = sorted({item.downgraded for item in (*answer.callers, *answer.callees) if item.downgraded})
     if stale:
-        lines.append(f"note: an imported compiler index covers these files but could not be used for {len(stale)} of them, "
-                     f"answered by the resolver instead: {stale[0]}" + (f" (and {len(stale) - 1} more)" if len(stale) > 1 else ""))
+        lines.append(f"note: an imported compiler index covers these files but could not be used here, so the resolver "
+                     f"answered: {stale[0]}" + (f" (and {len(stale) - 1} more reasons)" if len(stale) > 1 else "")
+                     + ". To have exact answers again: `aleph scip run`, or `aleph scip import` a new index")
     if answer.unanswered:
         lines.append(f"note: {answer.unanswered} calls inside it reach nothing in this worktree (libraries, local functions)")
     if answer.truncated:
