@@ -155,7 +155,7 @@ def test_a_directory_that_must_not_be_walked_gets_one_clear_sentence(tmp_path, c
     plain.mkdir()
     (plain / "notes.py").write_text("def lonely():\n    return 1\n")
     assert [hit.path for hit in Engine(plain).search("lonely").hits] == ["notes.py"]     # a project without git is searched (M10)
-    monkeypatch.setenv("HOME", str(plain))                                               # ... a home directory is not
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: plain))                    # ... a home directory is not
     with pytest.raises(gitio.NotARepository) as caught:
         Engine(plain).search("lonely")
     assert "git init" in str(caught.value) and str(plain) in str(caught.value)
@@ -170,6 +170,8 @@ def test_the_server_stays_up_in_a_directory_it_does_not_walk(tmp_path):
 
     plain = tmp_path / "plain"
     plain.mkdir()
+    # HOME in the environment, for once: the server is another process. It refuses before it parses anything,
+    # so the grammar package never looks for its cache in this empty home (see conftest's check at the end of a run).
     client = Client(plain, env={"HOME": str(plain)})
     try:
         client.start()

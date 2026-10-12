@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 from aleph_zero import cli
 from aleph_zero.view import build_view
@@ -31,7 +32,7 @@ def test_status_reports_the_view(repo, capsys):
 
 
 def test_a_directory_that_is_not_walked_is_an_error_message_not_a_traceback(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))       # outside a repository, a home directory is refused
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))   # outside a repository, a home directory is refused
     assert cli.main(["--cwd", str(tmp_path), "status"]) == 2
     assert "aleph:" in capsys.readouterr().err
 
