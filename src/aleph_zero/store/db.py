@@ -94,6 +94,11 @@ def cache_dir_for(directory: Path) -> Path:
     label = cache / "repository"
     if not label.exists():
         label.write_text(f"{directory}\n")
+    # The convention by which a tool marks what it generates: backups skip it, and so does Aleph's own walk of a
+    # plain directory, should the cache lie inside one.
+    tag = cache.parents[1] / "CACHEDIR.TAG"
+    if not tag.exists():
+        tag.write_text("Signature: 8a477f597d28d172789f06886806bc55\n# Aleph Zero's cache: indexes of code. Deleting it loses nothing but time.\n")
     return cache
 
 

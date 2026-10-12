@@ -155,6 +155,11 @@ def _serve(args) -> int:
 
 
 def _source(args) -> int:
+    try:
+        gitio.repo_info(args.cwd)
+    except gitio.NoRepository:
+        raise gitio.NotARepository(f"{args.cwd} is not a git repository: other repositories are linked to a repository, "
+                                   f"not to a directory. Run `git init` there") from None
     if args.action == "add":
         added = sources.add(args.cwd, args.location, name=args.name, ref=args.ref)
         print(f"added {added.name} ({added.kind}): {added.location}")

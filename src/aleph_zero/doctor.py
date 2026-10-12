@@ -107,7 +107,7 @@ def _plain_directory(cwd: Path) -> list[Row]:
     """A directory that is not a repository: whether it is searched, what of it is not, and where its index is."""
     try:
         view = build_view(cwd)
-    except gitio.NotARepository as exc:
+    except gitio.GitError as exc:       # refused by the rule, or a repository git cannot read
         return [Row("note", "repository", f"{exc}")]
     inside = f"; {view.inner_repositories} repositories inside it are not searched from here" if view.inner_repositories else ""
     return [Row("note", "repository", f"{view.root} is not a git repository: its {len(view.files)} files are searched as they are on "

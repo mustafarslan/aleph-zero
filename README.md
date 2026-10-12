@@ -200,8 +200,15 @@ marked with a `CACHEDIR.TAG`, symbolic links, and git repositories inside it (ru
 those). `aleph status` and `aleph doctor` say so.
 
 It refuses, with one sentence, where walking would be a mistake: your home directory or
-anything that holds it, the top of a disk, and a directory of more than 20,000 files. For
-those, `git init` and a `.gitignore` are the way to say what belongs to the project.
+anything that holds it (however the path is spelled), the top of a disk, the system's
+temporary directories, and a directory of more than 20,000 files (or one where more than
+200,000 entries would have to be looked at). For those, `git init` and a `.gitignore` are
+the way to say what belongs to the project. A directory with a `.git` at or above it that
+git cannot read is an error, not a plain directory: what it ignores must stay ignored.
+
+So `.github/` and other hidden files are not searched here, files over 300 KB and binary
+files are left out as everywhere, and the first search of a large directory reads all of
+it once (about five seconds for 5,000 files); later ones read only what changed.
 
 ## Where things are
 
@@ -219,7 +226,7 @@ What is searched is what git tracks in this worktree, as it is on disk now:
 - Submodules are not searched. `status` and `doctor` list them; link one as a source
   with `aleph source add path/to/submodule`.
 - Shallow and partial clones work. Nothing is ever fetched to answer a query.
-- A directory that is not a git repository is not searched: run `git init` there.
+- A directory that is not a git repository is searched as described under "Without git", with what that leaves out.
 
 Content no worktree has used for 30 days is dropped by itself; `aleph gc --days N`
 does it on request. A damaged index file is set aside (kept as `index.db.damaged-…`)

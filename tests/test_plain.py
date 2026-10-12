@@ -117,19 +117,31 @@ def test_only_git_saying_there_is_no_repository_opens_this_path(project, tmp_pat
     broken = tmp_path / "work" / "broken"
     (broken / ".git").mkdir(parents=True)                                           # a `.git` that git cannot read
     (broken / "a.py").write_text("x = 1\n")
-    walking, real = {"allowed": False}, plain.read
+    def walked(root, *_):
+        raise AssertionError(f"walked {root}, which is a repository or may be one")
 
-    def read(directory):
-        assert walking["allowed"], f"walked {directory} though git did not say it is in no repository"
-        return real(directory)
-
-    monkeypatch.setattr(plain, "read", read)
+    monkeypatch.setattr(plain, "_walk", walked)
     for directory in (bare, bare / "objects"):
         with pytest.raises(gitio.GitError):
             build_view(directory)
-    walking["allowed"] = True
-    assert build_view(broken).plain                                                 # git says: not a repository. So it is a directory
-    walking["allowed"] = False
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):         # a `.git` is there: git's word is not enough
+        build_view(broken)
+    real_repo = tmp_path / "work" / "real"
+    (real_repo / "src").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(real_repo)], check=True)
+    (real_repo / ".gitignore").write_text("ignored/\n")
+    (real_repo / "src" / "a.py").write_text("def tracked(): ...\n")
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(real_repo))                   # git no longer looks above `src`
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):
+        build_view(real_repo / "src")
+    monkeypatch.delenv("GIT_CEILING_DIRECTORIES")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere.git"))                    # left behind by a hook or a tool
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):
+        build_view(real_repo)
+    monkeypatch.delenv("GIT_DIR")
+    (real_repo / ".git" / "HEAD").unlink()                                          # half deleted
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):
+        build_view(real_repo)
     monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))                           # no git at all: an error, as before
     with pytest.raises((gitio.GitError, OSError)):
         build_view(project)
@@ -175,9 +187,9 @@ def test_every_command_works_or_says_why_not(project, capsys):
     rows = {row.name: row for row in doctor.check(project)}
     assert "not a git repository" in rows["repository"].detail and "hidden" in rows["repository"].detail
     assert rows["index"].level != "FAIL"
-    for arguments in (("scip", "run", "--lang", "python"), ("source", "add", "https://example.invalid/x.git")):
+    for arguments in (("scip", "run", "--lang", "python"), ("source", "add", "https://example.invalid/x.git"), ("source", "list")):
         code, said = run(*arguments)
-        assert code != 0 and "repository" in said.err, (arguments, said.err)
+        assert code != 0 and "is not a git repository" in said.err and "rev-parse" not in said.err, (arguments, said.err)
 
 
 def test_the_server_answers_in_a_directory_without_git(project):
@@ -190,3 +202,127 @@ def test_the_server_answers_in_a_directory_without_git(project):
         assert json.loads(client.text("status", format="json"))["repository"] is False
     finally:
         client.close()
+
+
+def test_the_home_directory_is_itself_however_its_path_is_spelled(project, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "stray.py").write_text("def stray(): ...\n")
+    shouted = tmp_path / "HOME"
+    if not shouted.exists():
+        pytest.skip("this file system tells HOME from home")
+    for spelled in (shouted, tmp_path / "Home" / ".." / "HOME", tmp_path / "WORK" / ".." / "home"):
+        with pytest.raises(gitio.NotARepository, match="home directory"):
+            build_view(spelled)
+    assert plain.read(project)[1] == plain.read(tmp_path / "WORK" / "PROJECT")[1]      # one directory, one index
+
+
+def test_without_a_home_directory_to_keep_out_of_nothing_is_walked(project, monkeypatch):
+    monkeypatch.setenv("HOME", "")
+    with pytest.raises(gitio.NotARepository, match="home directory is not known"):
+        build_view(project)
+
+
+def test_the_top_of_a_disk_and_the_temporary_directories_are_not_walked(project, monkeypatch):
+    for refused in ("/private/tmp", "/tmp", "/var/tmp"):
+        if Path(refused).exists():
+            assert plain.refusal(Path(refused).resolve()), refused
+    monkeypatch.setattr(os.path, "ismount", lambda path: Path(path) == project.resolve())
+    with pytest.raises(gitio.NotARepository, match="top of a disk"):
+        build_view(project)
+
+
+def test_a_query_out_of_time_keeps_what_it_hashed(project, monkeypatch):
+    for number in range(200):
+        (project / f"m{number:03d}.py").write_text(f"x = {number}\n")
+    hashed = []
+    real = gitio.hash_blob
+    monkeypatch.setattr(gitio, "hash_blob", lambda data, fmt="sha1": hashed.append(len(data)) or real(data, fmt))
+    start = [0]
+
+    def out_of_time_after_fifty_files():
+        if len(hashed) - start[0] >= 50:
+            raise gitio.GitTimeout("reading the worktree timed out before the time limit")
+
+    monkeypatch.setattr(gitio, "check_deadline", out_of_time_after_fifty_files)
+    reached = []
+    for _ in range(2):                                  # each attempt runs out of time, and each gets further
+        start[0] = len(hashed)
+        with pytest.raises(gitio.GitTimeout):
+            build_view(project)
+        reached.append(len(hashed))
+    assert 0 < reached[0] < reached[1] < 203
+    start[0] = 10**9
+    build_view(project)
+    assert len(hashed) == 203                           # every file once, over the three attempts: nothing twice
+
+
+def test_the_memory_of_hashes_survives_two_threads_and_a_damaged_file(project):
+    import threading
+
+    kept = plain.read(project)[1] / plain.MEMORY
+    stop, bad = threading.Event(), []
+
+    def walk():
+        while not stop.is_set():
+            plain.read(project)
+
+    def watch():
+        while not stop.is_set():
+            try:
+                json.loads(kept.read_text())
+            except ValueError:
+                bad.append(1)
+            except OSError:
+                pass
+
+    threads = [threading.Thread(target=walk) for _ in range(4)] + [threading.Thread(target=watch)]
+    for thread in threads:
+        thread.start()
+    import time
+    until, number = time.monotonic() + 1.5, 0
+    while time.monotonic() < until:
+        number += 1
+        (project / "src" / "tokens.py").write_text(f"def refresh_token(store):\n    return {number}\n")
+        (project / f"extra{number % 50}.py").write_text(f"x = {number}\n" * 400)
+    stop.set()
+    for thread in threads:
+        thread.join()
+    assert bad == []                                    # the file is always whole
+    right = dict(build_view(project).files)
+    whole = json.loads(kept.read_text())
+    walk_time = dict(whole, **{"src/tokens.py": [*whole["src/tokens.py"][:3], "four", whole["src/tokens.py"][4]]})
+    blob_id = dict(whole, **{"notes.md": [*whole["notes.md"][:4], 5]})
+    for damaged in (json.dumps(walk_time), json.dumps(blob_id), '{"a": [1, 2]}', "[1, 2]", "{"):
+        kept.write_text(damaged)
+        plain.forget()
+        assert build_view(project).files == right       # a memory that cannot be believed is not believed
+
+
+def test_a_cache_that_cannot_be_written_or_lies_inside_the_directory(project, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(project / "cache"))
+    engine = Engine(project)
+    engine.search("refresh token")
+    assert not [path for path in build_view(project).files if path.startswith("cache/")]     # Aleph's own cache is not source
+    assert engine.status()["pending"] == 0
+    if os.geteuid() != 0:
+        locked = project.parent / "locked"
+        locked.mkdir()
+        locked.chmod(0o500)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(locked))
+        try:
+            assert cli.main(["--cwd", str(project), "search", "refresh"]) == 2
+            assert "cannot be written" in capsys.readouterr().err
+        finally:
+            locked.chmod(0o700)
+
+
+def test_one_directory_of_very_many_entries_is_refused_without_reading_it_through(project, monkeypatch):
+    for number in range(30):
+        (project / f"n{number}.py").write_text("x = 1\n")
+    hashed = []
+    real = gitio.hash_blob
+    monkeypatch.setattr(gitio, "hash_blob", lambda data, fmt="sha1": hashed.append(1) or real(data, fmt))
+    monkeypatch.setattr(plain, "ENTRY_LIMIT", 10)
+    with pytest.raises(gitio.NotARepository, match="more than 10 entries"):
+        build_view(project)
+    assert hashed == []                                 # counted while listing, before anything was read
