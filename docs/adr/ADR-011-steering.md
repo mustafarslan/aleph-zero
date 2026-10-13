@@ -1,6 +1,6 @@
 # ADR-011: Steering Claude Code towards Aleph, and how it is measured
 
-Status: built; the measurement that decides the default rung has not been run (M4, 2026-10-12)
+Status: built (M4, 2026-10-12); measured once (2026-10-13): rung 2 is not shown to save tokens or tool calls on issue-to-file localisation, and the design's gate is not met. The default stays rung 1, which is not shown to do anything either (below).
 
 ## Question
 
@@ -16,7 +16,7 @@ Steering is a ladder, one option (`rung`) in the plugin's settings:
 |---|---|---|
 | 0 | Nothing beyond the engine's tools | |
 | 1 (default until measured) | All four tools loaded up front with tuned descriptions; one stable section in the system prompt saying to search before recursive grep, and when grep is still right; a pointer to the engine in the descriptions of Claude Code's own `Grep` and `Glob`, with its own switch (`grep_pointer`) so that it can be measured apart | `tool.describe`, `prompt.compose` |
-| 2 | On the first prompt of a session, if it is a sentence and two of the engine's generators agree on the top hit, up to five locations (path, lines, kind, name; never code) ride along as context | `prompt.submit` |
+| 2 | On the first prompt of a session, if it is a sentence and two of the engine's generators agree on the top hit, up to five files of code (path, the lines of up to three places in it, kind, name; never code itself) ride along as context. Until 2026-10-13: five places of any kind, a line each | `prompt.submit` |
 | 3 | A recursive `grep`, `rg` or `git grep` that reported no match (by its exit status, not merely by printing nothing), or a `find -name` without an action that printed nothing, gets ranked locations appended, worded so that it cannot be read as "occurrences remain" | `tool.call` on Bash, after the command |
 
 A meter runs on every rung: tokens per request (main conversation and subagents apart), tool calls by name, and which of Aleph and grep was used first. `/aleph stats` shows it, `/aleph stats last` the session before, `/aleph check` whether the mod can reach the engine.
@@ -153,6 +153,19 @@ Up by 20 questions, which is 5.0 points: the rule is met exactly at its edge, an
 - *The standing instruction is not followed.* Rung 2 includes rung 1 (a section in the system prompt, and a pointer in the descriptions of Grep and Glob, both saying to call `search` first). The agent's first search was the engine's in 2 of 30 sessions; in the pilot it was 2 of 4. Rungs 0 and 1 rest on that instruction alone.
 - *Rung 2 asks with a whole prompt, and on whole issue texts vectors pass their gate for Python* (+11.0 points on the 400, ADR-002), while the verdict that switched them off was read on first lines as "the closest to what an agent types". What an agent types was hardly seen (two queries in sixty sessions). Whether rung 2's own question should use vectors where the worker is installed is a question for the owner: it costs the embedding of every repository.
 - *The tasks leave little room.* Without the plugin the agent named the right file in 30 of 30 tasks, in four tool calls at the median. A fifth fewer is one call of four, or two turns of five. Whether the gate or the tasks should change is the owner's to decide; both readings are in the deferred list.
+
+### What was decided after the pass (2026-10-13)
+
+The owner's instruction for the questions the pass left open: "for open questions ger help from advisor and agy to answer them". Six questions; the three voices are kept apart in the ledger of that day and summed up here.
+
+1. **The gate stands and is not met**, in the scope of the run: rung 2, issue-to-file localisation, 30 pairs, sonnet. All three voices. Reading the gate on other tasks is another question with its own rule written first, not a second reading of this one.
+2. **Nothing changes for the later milestones** (code graph, knowledge graph, compiler indexes): their tools stay behind `ALEPH_GRAPH=1`. All three voices. Nothing in the README claims a saving.
+3. **No further paid session now.** All three voices, for different reasons: agy, because it is not understood why a handed answer saved nothing; the advisor, because no arm is designed (the default rung is open, the changed rung 2 has one session behind it, a filter for tasks with room does not exist). agy's aside, to force vectors on in such a run, is not adopted: the product as it ships was the fixed position, and the check under 4 tests the idea without a session. $32.90 of the stated limit is unspent.
+4. **Vectors for rung 2's own question: measured without a session, nothing built.** The rule, written before the measurement: the same 400 questions and the same four variants as above, vectors on for that one query; a question whose index is not fully embedded is left out and counted. "A file of the answer among them" up by 5 points or more over the same variant with words alone is a reason to put vectors on in a next measured arm, and nothing more.
+5. **One result a file among the engine's ten: measured without a session, nothing changed.** The rule, written before the measurement: Python's 400 and C++'s 108 by their first lines, each language in the arm it ships with (Python: words and names; C++: with vectors), the other arm beside it; at most one result a file, applied where the engine cuts its list to ten. It passes if file recall@10 rises by 5 points or more with a paired interval clear of zero in both languages' shipped arms and first place is not lower. A pass is a proposal that re-reads both vector verdicts, not a change.
+6. **The default stays rung 1.** agy would make it rung 0: the standing instruction was followed in 2 of 30 sessions and its text rides on every turn. Not adopted, for the advisor's reason: there was no rung-0 arm, so 2 of 30 may be what the tools alone give; the text is about a thousand characters; and how often it is followed differs by model and prompt (two short sessions on the cheap model that day called the engine first, both). What is known about rung 1 is this and no more: **followed in 2 of 30 sonnet sessions on issue texts; no rung-0 control.** Rung 0 against rung 1 on that count alone is the cheapest arm to add to a later run.
+
+The design said rung 2 would be "dropped if flat or negative". It is flat within what 30 pairs can see. It was already off by default and stays an option: the run could not exclude a saving under about 30%, and what it hands over has changed since.
 
 ## Views consulted
 
