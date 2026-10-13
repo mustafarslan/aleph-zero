@@ -150,7 +150,8 @@ line of an issue, with an interval that excludes zero. Measured so far:
 | Java | +0.1 (−3.2 to +3.4), 296 questions | off |
 
 C and Rust are not measured and are off. On whole issue text vectors gain in every language (5 to 18
-points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on.
+points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on,
+and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
 `aleph status` shows a project's main language and whether vectors are on, and why.
 `aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
 repository; it unloads its model after ten idle minutes and exits after thirty.
