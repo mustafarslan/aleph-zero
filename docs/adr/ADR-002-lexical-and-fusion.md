@@ -215,6 +215,21 @@ The fusion adds up the generators' votes per chunk, and the pieces of one long d
 
 **What it would do to the vector verdicts, for the record.** Under merged fusion Python's gate reads +5.2 points on all 400 first lines (+2.0 to +8.7), over the bar. That is not a pass. The verdict was decided by the 165 questions held out, and there merging moves no first-line score at all in either arm: +1.6 (−3.4 to +6.7), as before. The whole movement is on the 235 questions everything was first looked at on, which is what a held-out set is for. C++ would read +7.2 (+1.9 to +13.0) and stay on.
 
+### Read again the same evening, over all six shipped arms: still not adopted
+
+At 19:04 TypeScript came to ship with vectors, which is what the morning's reading had named as the reason to read again. The rule was written first (the deferred list, entry 1c) and reads `merged` on first lines in the arm each of the six languages ships with; the morning's cells for Python and C++ are used as they stand.
+
+| Shipped arm, first lines | As it is | Merged: change (95% interval) | Questions better / worse | First place |
+|---|---|---|---|---|
+| Python, words and names, 400 | 0.563 | +0.25 points (0.0 to +0.75) | 1 / 0 | +0.4 (0.0 to +1.0) |
+| Go, words and names, 110 | 0.500 | none | 0 / 0 | none |
+| JavaScript, words and names, 230 | 0.445 | none | 0 / 0 | none |
+| Java, words and names, 296 | 0.469 | none | 0 / 0 | +1.0 (0.0 to +2.4) |
+| C++, with vectors, 108 | 0.456 | +0.46 (0.0 to +1.4) | 1 / 0 | −0.3 (−0.9 to 0.0) |
+| TypeScript, with vectors, 165 | 0.456 | +0.26 (−1.2 to +2.0) | 3 / 3 | +1.5 (−0.3 to +3.6) |
+
+Not lower anywhere; higher nowhere with an interval clear of zero. **Not adopted; the fusion stays as it is.** TypeScript was where it was expected to show, and it changes six questions, three each way. Where it does gain with an interval clear of zero is with vectors on first lines in the languages whose default is words: Python +1.6, JavaScript +1.5, Java +1.5 (Go +1.4, its interval holds zero), and on whole text Python +2.3. So merging the votes helps a fusion that has vectors in exactly the places where vectors do not ship, and does nearly nothing where they do. That has been read twice now by rules written first; it is not read a third time unless what ships changes again.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.
