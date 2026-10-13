@@ -35,7 +35,8 @@ def test_the_decision_follows_the_verdict_for_the_main_language(monkeypatch):
     monkeypatch.setattr(dense_policy, "VERDICTS", {
         "python": Verdict(True, "+6 points on 400 questions"), "go": Verdict(False, "+1 point on 380 questions")})
     assert dense_policy.decide(None, "python") == (True, "the benchmark for python says vectors help (+6 points on 400 questions)")
-    assert dense_policy.decide(None, "go") == (False, "the benchmark for go says vectors do not help enough (+1 point on 380 questions)")
+    assert dense_policy.decide(None, "go") == (False, "the benchmark for go says vectors do not help enough (+1 point on 380 questions); "
+                                                       "`--dense` or ALEPH_DENSE=1 switches them on by hand")
     off, why = dense_policy.decide(None, "rust")
     assert off is False and "no benchmark has been run for rust" in why
     assert dense_policy.decide(None, None)[0] is False
@@ -87,8 +88,13 @@ def test_command_line_settings(repo, monkeypatch, capsys):
 
 
 def test_python_has_its_verdict_and_it_is_backed_by_numbers():
+    """The gate was fixed beforehand: 5 points of file recall@10 on issue titles, with an interval that excludes zero.
+    The 165 questions held out gave +1.6, and all 400 together +3.9: vectors help Python, by less than the bar."""
     verdict = dense_policy.VERDICTS["python"]
-    assert verdict.helps is True and "235" in verdict.evidence and "ADR-002" in verdict.evidence
+    assert verdict.helps is False and "400" in verdict.evidence and "165" in verdict.evidence and "ADR-002" in verdict.evidence
+    on, why = dense_policy.decide(None, "python")
+    assert on is False and "do not help enough" in why and "ALEPH_DENSE=1" in why        # and how to have them all the same
+    assert dense_policy.decide(True, "python") == (True, "switched on by hand")
 
 
 def test_left_to_decide_and_with_no_worker_installed_nothing_is_said_about_vectors(repo, monkeypatch):

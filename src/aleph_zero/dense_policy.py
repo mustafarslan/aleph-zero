@@ -23,11 +23,13 @@ class Verdict:
 
 # Filled in from Benchmark C, one language at a time. A language not listed has not been measured.
 VERDICTS: dict[str, Verdict] = {
-    # Provisional: the candidate pool that reaches this gain (300) was chosen on the same
-    # questions; at the first pool (50) the gain was +3.2 and the gate was not met. The
-    # 165 Loc-Bench questions not yet run are the held-out check (docs/DEFERRED.md).
-    "python": Verdict(True, "+5.5 points of file recall@10, interval +1.3 to +9.8, on 235 Loc-Bench questions "
-                            "asked by their issue titles; provisional, ADR-002, 2026-10-12"),
+    # The gate was fixed before any run (ADR-002): 5 points of file recall@10 on issue titles, with an interval
+    # that excludes zero. On the first 235 questions it read +5.5, at a candidate pool chosen on those questions,
+    # and was recorded as provisional. The 165 questions held out for the check gave +1.6 (-3.4 to +6.9), and all
+    # 400 together +3.9 (+0.6 to +7.2): vectors help Python, by less than the bar. On whole issue texts they add
+    # 11 points; an agent's query is nearer a title.
+    "python": Verdict(False, "+3.9 points of file recall@10 on 400 Loc-Bench questions asked by their issue titles, interval +0.6 to +7.2, "
+                             "and +1.6 on the 165 held out: under the 5-point bar; on whole issue texts +11.0; ADR-002, 2026-10-13"),
 }
 
 # Languages that share a verdict because they share a benchmark.
@@ -48,4 +50,5 @@ def decide(setting: bool | None, language: str | None) -> tuple[bool, str]:
                        "`--dense` or ALEPH_DENSE=1 switches vectors on by hand")
     if verdict.helps:
         return True, f"the benchmark for {language} says vectors help ({verdict.evidence})"
-    return False, f"the benchmark for {language} says vectors do not help enough ({verdict.evidence})"
+    return False, (f"the benchmark for {language} says vectors do not help enough ({verdict.evidence}); "
+                   "`--dense` or ALEPH_DENSE=1 switches them on by hand")

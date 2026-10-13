@@ -90,9 +90,12 @@ Its files are searched as `docs:path/in/that/repo.md`.
     uv run aleph embed status
 
 With the worker installed, vectors are used by default in projects whose main language
-has a benchmark verdict in their favour: today that is Python (ADR-002). `aleph status`
-shows a project's main language and whether vectors are on, and why. `--dense`,
-`--no-dense` and `ALEPH_DENSE=1|0` decide by hand. One worker serves every session and
+has a benchmark verdict in their favour. Today no language has one: on Python they add
+about 4 points of file recall on short queries and 11 on whole issue texts, under the
+5-point bar set for short queries beforehand (ADR-002), so search is by words and names
+unless you say otherwise. `--dense`, `--no-dense` and `ALEPH_DENSE=1|0` decide by hand, and
+`aleph status` shows a project's main language and whether vectors are on, and why.
+`aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
 repository; it unloads its model after ten idle minutes and exits after thirty.
 
 ## Memory across sessions

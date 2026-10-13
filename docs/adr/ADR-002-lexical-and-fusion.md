@@ -1,6 +1,6 @@
 # ADR-002: Lexical index and hybrid fusion
 
-- **Status:** Accepted. Lexical part in M1; fusion and the per-language gate for vectors in M2 (Python decided 2026-10-12; other languages have no verdict yet).
+- **Status:** Accepted. Lexical part in M1; fusion and the per-language gate for vectors in M2 (Python decided 2026-10-12 provisionally, and decided again on the held-out questions on 2026-10-13: vectors are not on by default; other languages have no verdict yet).
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -100,7 +100,7 @@ M1's gate asks that Aleph at least match the baseline. It is 23 points ahead at 
 
 **Long queries keep their rarest words.** An issue is hundreds of words. Taking the first 48 terms gave recall@10 0.757 in 172 ms; taking the 24 terms found in the fewest chunks (`lexical.select_terms`, from FTS5's own term counts) gives 0.743 in 118 ms. The quality difference is half a question; the time difference is a third. Variants that kept the first 8 to 16 words and filled up with rare ones scored 0.714 to 0.771, all inside the noise, so the simplest rule was kept. Queries of 16 terms or fewer are not touched.
 
-## Benchmark C, Python: vectors pass the gate, provisionally (2026-10-12)
+## Benchmark C, Python: vectors pass the gate, provisionally (2026-10-12; superseded by the held-out check below)
 
 `bench/eval/benchmark_c.py`, 235 Loc-Bench questions from 18 Python repositories (Django, yt-dlp, dask, sqlglot, prefect, mypy, prowler, modin, jax, diffusers, sentence-transformers, docling, flet, pydantic, sqlfluff, moto, trl, aiohttp). Each repository is read at the issue's base commit from git's object store; every commit was indexed and embedded beforehand. Aleph is asked for ten results, as an agent would ask (the default is eight). File recall@10 unless stated.
 
@@ -123,6 +123,24 @@ What else the numbers say:
 - Still unmeasured: the 50 hand-written questions; other languages; documentation questions; the split-threshold sweep of ADR-001; any tuning of the text ranking, which is as untuned as the fusion.
 
 **Verdict recorded:** `dense_policy.VERDICTS["python"]` is on, marked provisional. It takes effect only where the embedding worker has been installed, which is itself a deliberate step.
+
+## Benchmark C, Python: the held-out check does not pass (2026-10-13)
+
+The 165 Loc-Bench questions of the 18 large repositories that the first run left out (vllm, pandas, scikit-learn, transformers, ray, scipy, keras, sympy, qiskit, ultralytics, matplotlib, numpy, mlflow, phidata, streamlit, pytorch-lightning, checkov, pypdf) were prepared overnight and run with the product's settings as they stand (ten results, a pool of 300). They are the check this record asked for: the pool had been chosen on the first 235.
+
+| Query form | Questions | Words and names | With vectors | Gain from vectors (95% interval) | Better / worse |
+|---|---|---|---|---|---|
+| **Issue title** (the gate form), held out | 165 | 0.514 | 0.530 | **+1.6 points (−3.4 to +6.9)** | 11 / 8 |
+| Issue title, the first 235 (as measured then) | 235 | 0.598 | 0.653 | +5.5 (+1.3 to +10.0) | 21 / 8 |
+| Issue title, all 400 | 400 | | | **+3.9 (+0.6 to +7.2)** | |
+| Whole issue text, held out | 165 | 0.486 | 0.569 | +8.3 (+3.4 to +13.3) | 18 / 3 |
+| Whole issue text, all 400 | 400 | | | +11.0 (+7.5 to +14.6) | |
+
+**By the rule fixed beforehand the gate is not met.** It asks for 5 points on titles with an interval that excludes zero. Held out: +1.6, and the interval holds zero. All 400 together: +3.9, clear of zero and under the bar. Vectors help search on Python, by about four points on a title-length query and eleven on a whole issue; that is less than what was asked of them before they cost a model, a GPU and minutes of embedding per repository by default.
+
+**Verdict recorded:** `dense_policy.VERDICTS["python"]` is off. `--dense`, `ALEPH_DENSE=1` switch vectors on by hand, as before, and `aleph status` says why they are off. `aleph decisions` is not touched by this: a record's own vector is used whenever a worker runs, on its own evidence (ADR-003).
+
+**What this reading rests on, and what it does not settle.** The two halves were scored by different versions of the code (the first 235 on 2026-10-12, before later changes to the index; their indexes are not up to date and the run left them out, saying so). Scoring all 400 with one version needs the first 235 prepared again; it cannot change the held-out figure. The bar itself (5 points) was set on a 35-question pilot and is the owner's to keep or move. And the same pattern shows in both halves: vectors are neutral on short queries and clearly useful on long ones. Switching them on by the length of the query, instead of by language alone, is a design to write down and measure before it is built; it is not built.
 
 ## The gate is per language (owner's instruction, 2026-10-12)
 

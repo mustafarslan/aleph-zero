@@ -383,6 +383,12 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
     if isinstance(cool, Guard):
         cool.while_waiting = job.cooling
     stopped = False
+    passed_over: dict[str, int] = {}    # questions that cannot be scored, by why: said at the end, not passed over in silence
+
+    def leave(why: str) -> None:
+        passed_over[why] = passed_over.get(why, 0) + 1
+        job.note(left_out=sum(passed_over.values()))
+
     for number, row in enumerate(rows, 1):
         try:
             job()
@@ -402,16 +408,19 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
         try:
             view = view_at(clone, row["base_commit"])
         except gitio.GitError:
-            continue  # not prepared
+            leave("not fetched")
+            continue
         index = Index(open_db(index_file(view.common_dir)))
         if index.sync(view, budget_seconds=0.0).pending:
             index.conn.close()
+            leave("not indexed as the code is now")     # never prepared, or prepared by an earlier version: `prepare` again
             continue
         store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
         have, total = store.coverage(index)
         if have < total:
             index.conn.close()
-            continue  # not fully embedded: skipped rather than scored on partial vectors
+            leave("not fully embedded")                 # rather than scored on partial vectors
+            continue
         # What vectors would propose if files with no language profile (JSON, YAML, SQL
         # fixtures: kind 'block') had none. Simulated by leaving their chunks out.
         left_out = {r[0] for r in index.conn.execute(
@@ -453,12 +462,16 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
             f"{form}: lex {entry['scores'][form]['lexical']['recall@10']:.2f} dense {entry['scores'][form]['dense']['recall@10']:.2f} "
             f"hyb {entry['scores'][form]['hybrid']['recall@10']:.2f}" for form in FORMS), file=sys.stderr, flush=True)
     job.finish(done=not stopped)
+    if passed_over:
+        print(f"left out {sum(passed_over.values())} of {len(rows)} questions: "
+              + ", ".join(f"{count} {why}" for why, count in sorted(passed_over.items())) + " (`prepare` makes them ready)",
+              file=sys.stderr, flush=True)
     if stopped:
         raise SystemExit(f"stopped on request after {len(results)} questions; what was worked out is kept: "
                          f"the same command takes it up there")
     if not results:
         raise SystemExit("no prepared instances found; run `prepare` first")
-    summary: dict = {"instances": len(results), "repos": sorted({entry["repo"] for entry in results}),
+    summary: dict = {"instances": len(results), "left_out": passed_over, "repos": sorted({entry["repo"] for entry in results}),
                      "bm25_full": {key: round(statistics.mean(entry["bm25"][key] for entry in results), 3)
                                    for key in results[0]["bm25"]}}
     for form in FORMS:

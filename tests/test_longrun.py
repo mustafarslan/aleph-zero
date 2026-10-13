@@ -543,3 +543,21 @@ def test_the_run_step_watches_the_heat_too_and_gives_itself_up_with_what_it_work
     with pytest.raises(SystemExit, match="looked"):
         benchmark_c.run(work, rows, None, with_bm25=False, mains=lambda: True)
     assert isinstance(seen[0]["guard"], temps.Guard) and seen[0]["mains"]() is True     # by default: the guard, and the power asked about
+
+
+def test_the_run_step_says_which_questions_it_left_out_and_why(tmp_path, fake_worker, monkeypatch, capsys):
+    """A question whose repository is not indexed as the code is now cannot be scored. It used to be passed over
+    without a word, and a run that scored 169 questions of 400 ended "done"."""
+    import benchmark_c
+
+    work, rows = _two_repositories(tmp_path)
+    for row in rows:
+        row["problem_statement"], row["gold"] = "function value other", ["a.py"]
+    monkeypatch.setattr(benchmark_c.worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(benchmark_c.worker, "slots", lambda: 1)
+    monkeypatch.setattr(benchmark_c.worker, "capacity_tokens", lambda: 4096)
+    assert benchmark_c.prepare(work, rows[:1], max_chunks=1000, guard=cool) == "done"       # the second is never prepared
+    summary = benchmark_c.run(work, rows, None, with_bm25=False, guard=cool)
+    assert summary["instances"] == 1 and summary["left_out"] == {"not indexed as the code is now": 1}
+    assert "left out 1 of 2" in capsys.readouterr().err
+    assert status(work)["left_out"] == 1
