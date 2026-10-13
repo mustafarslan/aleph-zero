@@ -154,7 +154,8 @@ points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repo
 and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
 `aleph status` shows a project's main language and whether vectors are on, and why.
 `aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
-repository; it unloads its model after ten idle minutes and exits after thirty.
+repository; a session (`aleph serve`) starts it when it starts, where vectors are on, so that its first question
+has them; it unloads its model after ten idle minutes and exits after thirty.
 
 ## Memory across sessions
 
