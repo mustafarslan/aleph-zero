@@ -160,3 +160,19 @@ def test_a_repository_s_own_choice_decides_where_no_flag_does_and_is_read_again_
     assert engine.status()["vectors"]["enabled"] is True         # no choice any more: the verdict again
     settings.change(chosen, dense=False)
     assert engine.status()["vectors"]["enabled"] is False        # and the same engine sees each change, not what it kept
+
+
+def test_go_typescript_javascript_and_java_each_have_their_own_verdict_from_their_own_questions():
+    """The owner's release of 2026-10-13. The same gate for each: the first line, 5 points, an interval that excludes zero."""
+    verdicts = dense_policy.VERDICTS
+    assert verdicts["typescript"].helps is True and "+10.2 points" in verdicts["typescript"].evidence and "165 questions" in verdicts["typescript"].evidence
+    for language, gain, questions in (("go", "+2.0", "110"), ("javascript", "+3.7", "230"), ("java", "+0.1", "296")):
+        verdict = verdicts[language]
+        assert verdict.helps is False and f"{gain} points" in verdict.evidence and f"{questions} questions" in verdict.evidence
+        assert "holds zero" in verdict.evidence and "whole issue text" in verdict.evidence and "ADR-002" in verdict.evidence
+        on, why = dense_policy.decide(None, language)
+        assert on is False and "ALEPH_DENSE=1" in why            # and how to have them all the same
+    assert dense_policy.decide(None, "typescript")[0] is True and dense_policy.decide(None, "tsx")[0] is True
+    assert dense_policy.decide(None, "javascript")[0] is False   # two languages, two verdicts: they came out on different sides
+    for unmeasured in ("c", "rust"):
+        assert "no benchmark has been run" in dense_policy.decide(None, unmeasured)[1]

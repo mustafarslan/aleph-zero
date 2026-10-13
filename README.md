@@ -137,10 +137,20 @@ Its files are searched as `docs:path/in/that/repo.md`.
     uv run aleph embed status
 
 With the worker installed, vectors are used by default in projects whose main language
-has a benchmark verdict in their favour (ADR-002). Today that is C++ (+8 points of file
-recall on short queries). On Python they add about 4 points on short queries and 11 on
-whole issue texts, under the 5-point bar set for short queries beforehand, so there search
-is by words and names unless you say otherwise. The other languages are not measured yet. `--dense`, `--no-dense` and `ALEPH_DENSE=1|0` decide by hand, and
+has a benchmark verdict in their favour (ADR-002): 5 points or more of file recall@10 on the first
+line of an issue, with an interval that excludes zero. Measured so far:
+
+| Main language | Gain on first lines (95% interval) | Default |
+|---|---|---|
+| TypeScript | +10.2 points (+5.3 to +15.2), 165 questions | on |
+| C++ | +6.7 (+1.4 to +12.3), 108 questions | on |
+| Python | +3.9 (+0.6 to +7.2), 400 questions; +1.6 on the 165 held out | off |
+| JavaScript | +3.7 (−1.4 to +8.7), 230 questions | off |
+| Go | +2.0 (−3.8 to +7.9), 110 questions | off |
+| Java | +0.1 (−3.2 to +3.4), 296 questions | off |
+
+C and Rust are not measured and are off. On whole issue text vectors gain in every language (5 to 18
+points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on.
 `aleph status` shows a project's main language and whether vectors are on, and why.
 `aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
 repository; it unloads its model after ten idle minutes and exits after thirty.

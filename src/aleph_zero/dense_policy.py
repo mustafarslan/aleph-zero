@@ -32,9 +32,21 @@ VERDICTS: dict[str, Verdict] = {
                              "and +1.6 on the 165 held out: under the 5-point bar; on whole issue texts +11.0; ADR-002, 2026-10-13"),
     # The same gate, with how it would be read written down before the run: nothing was tuned on C++, so this
     # first reading is at settings chosen elsewhere. Two repositories give 80 of the 108 questions; resampling
-    # repositories instead of questions the interval is +4.0 to +13.8.
+    # repositories instead of questions the interval is +3.8 to +13.8.
     "cpp": Verdict(True, "+6.7 points of file recall@10, interval +1.4 to +12.3, on 108 questions from five repositories "
                          "asked by their first line; ADR-002, 2026-10-13"),
+    # Four languages on public repositories, released by the owner on 2026-10-13; the reading was written down for
+    # all four before anything was embedded, and is C++'s. JavaScript and TypeScript are two languages with two sets
+    # of questions and came out on different sides. Where the first line shows nothing, whole issue text still
+    # gains much: an agent's own query is nearer a first line, and that is what the gate reads.
+    "typescript": Verdict(True, "+10.2 points of file recall@10, interval +5.3 to +15.2, on 165 questions from eleven repositories "
+                                "asked by their first line; ADR-002, 2026-10-13"),
+    "go": Verdict(False, "+2.0 points of file recall@10 on 110 questions from eight repositories asked by their first line, "
+                         "interval -3.8 to +7.9, which holds zero; on whole issue text +18.2; ADR-002, 2026-10-13"),
+    "javascript": Verdict(False, "+3.7 points of file recall@10 on 230 questions from twelve repositories asked by their first line, "
+                                 "interval -1.4 to +8.7, which holds zero; on whole issue text +12.4; ADR-002, 2026-10-13"),
+    "java": Verdict(False, "+0.1 points of file recall@10 on 296 questions from eighteen repositories asked by their first line, "
+                           "interval -3.2 to +3.4, which holds zero; on whole issue text +5.3; ADR-002, 2026-10-13"),
 }
 
 # Languages that share a verdict because they share a benchmark.
