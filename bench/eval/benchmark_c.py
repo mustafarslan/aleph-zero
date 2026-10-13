@@ -83,7 +83,9 @@ CACHE = Path(__file__).resolve().parents[1] / "data" / "locbench"
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
 FORMS = ("full", "title", "rare")
 ALPHAS = (0.2, 0.4, 0.6, 0.8)   # weight of the vector score in the convex combination
-MODES = ("lexical", "dense", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
+# `dense` and the convex arms are read to ten files, however many chunks that takes; `dense10` is vectors alone read
+# as the engine's own arms are, on ten results, of which several are in one file. Only like is compared with like.
+MODES = ("lexical", "dense", "dense10", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
 
 
 def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None) -> list[dict]:
@@ -317,10 +319,10 @@ def bm25_files(view: View, question: str) -> list[str]:
     return [row[0] for row in conn.execute("SELECT path FROM files WHERE files MATCH ? ORDER BY bm25(files) LIMIT 10", (match,))]
 
 
-def chunk_files(index: Index, chunk_ids: list[int]) -> list[str]:
-    """The first ten files that hold the given chunks, in the chunks' order."""
+def chunk_files(index: Index, chunk_ids: list[int], chunks: int | None = None) -> list[str]:
+    """The first ten files that hold the given chunks, in the chunks' order; of the first `chunks` of them only, if given."""
     paths: list[str] = []
-    for chunk_id in chunk_ids:
+    for chunk_id in chunk_ids[:chunks]:
         for oid, family in index.conn.execute(
                 "SELECT bc.blob_oid, bc.family FROM blob_chunks bc JOIN temp.view_blobs v "
                 "ON v.blob_oid = bc.blob_oid AND v.family = bc.family WHERE bc.chunk_id = ?", (chunk_id,)):
@@ -368,6 +370,30 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
     count = len(differences)
     means = sorted(sum(differences[rng.randrange(count)] for _ in range(count)) / count for _ in range(rounds))
     return statistics.mean(differences), means[int(0.025 * rounds)], means[int(0.975 * rounds)]
+
+
+def summarise(results: list[dict], passed_over: dict[str, int]) -> dict:
+    """The means over the questions that were scored, and what vectors add, with its interval."""
+    summary: dict = {"instances": len(results), "left_out": passed_over, "repos": sorted({entry["repo"] for entry in results}),
+                     "bm25_full": {key: round(statistics.mean(entry["bm25"][key] for entry in results), 3)
+                                   for key in results[0]["bm25"]}}
+    for form in FORMS:
+        block: dict = {}
+        for mode in MODES:
+            block[mode] = {key: round(statistics.mean(entry["scores"][form][mode][key] for entry in results), 3)
+                           for key in ("recall@1", "recall@5", "recall@10", "all@10", "mrr")}
+            # How many files the answer named: ten results are fewer than ten files, and a ranker read to ten files
+            # is not compared with one read to ten results.
+            block[mode]["files"] = round(statistics.mean(len(entry["files"][form][mode]) for entry in results), 1)
+        for name, (first, second) in {"hybrid_minus_lexical": ("hybrid", "lexical"), "dense_minus_lexical": ("dense", "lexical"),
+                                      "hybrid_minus_dense10": ("hybrid", "dense10")}.items():
+            block[name] = {}
+            for key in ("recall@10", "recall@1", "mrr"):
+                mean, low, high = paired_bootstrap([entry["scores"][form][first][key] for entry in results],
+                                                   [entry["scores"][form][second][key] for entry in results])
+                block[name][key] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
+        summary[form] = block
+    return summary
 
 
 def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code_and_docs_only: bool = False,
@@ -447,6 +473,7 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
                 "lexical": first_files([hit.path for hit in search(index, view, question, k=k)]),
                 "hybrid": first_files([hit.path for hit in search(index, view, question, k=k, dense=nearest)]),
                 "dense": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores]),
+                "dense10": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores], chunks=k),
                 **{f"convex{alpha}": chunk_files(index, convex_chunks(text_scores, vector_scores, alpha)) for alpha in ALPHAS},
             }
         bm25 = bm25_files(view, forms["full"]) if with_bm25 else []
@@ -471,21 +498,7 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
                          f"the same command takes it up there")
     if not results:
         raise SystemExit("no prepared instances found; run `prepare` first")
-    summary: dict = {"instances": len(results), "left_out": passed_over, "repos": sorted({entry["repo"] for entry in results}),
-                     "bm25_full": {key: round(statistics.mean(entry["bm25"][key] for entry in results), 3)
-                                   for key in results[0]["bm25"]}}
-    for form in FORMS:
-        block: dict = {}
-        for mode in MODES:
-            block[mode] = {key: round(statistics.mean(entry["scores"][form][mode][key] for entry in results), 3)
-                           for key in ("recall@1", "recall@5", "recall@10", "all@10", "mrr")}
-        for name, (first, second) in {"hybrid_minus_lexical": ("hybrid", "lexical"), "dense_minus_lexical": ("dense", "lexical")}.items():
-            block[name] = {}
-            for key in ("recall@10", "recall@1", "mrr"):
-                mean, low, high = paired_bootstrap([entry["scores"][form][first][key] for entry in results],
-                                                   [entry["scores"][form][second][key] for entry in results])
-                block[name][key] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
-        summary[form] = block
+    summary = summarise(results, passed_over)
     print(json.dumps(summary, indent=2))
     if out:
         out.write_text(json.dumps({"summary": summary, "instances": results}, indent=2) + "\n")
