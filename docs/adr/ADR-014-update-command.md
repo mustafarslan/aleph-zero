@@ -1,6 +1,6 @@
 # ADR-014: One command that brings a repository up to date
 
-Status: decided 2026-10-13; being built
+Status: built 2026-10-13 (`aleph update`); tried with real git hooks on a scratch repository
 
 ## Question
 
@@ -35,3 +35,11 @@ Garbage is collected on the engine's own daily schedule and is not part of this.
 ## Accepted when
 
 On a repository with a commit just made: `aleph update` indexes what changed and says so in a line; run again it says that nothing changed. Where vectors are on, every chunk has one afterwards, and where they are off none is made and the worker is not asked. A source linked by URL whose origin moved is fetched and its new content found, and with `--no-fetch` it is not. Graph facts are read where they were in use and not created where they were not. Two updates at once: one works, the other says so and ends with 0. With `GIT_DIR` set to another repository, Aleph still reads the one it was pointed at. `--print-hook` prints and writes nothing.
+
+## As built
+
+- `update.run` (the parts, in order, each failing by itself), `update.only_one` (the lock), `update.hook_lines`, `aleph update` with `--no-fetch`, `--minutes`, `--quiet`, `--json`, `--print-hook`; `gitio` runs git without the variables a hook sets.
+- Tried on a scratch repository with a cache directory of its own: a commit changing one function: "indexed 1 file" and "read the code graph's facts of 1 file" (the graph had been asked there), then "nothing changed". The printed lines put into its hooks by hand: after a change of branch and after a merge the index matched the worktree without any command of mine, and the merged file's definition was in it. With `GIT_DIR` set to another repository a search still answered from the one it was pointed at.
+- Not tried with the real worker: it was embedding the TypeScript benchmark; the vectors' part is covered by the tests with the stand-in worker, as `aleph embed run` is.
+- `aleph setup` names the command at the end of its menu.
+

@@ -307,7 +307,8 @@ def _setup(args) -> int:
         except (KeyboardInterrupt, EOFError):
             say("\nleft as it is: `aleph setup` asks about the rest")
         settings.change(repo_file, hint_shown=True)
-        say("")
+        say("\nAfter a pull, `aleph update` brings all of this up to date in one go, for what changed only; "
+            "`aleph update --print-hook` prints the lines that make git do it by itself.\n")
     status, found, steps = now()
     if args.json:
         print(json.dumps(firstrun.as_json(steps), indent=2))
@@ -316,6 +317,24 @@ def _setup(args) -> int:
     if firstrun.open_steps(steps) and not firstrun.on_terminal():
         say("\nAnswer these on a terminal with `aleph setup`, or one at a time: --worker, --source LOCATION, --embed, "
             "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
+    return 2 if failed else 0
+
+
+def _update(args) -> int:
+    """ADR-014: what changed is brought up to date in one go. For a person, a git hook or a schedule."""
+    from . import update
+
+    if args.print_hook:
+        print(update.hook_lines())
+        return 0
+    report = update.run(args.cwd, fetch=not args.no_fetch, minutes=args.minutes)
+    failed = report.get("failed") or []
+    if args.json:
+        print(json.dumps(report, indent=2))
+    elif not args.quiet:
+        print("\n".join(update.text(report)))
+    elif failed:
+        print("\n".join(f"aleph update: FAILED {problem}" for problem in failed), file=sys.stderr)
     return 2 if failed else 0
 
 
@@ -468,6 +487,15 @@ def main(argv: list[str] | None = None) -> int:
     chosen.add_argument("--no-dense", action="store_true", help="do not use search by meaning in this repository")
     first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this worktree's index (no configuration is changed)")
     first.set_defaults(run=_setup)
+
+    fresh = commands.add_parser("update", help="bring this repository up to date in one go: fetched sources, the index, facts and vectors "
+                                               "for what changed (for a git hook or a nightly schedule)")
+    fresh.add_argument("--no-fetch", action="store_true", help="leave the network alone: sources linked by URL are not fetched")
+    fresh.add_argument("--minutes", type=float, default=10.0, help="of embedding at most (default 10); what is left is made next time")
+    fresh.add_argument("--quiet", action="store_true", help="say nothing unless a part failed")
+    fresh.add_argument("--json", action="store_true", help="the report as data")
+    fresh.add_argument("--print-hook", action="store_true", help="print the lines for git's post-merge and post-checkout hooks; nothing is installed")
+    fresh.set_defaults(run=_update)
 
     health = commands.add_parser("doctor", help="check that everything Aleph needs is in place")
     health.add_argument("--fetch-grammars", action="store_true", help="download missing grammars (uses the network)")

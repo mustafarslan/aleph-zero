@@ -62,6 +62,7 @@ def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, m
     assert left == [] and len(asked) == 5
     out = capsys.readouterr().out
     assert "claude" in out and "handbook" in out
+    assert "aleph update" in out and "--print-hook" in out         # and how it stays up to date afterwards
     assert settings.read(settings.machine_file())["setup"] == {"claude": "done", "worker": "declined"}
     assert gitio.untracked_cache_enabled(repo.root)
     configured = subprocess.run(["git", "-C", str(repo.root), "config", "--get", "core.untrackedCache"], capture_output=True)

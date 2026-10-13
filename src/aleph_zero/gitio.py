@@ -32,8 +32,15 @@ class GitTimeout(GitError):
     """Work on the repository ran past the caller's deadline."""
 
 
+# Git sets these for the hooks of a repository (and for commands it runs itself). Aleph names the repository
+# it means with `-C`, and reads others too (a linked source's clone): passed on, they would turn every one of
+# its git commands to the repository the hook belongs to.
+_NOT_OURS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+             "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_NAMESPACE")
+
+
 def _env() -> dict[str, str]:
-    return {**os.environ, **_ENV}
+    return {**{name: value for name, value in os.environ.items() if name not in _NOT_OURS}, **_ENV}
 
 
 _DEADLINE: ContextVar[float | None] = ContextVar("aleph_git_deadline", default=None)

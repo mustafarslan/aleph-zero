@@ -63,6 +63,28 @@ others are still done, and the command ends with 2. `aleph doctor` and the agent
 show the same list and act on nothing. The first time you use `aleph` in a repository on a terminal,
 one line names this command, once.
 
+## Keeping it up to date
+
+Nothing is built for a project as a whole, so nothing is built again as a whole. The index, the vectors,
+the code graph's facts and the architecture's facts are each kept per content: after a pull only the files
+that changed are read, a function that did not change keeps its vector, and a rename costs nothing. All of
+it happens by itself at the next question. One command does it at once, and also the two things nothing
+does by itself (fetching sources linked by URL, and making vectors while no server runs):
+
+    uv run aleph update                       # sources, the index, facts and vectors, for what changed
+    uv run aleph update --print-hook          # the lines for git's post-merge and post-checkout hooks
+
+It fetches linked sources unless `--no-fetch` is given; reads the code graph's and the architecture's facts
+only where they were ever asked for; makes vectors only where search by meaning is on already (it never
+switches it on), for at most `--minutes` (10 by default; the rest next time); and names compiler indexes
+that are out of date without running them. `--quiet` prints only what failed, `--json` gives the report as
+data. Aleph installs no hook: `--print-hook` prints lines that run the update detached after a pull or a
+change of branch, and you put them into the hooks yourself.
+
+What is not incremental: a new version of Aleph that changes how chunks, facts or vectors are made reads
+everything again, once; compiler indexes are made again by `aleph scip run`, for the whole project; and a
+branch not visited for thirty days has its own content collected and is read again when you return.
+
 ## Use it from Claude Code
 
     claude mcp add aleph-zero -- /absolute/path/to/aleph-zero/.venv/bin/aleph serve
