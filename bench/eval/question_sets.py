@@ -150,13 +150,20 @@ def select(rows: list[dict], per_repo: int | None, language: str | None = None, 
     for row in rows:
         if language is not None and row["language"] != language:
             continue
-        key = (row["repo"].lower(), row["base_commit"].lower(), tuple(row["gold"]))
+        repo, gold = row["repo"].lower(), tuple(row["gold"])
+        key = (repo, row["base_commit"].lower(), gold)
+        # Two sets give the same pull request at commits of their own, and an issue answered twice (a backport) has
+        # two numbers: the same question either way, and counting it twice counts its repository's luck twice.
+        elsewhere = [(repo, "fix", row["instance_id"].lower()), (repo, "words", gold, " ".join(row["problem_statement"].split()))]
         if key in seen:
             leave("asked already in another set")
+        elif any(other in seen for other in elsewhere):
+            leave("asked already in another set" if elsewhere[0] in seen else "asked already at another commit")
         elif len(row["gold"]) > MOST_FILES:
             leave("more than ten files changed")
         else:
             seen.add(key)
+            seen.update(elsewhere)
             by_repo.setdefault((row["language"], row["repo"].lower()), []).append(row)
     kept: set[int] = set()
     for (in_language, repo), some in by_repo.items():

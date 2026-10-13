@@ -98,7 +98,7 @@ def test_the_language_of_a_question_without_a_label_is_that_of_most_of_what_was_
 
 
 def _rows(repo, count, start=0, language="go", gold=("a.go",)):
-    return [{"repo": repo, "base_commit": f"{repo}-{start + n}", "instance_id": f"{repo}-{start + n}", "problem_statement": "p", "gold": list(gold),
+    return [{"repo": repo, "base_commit": f"{repo}-{start + n}", "instance_id": f"{repo}-{start + n}", "problem_statement": f"issue {start + n}", "gold": list(gold),
              "language": language, "set": "s", "names_a_gold_path": False} for n in range(count)]
 
 
@@ -115,3 +115,16 @@ def test_questions_are_chosen_so_that_no_repository_decides_a_language_and_none_
     assert [row["instance_id"] for row in again] == [row["instance_id"] for row in kept]        # the same choice every time
     assert [row["language"] for row in sets.select(rows, per_repo=25, language="java")[0]] == ["java"] * 5
     assert len(sets.select(rows, per_repo=None)[0]) == 112
+
+
+def test_a_fix_that_two_sets_give_at_different_commits_is_asked_once():
+    # Multi-SWE-bench and SWE-bench Multilingual both hold fmt's pull request 2310, each at a commit of its own.
+    first = {**_rows("fmtlib/fmt", 1, language="cpp", gold=("include/fmt/format.h",))[0], "instance_id": "fmtlib__fmt-2310",
+             "base_commit": "bc13c6de", "problem_statement": "Numeric zero fill is applied to inf/nan\n\nFrom the documentation"}
+    again = {**first, "base_commit": "7612f18d", "problem_statement": "Numeric zero fill is applied to inf/nan\nFrom the documentation", "set": "t"}
+    # The same issue answered by a second pull request (a backport): another number, the same words and the same files.
+    backport = {**first, "instance_id": "fmtlib__fmt-2399", "base_commit": "0f42c17d"}
+    other = {**first, "instance_id": "fmtlib__fmt-3272", "base_commit": "bfc0924e", "problem_statement": "Alignment of floating-point numbers"}
+    kept, left = sets.select([first, again, backport, other], per_repo=None)
+    assert [(row["instance_id"], row["base_commit"]) for row in kept] == [("fmtlib__fmt-2310", "bc13c6de"), ("fmtlib__fmt-3272", "bfc0924e")]
+    assert left == {"asked already in another set": 1, "asked already at another commit": 1}
