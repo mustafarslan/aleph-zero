@@ -30,6 +30,11 @@ VERDICTS: dict[str, Verdict] = {
     # 11 points; an agent's query is nearer a title.
     "python": Verdict(False, "+3.9 points of file recall@10 on 400 Loc-Bench questions asked by their issue titles, interval +0.6 to +7.2, "
                              "and +1.6 on the 165 held out: under the 5-point bar; on whole issue texts +11.0; ADR-002, 2026-10-13"),
+    # The same gate, with how it would be read written down before the run: nothing was tuned on C++, so this
+    # first reading is at settings chosen elsewhere. Two repositories give 80 of the 108 questions; resampling
+    # repositories instead of questions the interval is +4.0 to +13.8.
+    "cpp": Verdict(True, "+8.1 points of file recall@10, interval +3.1 to +13.5, on 108 questions from five repositories "
+                         "asked by their first line; ADR-002, 2026-10-13"),
 }
 
 # Languages that share a verdict because they share a benchmark.

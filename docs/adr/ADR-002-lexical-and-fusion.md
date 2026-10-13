@@ -1,6 +1,6 @@
 # ADR-002: Lexical index and hybrid fusion
 
-- **Status:** Accepted. Lexical part in M1; fusion and the per-language gate for vectors in M2 (Python decided 2026-10-12 provisionally, and decided again on the held-out questions on 2026-10-13: vectors are not on by default; other languages have no verdict yet).
+- **Status:** Accepted. Lexical part in M1; fusion and the per-language gate for vectors in M2 (Python decided 2026-10-12 provisionally, and decided again on the held-out questions on 2026-10-13: vectors are not on by default; C++ decided 2026-10-13: on; the other languages have no verdict yet).
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -143,6 +143,21 @@ The rows for all 400 are worked out here from the two result files, with the sam
 **Verdict recorded:** `dense_policy.VERDICTS["python"]` is off. `--dense`, `ALEPH_DENSE=1` switch vectors on by hand, as before, and `aleph status` says why they are off. `aleph decisions` is not touched by this: a record's own vector is used whenever a worker runs, on its own evidence (ADR-003).
 
 **What this reading rests on, and what it does not settle.** The two halves were scored by different versions of the code (the first 235 on 2026-10-12, before later changes to the index; their indexes are not up to date and the run left them out, saying so). Scoring all 400 with one version needs the first 235 prepared again; it cannot change the held-out figure. The bar itself (5 points) was set on a 35-question pilot and is the owner's to keep or move. And the same pattern shows in both halves: vectors are neutral on short queries and clearly useful on long ones. Switching them on by the length of the query, instead of by language alone, is a design to write down and measure before it is built; it is not built.
+
+## Benchmark C, C++: vectors pass the gate (2026-10-13)
+
+Questions for the other languages come from three public sets read into this benchmark's shape (`bench/eval/question_sets.py`, where what a question and its answer are is written down). For C++ they give 108 questions in five repositories (fmt 40, nlohmann/json 40, simdjson 16, Catch2 11, cpp-httplib 1; at most 40 a repository). How the result would be read was written before the run: the same gate (the question's first line, 5 points of file recall@10, a paired interval that excludes zero), the product's settings (ten results, a pool of 300), and "an interval that holds zero is not a pass". Nothing was ever tuned on C++, so its first reading is already at settings chosen elsewhere. All 108 were prepared and scored; none was left out.
+
+| Query form | Words and names | With vectors | Vectors alone | Gain from vectors (95% interval) | Better / worse |
+|---|---|---|---|---|---|
+| **First line** (the gate form) | 0.412 | **0.493** | 0.531 | **+8.1 points (+3.1 to +13.5)** | 16 / 2 |
+| Whole issue text | 0.453 | 0.511 | 0.559 | +5.7 (+1.0 to +10.7) | 15 / 4 |
+
+**By the letter the gate is met.** Resampling repositories instead of questions, since two of the five give 80 of the 108: +4.0 to +13.8 on the first line, +2.3 to +9.6 on whole text; clear of zero either way.
+
+**Verdict recorded:** `dense_policy.VERDICTS["cpp"]` is on. It takes effect in projects whose main language is C++ and where the embedding worker is installed. C is another language with its own questions (110 in six repositories) and is not run; a `.h` file counts as C++, as everywhere in Aleph.
+
+What else the table says, and what it does not: on C++ vectors alone find more than words and names alone, the reverse of Python; fusing them gives back part of that (0.493 against 0.531), so the fusion, tuned on nothing, is leaving recall on the table for this language. 108 questions from five repositories is a small set: the interval is ten points wide, and a sixth repository could move the mean by more than a point. There is no second, held-out set for C++ as there was for Python.
 
 ## The gate is per language (owner's instruction, 2026-10-12)
 

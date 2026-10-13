@@ -76,11 +76,7 @@ Things that are not being done now on purpose. Each entry says what it is, why i
   | TypeScript | 165 | 11 |
 
   With about 110 questions the interval of a 5-point gate is roughly ±9 points: for C++, C and Go the public sets can show a large effect and cannot settle a small one. Java, JavaScript, TypeScript and Rust have enough to say more.
-- **To run C++ (yours to start: a GPU run, after the Python one has finished; five small repositories, 108 commits, probably under an hour).** The path is tried (2026-10-13): one C++ question (Catch2, 556 files, 7,841 chunks) was prepared and run from these sets in a work directory of its own (`bench/data/benchc-smoke`), beside the Python run; both steps end as they should. One question decides nothing; the figures are not reported.
-
-
-      nohup caffeinate -i uv run --group bench python bench/eval/benchmark_c.py prepare bench/data/benchc-cpp --set others --language cpp --away > bench/data/benchc-cpp.prepare.log 2>&1 &
-      uv run --group bench python bench/eval/benchmark_c.py run bench/data/benchc-cpp --set others --language cpp --out bench/data/results/benchmark_c_cpp.json
+- **C++ is run (2026-10-13, on your release): the gate is met and vectors are on by default for C++ projects.** 108 questions, all scored: +8.1 points on the first line (+3.1 to +13.5), better for 16 and worse for 2; ADR-002 has the table and what it does not settle (five repositories, two of them 80 of the questions; no second set). `prepare` took 21 minutes (chip at 74 °C at most, no waits to cool). Next by the same commands with another `--language`: C (110 questions), Go (110), Rust (180), Java (315), JavaScript (231), TypeScript (165).
 - **How to do it (2026-10-12).** [SWE-PolyBench](https://arxiv.org/abs/2504.08703) has 2,110 instances (Java 165, JavaScript 1,017, TypeScript 729, Python 199) and no C or C++; [Multi-SWE-bench](https://arxiv.org/abs/2504.02605) has 1,632 across Java, TypeScript, JavaScript, Go, Rust, C and C++. *agy:* Multi-SWE-bench for C++, C, Go and Rust, SWE-PolyBench for TypeScript, JavaScript and Java, 150 to 200 questions a language to read a 5-point gate; SWE-bench Multilingual (about 35 a language) is too small alone. *The advisor:* one adapter per set, gold files being the files of the fix's patch. *Mine:* as agy says, C++ first; the prepare and run of entry 1 serve unchanged, pause and heat guard included.
 
 ## 1c. Tuning runs that need the GPU for hours
