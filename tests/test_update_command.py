@@ -95,7 +95,7 @@ def test_a_fetch_that_fails_is_a_line_of_the_report_and_the_rest_is_still_done(r
     repo.commit("a merged pull request")
     code, report = _report(repo, capsys)
     assert code == 0 and report["indexed"] >= 1 and report["pending"] == 0 and report["failed"] == []     # not a failure of the command
-    assert "notes" in report["sources"] and report["sources"]["notes"] != "updated"
+    assert report["sources"]["notes"].startswith("failed") and "fetched" in report["sources"]["notes"]      # and how old what is searched is
     assert [hit.path for hit in Engine(repo.root).search("marmot_ledger").hits] == ["notes:a.md"]
 
 
@@ -128,11 +128,11 @@ def test_the_graph_s_facts_are_read_where_they_were_in_use_and_not_begun_where_t
 
 
 def test_only_one_update_at_a_time_and_the_second_says_so_without_an_error(repo, capsys):
-    with update.only_one(gitio.common_dir(repo.root)) as mine:
+    with update.only_one(gitio.common_dir(repo.root), repo.root) as mine:
         assert mine is True
         code, report = _report(repo, capsys)
-        assert code == 0 and report == {"busy": "another `aleph update` is running for this repository"}
-    assert "busy" not in _report(repo, capsys)[1]
+        assert code == 0 and report["busy"] == "another `aleph update` is running for this worktree" and report["indexed"] == 0
+    assert _report(repo, capsys)[1]["busy"] is None
 
 
 def test_quiet_says_nothing_when_all_went_well(repo, capsys):
@@ -149,7 +149,7 @@ def test_the_hook_lines_are_printed_and_nothing_is_installed(repo, capsys):
     out = capsys.readouterr().out
     engine = Path(sys.executable).with_name("aleph")
     assert f"{engine} update --quiet" in out and "--minutes" in out and "post-merge" in out and "post-checkout" in out
-    assert '[ "$3" = "1" ]' in out and "&" in out                  # a change of branch only, and detached: git returns at once
+    assert '[ "$3" = "1" ]' in out and "& )" in out and "--no-fetch" in out      # a change of branch only, detached, and no network from a hook
     hooks = Path(gitio.git(repo.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks").decode().strip())
     assert not (hooks / "post-merge").exists() and not (hooks / "post-checkout").exists()
     assert Engine(repo.root).status()["pending"] > 0               # and nothing was updated: it only prints
@@ -170,13 +170,134 @@ def test_a_directory_that_is_not_a_repository_is_indexed_and_the_rest_is_said_no
     assert report["indexed"] == 1 and report["sources"] == {} and report["failed"] == []
 
 
-def test_git_s_own_variables_from_a_hook_do_not_turn_aleph_to_another_repository(repo, make_repo, tmp_path, monkeypatch):
-    other = make_repo(tmp_path / "other")
-    other.write("x.py", "def only_in_other():\n    return 1\n")
-    other.commit("other")
-    monkeypatch.setenv("GIT_DIR", str(other.root / ".git"))        # as git sets it for the hooks of `other`
-    monkeypatch.setenv("GIT_WORK_TREE", str(other.root))
-    monkeypatch.setenv("GIT_INDEX_FILE", str(other.root / ".git" / "index"))
-    assert gitio.repo_info(repo.root).root == repo.root.resolve()
-    hits = Engine(repo.root).search("render_invoice").hits
-    assert hits and hits[0].path == "src/billing/invoice.py" and Engine(repo.root).search("only_in_other").hits == []
+# ---- from the review of the branch (2026-10-13) ---------------------------------------------------
+
+
+def _hook(tmp_path, name):
+    """The lines printed for one hook, as a file sh can run, with the engine replaced by a command that leaves a mark."""
+    import re
+
+    mark = tmp_path / f"{name}.ran"
+    printed = update.hook_lines()
+    body = printed.split(f"# .git/hooks/{name}\n", 1)[1].split("\n\n", 1)[0]
+    body = re.sub(r"\( \S+ update [^>]*", f"( touch {mark} ", body)       # what would run, without running an update
+    script = tmp_path / name
+    script.write_text(body + "\n")
+    script.chmod(0o755)
+    return script, mark
+
+
+def test_the_printed_hooks_run_under_sh_and_never_fail_git(tmp_path):
+    import time
+
+    merge, merged = _hook(tmp_path, "post-merge")
+    assert subprocess.run(["sh", str(merge), "0"]).returncode == 0
+    checkout, switched = _hook(tmp_path, "post-checkout")
+    assert subprocess.run(["sh", str(checkout), "old", "new", "0"]).returncode == 0     # one restored file: nothing to do, and no failure
+    time.sleep(0.5)
+    assert merged.exists() and not switched.exists()
+    assert subprocess.run(["sh", str(checkout), "old", "new", "1"]).returncode == 0     # a change of branch
+    time.sleep(0.5)
+    assert switched.exists()
+
+
+def test_the_engine_s_path_is_quoted_in_the_printed_lines(monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys, "executable", "/Users/some one/tools/venv/bin/python")
+    assert "'/Users/some one/tools/venv/bin/aleph' update" in update.hook_lines()
+
+
+def test_a_fetch_nobody_watches_does_not_ask_and_does_not_carry_the_caller_s_options(monkeypatch):
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "http.extraHeader=Authorization: secret")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.extraHeader")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Authorization: secret")
+    usual = gitio._env()
+    assert "GIT_CONFIG_PARAMETERS" in usual and "GIT_TERMINAL_PROMPT" not in usual      # a person's own command is as they gave it
+    with gitio.unattended():
+        quiet = gitio._env()
+    assert quiet["GIT_TERMINAL_PROMPT"] == "0"
+    assert not any(name.startswith("GIT_CONFIG_") for name in quiet)                    # options given to `git pull` stay with that pull
+    assert "GIT_CONFIG_PARAMETERS" in gitio._env()                                      # and only inside the block
+
+
+def test_the_report_has_the_same_keys_whatever_happened(repo, capsys):
+    keys = {"busy", "sources", "indexed", "skipped", "pending", "graph", "architecture", "compiler_indexes", "vectors", "failed"}
+    assert set(_report(repo, capsys)[1]) == keys
+    with update.only_one(gitio.common_dir(repo.root), repo.root) as mine:
+        assert mine is True
+        code, report = _report(repo, capsys)
+    assert code == 0 and set(report) == keys and report["busy"] == "another `aleph update` is running for this worktree"
+
+
+def test_another_worktree_of_the_repository_is_not_held_up(repo, tmp_path, capsys):
+    other = tmp_path / "other"
+    repo.git("worktree", "add", "-q", "--detach", str(other))
+    with update.only_one(gitio.common_dir(repo.root), repo.root):
+        assert cli.main(["--cwd", str(other), "update", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["busy"] is None
+
+
+def test_an_index_that_is_held_by_another_writer_is_a_line_and_no_traceback(repo, capsys, monkeypatch):
+    import apsw
+
+    from aleph_zero.indexer import Index
+
+    def held(self, *args, **kwargs):
+        raise apsw.BusyError("database is locked")
+
+    monkeypatch.setattr(Index, "sync", held)
+    assert _update(repo, "--quiet") == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "FAILED index" in captured.err and "locked" in captured.err and "Traceback" not in captured.err
+
+
+def test_what_changed_while_an_update_ran_is_taken_up_by_the_same_update(repo, capsys, monkeypatch):
+    from aleph_zero.indexer import Index
+
+    real = Index.sync
+    state = {"calls": 0}
+
+    def sync(self, view, budget_seconds=30.0):
+        state["calls"] += 1
+        done = real(self, view, budget_seconds=budget_seconds)
+        if state["calls"] == 1:                                    # a checkout lands while the first round is at work
+            repo.write("src/billing/late.py", "def arrived_late():\n    return 1\n")
+            repo.commit("landed meanwhile")
+        return done
+
+    monkeypatch.setattr(Index, "sync", sync)
+    code, report = _report(repo, capsys)
+    monkeypatch.setattr(Index, "sync", real)
+    assert code == 0 and Engine(repo.root).status()["pending"] == 0
+    assert [hit.path for hit in Engine(repo.root).search("arrived_late").hits] == ["src/billing/late.py"]
+
+
+def test_where_the_verdict_is_for_vectors_they_are_made_and_a_no_kept_for_the_repository_is_obeyed(repo, with_worker, capsys, monkeypatch):
+    monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
+    code, report = _report(repo, capsys)
+    assert report["vectors"]["made"] > 0 and report["vectors"]["left"] == 0
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=False)
+    repo.write("src/billing/tax.py", "def vat_rate(country):\n    return 0.2\n")
+    repo.commit("a merged pull request")
+
+    def never(*args, **kwargs):
+        raise AssertionError("the worker was asked although vectors are off here")
+
+    monkeypatch.setattr("aleph_zero.embed.client.EmbedClient.embed", never)
+    monkeypatch.setattr(worker, "ensure", never)
+    monkeypatch.setattr(worker, "socket_path", never)
+    code, report = _report(repo, capsys)
+    assert code == 0 and report["vectors"]["made"] == 0 and "this repository" in report["vectors"]["why"]
+    monkeypatch.setenv("ALEPH_DENSE", "0")                         # and for one process, as for search and serve
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=None)
+    code, report = _report(repo, capsys)
+    assert report["vectors"]["made"] == 0 and "by hand" in report["vectors"]["why"]
+
+
+def test_minutes_bound_the_embedding_and_what_is_left_is_said(repo, with_worker, capsys, monkeypatch):
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
+    code, report = _report(repo, capsys, "--minutes", "0")
+    assert code == 0 and report["vectors"]["made"] + report["vectors"]["left"] > 0     # at least a batch, and the rest is named
+    assert "vector" in "\n".join(update.text(report))

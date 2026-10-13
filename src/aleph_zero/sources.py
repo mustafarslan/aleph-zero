@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -118,9 +119,11 @@ def remove(cwd: Path, name: str) -> None:
         shutil.rmtree(clone_dir(common_dir, gone.location), ignore_errors=True)
 
 
-def refresh(cwd: Path, name: str | None = None) -> dict[str, str]:
+def refresh(cwd: Path, name: str | None = None, unattended: bool = False) -> dict[str, str]:
     """Fetch the URL sources (all, or the one named). The only place the network is used
-    after a source was added. Returns what happened to each."""
+    after a source was added. Returns what happened to each. With `unattended` (a hook, a
+    schedule) git never asks for a name or a password and a failure says how old the state is
+    that goes on being searched."""
     common_dir = gitio.common_dir(cwd)
     found = _load(common_dir)
     if name is not None and not any(source.name == name for source in found):
@@ -134,7 +137,7 @@ def refresh(cwd: Path, name: str | None = None) -> dict[str, str]:
             continue
         before = source.tree
         try:
-            with gitio.until(time.monotonic() + FETCH_SECONDS):
+            with gitio.until(time.monotonic() + FETCH_SECONDS), (gitio.unattended() if unattended else nullcontext()):
                 gitio.git(clone_dir(common_dir, source.location), "fetch", "--quiet", "--prune", "origin",
                           "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
             _resolve(common_dir, source)
@@ -142,9 +145,14 @@ def refresh(cwd: Path, name: str | None = None) -> dict[str, str]:
             report[source.name] = "unchanged" if source.tree == before else "updated"
         except gitio.GitError as exc:
             source.last_error = f"fetch failed: {str(exc)[:200]}"
-            report[source.name] = f"failed: {str(exc)[:200]}"
+            report[source.name] = f"failed: {str(exc)[:200]}" + (
+                f"; what is searched was fetched {_ago(time.time() - source.fetched_at)} ago" if unattended and source.fetched_at else "")
     _save(common_dir, found)
     return report
+
+
+def _ago(seconds: float) -> str:
+    return f"{seconds / 86400:.0f} days" if seconds >= 172800 else f"{seconds / 3600:.0f} h" if seconds >= 7200 else f"{max(seconds, 60) / 60:.0f} min"
 
 
 def mounts(common_dir: Path) -> list[Mount]:

@@ -79,7 +79,8 @@ only where they were ever asked for; makes vectors only where search by meaning 
 switches it on), for at most `--minutes` (10 by default; the rest next time); and names compiler indexes
 that are out of date without running them. `--quiet` prints only what failed, `--json` gives the report as
 data. Aleph installs no hook: `--print-hook` prints lines that run the update detached after a pull or a
-change of branch, and you put them into the hooks yourself.
+change of branch, without the network and for five minutes of embedding at most, and you put them into the
+hooks yourself; it also prints a line for a nightly schedule, which does fetch.
 
 What is not incremental: a new version of Aleph that changes how chunks, facts or vectors are made reads
 everything again, once; compiler indexes are made again by `aleph scip run`, for the whole project; and a

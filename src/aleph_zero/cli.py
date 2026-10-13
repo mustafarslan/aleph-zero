@@ -327,7 +327,7 @@ def _update(args) -> int:
     if args.print_hook:
         print(update.hook_lines())
         return 0
-    report = update.run(args.cwd, fetch=not args.no_fetch, minutes=args.minutes)
+    report = update.run(args.cwd, fetch=not args.no_fetch, minutes=args.minutes, dense=_dense_setting(args))
     failed = report.get("failed") or []
     if args.json:
         print(json.dumps(report, indent=2))

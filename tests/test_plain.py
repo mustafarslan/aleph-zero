@@ -138,8 +138,8 @@ def test_only_git_saying_there_is_no_repository_opens_this_path(project, tmp_pat
         build_view(real_repo / "src")
     monkeypatch.delenv("GIT_CEILING_DIRECTORIES")
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere.git"))                    # left behind by a hook or a tool
-    seen = build_view(real_repo)                                                    # the repository it was pointed at is the one it reads
-    assert not seen.plain and "src/a.py" in seen.files                              # (ADR-014: git's hook variables are not passed on)
+    with pytest.raises(gitio.GitError, match="cannot read the repository"):
+        build_view(real_repo)
     monkeypatch.delenv("GIT_DIR")
     (real_repo / ".git" / "HEAD").unlink()                                          # half deleted
     with pytest.raises(gitio.GitError, match="cannot read the repository"):

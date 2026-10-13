@@ -136,14 +136,14 @@ def _device(entry: os.DirEntry) -> int:
 
 def unreadable_repository(directory: Path) -> None:
     """Raise GitError when git said "not a repository" of a directory that has a `.git` at or above it: a damaged
-    `.git`, or GIT_CEILING_DIRECTORIES in the environment (GIT_DIR is not passed on to git: ADR-014). It is git's to read, not a plain directory:
+    `.git`, or GIT_DIR or GIT_CEILING_DIRECTORIES in the environment. It is git's to read, not a plain directory:
     walking it would search what its `.gitignore` keeps out."""
     root = _canonical(directory)
     written = Path(os.path.abspath(directory))      # as it was named: a link inside a repository is inside it
     for above in dict.fromkeys((root, *root.parents, written, *written.parents)):
         if os.path.lexists(above / ".git"):
             raise gitio.GitError(f"git cannot read the repository at {above}: it says {root} is in no repository, though "
-                                 f"a `.git` is there. Repair it (or look at GIT_CEILING_DIRECTORIES in the "
+                                 f"a `.git` is there. Repair it (or look at GIT_DIR and GIT_CEILING_DIRECTORIES in the "
                                  f"environment); Aleph does not search a repository as if it were a plain directory")
 
 

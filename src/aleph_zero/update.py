@@ -8,10 +8,14 @@ The order matters, each part feeds the next: sources, index, facts, vectors.
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import shlex
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+import apsw
 
 from . import archfacts, callgraph, gitio, scipstore, sources
 from .indexer import Index
@@ -21,17 +25,22 @@ from .view import build_view
 EMBED_MINUTES = 10.0     # of embedding in one update unless told otherwise; `aleph embed run` is the unbounded one
 HOOK_MINUTES = 5         # in the lines printed for git's hooks: a pull is not held up for it, but it is not left running for long either
 FACTS_SECONDS = 60.0     # of reading the graph's and the architecture's facts
-BUSY = "another `aleph update` is running for this repository"
-_FAILURES = (gitio.GitError, StoreError, sources.SourceError, OSError, RuntimeError)
+ROUNDS = 3               # times one update looks again at a worktree that moved on while it worked
+BUSY = "another `aleph update` is running for this worktree"
+# What a part may run into without the parts after it being lost, and without a traceback in a hook's output.
+# apsw's errors are not RuntimeErrors: an index another session is writing to says "busy" through them.
+_FAILURES = (gitio.GitError, StoreError, sources.SourceError, apsw.Error, OSError, RuntimeError)
 
 
 @contextmanager
-def only_one(common_dir: Path):
-    """Held by the one update of a repository. Yields False at once when another holds it: rapid checkouts
-    start several, and the second has nothing to add to what the first is doing."""
+def only_one(common_dir: Path, root: Path):
+    """Held by the one update of a worktree. Yields False at once when another holds it: rapid checkouts start
+    several, and the one at work looks again at the worktree before it ends. A worktree, not the repository:
+    the index is made for several sessions at once, and another worktree's update is not held up by this one."""
     directory = state_dir(common_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / "update.lock", "w") as handle:
+    name = hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
+    with open(directory / f"update-{name}.lock", "w") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -47,95 +56,120 @@ def _in_use(index: Index, table: str) -> bool:
     return bool(index.conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchall())
 
 
-def run(cwd: Path, fetch: bool = True, minutes: float = EMBED_MINUTES) -> dict:
+def _empty() -> dict:
+    """The report's shape, the same whatever happened: a script reads the keys it expects."""
+    return {"busy": None, "sources": {}, "indexed": 0, "skipped": 0, "pending": 0,
+            "graph": {"read": 0, "left": 0, "why": ""}, "architecture": {"read": 0, "left": 0, "why": ""},
+            "compiler_indexes": {"out_of_date": 0, "how": ""}, "vectors": {"made": 0, "left": 0, "why": ""}, "failed": []}
+
+
+def run(cwd: Path, fetch: bool = True, minutes: float = EMBED_MINUTES, dense: bool | None = None) -> dict:
     """Bring the worktree of `cwd` up to date and say what was done. A part that fails is named in `failed`
-    and the parts after it are still tried."""
+    and the parts after it are still tried. `dense` is the caller's choice for this process (ALEPH_DENSE), as
+    for a search; None follows the repository's kept choice and its language's verdict."""
     from .engine import Engine   # the engine imports much; this module is also read for its constants
 
     view = build_view(cwd)
-    with only_one(view.common_dir) as mine:
+    report = _empty()
+    with only_one(view.common_dir, view.root) as mine:
         if not mine:
-            return {"busy": BUSY}
-        report: dict = {"sources": {}, "indexed": 0, "skipped": 0, "pending": 0, "failed": []}
+            report["busy"] = BUSY
+            return report
 
-        def part(name: str, do) -> None:
+        def part(name: str, do) -> bool:
             try:
                 do()
+                return True
             except _FAILURES as problem:
                 report["failed"].append(f"{name}: {problem}")
+                return False
 
         def fetch_sources() -> None:
             if view.plain or not fetch:
                 return
-            found = sources.describe(view.common_dir)
-            if any(row["kind"] == "url" for row in found):
+            if any(row["kind"] == "url" for row in sources.describe(view.common_dir)):
                 # Only the sources that are fetched are reported; one read in place has nothing to say here.
-                report["sources"] = {name: outcome for name, outcome in sources.refresh(cwd).items() if not outcome.startswith("local:")}
+                report["sources"] = {name: outcome for name, outcome in sources.refresh(cwd, unattended=True).items()
+                                     if not outcome.startswith("local:")}
 
         part("sources", fetch_sources)
+        deadline = time.monotonic() + max(minutes, 0.0) * 60.0
+        seen = None
+        for _ in range(ROUNDS):
+            # A checkout that lands while this is at work would start an update that finds this one busy and
+            # ends: so before it ends this one looks again, and does the same for what moved on.
+            now = build_view(cwd)
+            if seen is not None and now.fingerprint == seen.fingerprint:
+                break
+            seen = _round(cwd, now, report, part, Engine, dense, deadline)
+        return report
 
-        index, seen = Index(open_db(index_file(view.common_dir))), build_view(cwd)     # the view again: a fetch moved a source's tree
 
-        def index_all() -> None:
-            nonlocal seen
-            while True:
-                done = index.sync(seen, budget_seconds=30.0)
-                report["indexed"] += done.indexed
-                report["skipped"] += done.skipped
-                report["pending"] = done.pending
-                if done.pending == 0:
-                    break
-                fresh = build_view(cwd)                 # the worktree may have moved on while this indexed
-                if done.indexed + done.skipped == 0 and fresh.fingerprint == seen.fingerprint:
-                    break                               # nothing more can be done right now
-                seen = fresh
+def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, deadline: float):
+    """One pass over the worktree as it is now: index, facts, compiler indexes, vectors. Returns the view it ended on."""
+    seen = view
+    index: Index | None = None
 
-        def facts(name: str, table: str, module) -> None:
-            # An index that is only searched pays nothing for these (the schema's rule): they are read for what
-            # changed where they were ever asked for, and not begun where they were not.
-            if not _in_use(index, table):
-                report[name] = {"read": 0, "left": 0, "why": "never asked for in this repository, so not begun"}
-                return
-            before = len(module.pending(index))
-            left = module.prepare(index, seen, FACTS_SECONDS) if before else 0
-            report[name] = {"read": before - left, "left": left, "why": ""}
+    def index_all() -> None:
+        nonlocal seen, index
+        index = Index(open_db(index_file(view.common_dir)))
+        while True:
+            done = index.sync(seen, budget_seconds=30.0)
+            report["indexed"] += done.indexed
+            report["skipped"] += done.skipped
+            report["pending"] = done.pending
+            if done.pending == 0:
+                break
+            fresh = build_view(cwd)                 # the worktree may have moved on while this indexed
+            if done.indexed + done.skipped == 0 and fresh.fingerprint == seen.fingerprint:
+                break                               # nothing more can be done right now
+            seen = fresh
 
-        def compiler_indexes() -> None:
-            compiled = scipstore.Compiled(index.conn, seen.files)
-            stale = sum(1 for path in seen.files if compiled.any and compiled.status(path)) if compiled.any else 0
-            report["compiler_indexes"] = {"out_of_date": stale, "how": "`aleph scip run` makes them again" if stale else ""}
+    def facts(name: str, table: str, module) -> None:
+        # An index that is only searched pays nothing for these (the schema's rule): they are read for what
+        # changed where they were ever asked for, and not begun where they were not.
+        if not _in_use(index, table):
+            report[name] = {"read": report[name]["read"], "left": 0, "why": "never asked for in this repository, so not begun"}
+            return
+        before = len(module.pending(index))
+        left = module.prepare(index, seen, FACTS_SECONDS) if before else 0
+        report[name] = {"read": report[name]["read"] + before - left, "left": left, "why": ""}
 
+    def compiler_indexes() -> None:
+        compiled = scipstore.Compiled(index.conn, seen.files)
+        stale = sum(1 for path in seen.files if compiled.status(path)) if compiled.any else 0
+        report["compiler_indexes"] = {"out_of_date": stale, "how": "`aleph scip run` makes them again" if stale else ""}
+
+    def vectors() -> None:
+        # Where search by meaning is on already: the verdict of the language, or the choice kept by `aleph setup`.
+        # Never switched on here: a nightly hook would otherwise switch it on in every repository.
+        engine = engine_of(cwd, dense=dense)
         try:
-            part("index", index_all)
+            status = engine.status(cwd)["vectors"]
+            made = report["vectors"]["made"]
+            if not status["enabled"]:
+                report["vectors"] = {"made": made, "left": 0, "why": status["why"]}
+                return
+            done = engine.embed(cwd, budget_seconds=max(deadline - time.monotonic(), 0.0), sync_seconds=0.0)
+            report["vectors"] = {"made": made + done.embedded, "left": done.remaining, "why": done.reason}
+        finally:
+            engine.close()
+
+    try:
+        if part("index", index_all):                # without the index there is nothing the next three could read
             part("graph", lambda: facts("graph", "graph_facts", callgraph))
             part("architecture", lambda: facts("architecture", "arch_facts", archfacts))
             part("compiler indexes", compiler_indexes)
-        finally:
+    finally:
+        if index is not None:
             index.conn.close()
-
-        def vectors() -> None:
-            # Where search by meaning is on already: the verdict of the language, or the choice kept by `aleph setup`.
-            # Never switched on here: a nightly hook would otherwise switch it on in every repository.
-            engine = Engine(cwd)
-            try:
-                status = engine.status(cwd)["vectors"]
-                if not status["enabled"]:
-                    report["vectors"] = {"made": 0, "left": 0, "why": status["why"]}
-                    return
-                started = time.monotonic()
-                done = engine.embed(cwd, budget_seconds=max(minutes, 0.0) * 60.0, sync_seconds=0.0)
-                report["vectors"] = {"made": done.embedded, "left": done.remaining, "why": done.reason,
-                                     "seconds": round(time.monotonic() - started, 1)}
-            finally:
-                engine.close()
-
-        part("vectors", vectors)
-        return report
+    part("vectors", vectors)
+    return seen
 
 
 def text(report: dict) -> list[str]:
     """What an update did, a line a part; one line when nothing changed."""
-    if "busy" in report:
+    if report.get("busy"):
         return [report["busy"]]
     files = lambda count: f"{count} file" + ("" if count == 1 else "s")  # noqa: E731
     lines = [f"source {name}: {outcome}" for name, outcome in report.get("sources", {}).items() if outcome != "unchanged"]
@@ -157,11 +191,13 @@ def text(report: dict) -> list[str]:
 
 
 def hook_lines() -> str:
-    """What to put into git's hooks, printed and never installed. The engine by the place it is in (a hook's
-    PATH is not a shell's); detached and silent, so that `git pull` and `git checkout` return at once; the
-    embedding bounded; and for post-checkout only on a change of branch, since git calls it for one restored file too."""
-    engine = Path(sys.executable).with_name("aleph")
-    command = f'( {engine} update --quiet --minutes {HOOK_MINUTES} >/dev/null 2>&1 & )'
+    """What to put into git's hooks, printed and never installed. The engine by the place it is in, quoted (a
+    hook's PATH is not a shell's, and a path may hold a space); detached and silent, so that `git pull` and
+    `git checkout` return at once; without the network, which a hook has no business using on every change of
+    branch; the embedding bounded; and for post-checkout only on a change of branch, written so that the hook
+    ends well when it is not one: git calls it for one restored file too, and a hook that fails fails the command."""
+    engine = shlex.quote(str(Path(sys.executable).with_name("aleph")))
+    command = f"( {engine} update --quiet --no-fetch --minutes {HOOK_MINUTES} >/dev/null 2>&1 & )"
     return "\n".join([
         "# Aleph does not install hooks or change git's configuration. To have a repository brought up to date",
         "# after every pull and every change of branch, put these lines into its hooks yourself (and make the",
@@ -173,8 +209,8 @@ def hook_lines() -> str:
         "",
         "# .git/hooks/post-checkout",
         "#!/bin/sh",
-        f'[ "$3" = "1" ] && {command}',
+        f'if [ "$3" = "1" ]; then {command}; fi',
         "",
-        "# Or nightly, from cron or launchd, with the network and more time:",
+        "# Or nightly, from cron or launchd, with the network (linked sources are fetched) and more time:",
         f"#   {engine} --cwd /path/to/repository update --quiet --minutes 60",
     ])
