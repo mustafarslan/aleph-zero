@@ -324,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
                              "p_at_3 measured minus oxn's [difference, 5%, 95%]": interval(measured, theirs) if held else None},
         "on all pairs (not held out)": {"chosen": SETTINGS[overall], "its score": harness.score(everything(table[overall])),
                                         "the measured ranker": harness.score(everything(table[0])), "oxn's ranker": harness.score(everything(reference))},
+        "the shipped setting (record, a = 0.5) on the same folds": (lambda at: harness.score([row for fold in folds for row in table[at][fold]]) if at is not None else None)(
+            next((at for at, setting in enumerate(SETTINGS) if setting.get("variant") == "record" and setting.get("a") == 0.5), None)),
+        "every setting on the same folds (each fixed, not chosen)": [{**SETTINGS[at], **harness.score([row for fold in folds for row in table[at][fold]])} for at in sorted(table)],
         "taken further": bool(held) and overall != 0 and gain[0] >= 0.02 and harness.score(held)["mrr"] >= harness.score(measured)["mrr"] and agree >= 2,
         "folds that agree with the overall choice": agree,
         "every setting on all pairs (not held out)": [{**SETTINGS[at], **harness.score(everything(table[at]))} for at in sorted(table)],

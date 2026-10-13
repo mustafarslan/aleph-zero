@@ -164,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                                          "elsewhere, as T,D,R (1,1,1 is the ranking that was measured)")
     parser.add_argument("--subject", type=float, help="with --ranker: how much a word of the task's first line counts against the rest")
     parser.add_argument("--b", type=float, help="with --ranker: BM25's length normalisation (0.75 is the ranking that was measured)")
+    parser.add_argument("--a", type=float, help="with --ranker convex: how much the words count against the record's vector (the engine's default otherwise)")
     parser.add_argument("--labels", default="labels-external.json", help="the pairs, a file in the workdir (default: oxn's 100)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
@@ -181,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         from aleph_zero import engine as engine_module
 
         decision_records.FUSION = "convex"
+        if args.a is not None:
+            decision_records.A = args.a
         engine_module.QUERY_EMBED_SECONDS = 30.0    # a busy worker must not turn a run of the fusion into a run of words
         engine_module.RECORD_EMBED_SECONDS, engine_module.RECORD_RETRY_SECONDS = 300.0, 0.0     # nor the limit on a first question
     labels = json.loads((args.workdir / args.labels).read_text())
