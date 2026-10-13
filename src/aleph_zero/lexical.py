@@ -75,6 +75,12 @@ def _forms(token: str) -> tuple[str, ...]:
     return (token.lower(), *split_identifier(token))
 
 
+def all_forms(text: str) -> frozenset[str]:
+    """Every word of a text as it is searched for, stop words too, uncut and in no order: what `query_terms` starts
+    from. For the parts of paths, which are read once for all the files that share them."""
+    return frozenset(form for match in _WORD.finditer(text) for form in _forms(match.group()))
+
+
 def query_terms(query: str) -> list[str]:
     terms: dict[str, None] = {}  # ordered, with constant-time membership
     for match in _WORD.finditer(query):

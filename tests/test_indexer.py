@@ -545,3 +545,60 @@ def test_the_first_question_finds_a_path_whose_word_ends_in_a_capital_sigma(repo
     fresh.sync(view)
     first = path_ranking(fresh, view, ["οδος"])
     assert first and first == path_ranking(fresh, view, ["οδος"])             # the second builds the maps, and agrees
+
+
+def _words_path_by_path(paths, wanted=None):
+    """What the maps are by definition: every path read by itself."""
+    from aleph_zero import lexical
+    from aleph_zero.lang.languages import stem_of
+
+    anywhere, in_name = {}, {}
+    for path in paths:
+        for word in set(lexical.query_terms(path)):
+            if wanted is None or word in wanted:
+                anywhere.setdefault(word, set()).add(path)
+        for word in set(lexical.query_terms(stem_of(path))):
+            if wanted is None or word in wanted:
+                in_name.setdefault(word, set()).add(path)
+    return anywhere, in_name
+
+
+_PATHS = [
+    "README.md", "the.py", "setup.py", "a/the.py", "the/of/and.py", "the/of/token_store.py", "src/billing/receipt_printer.py",
+    "src/billing/ReceiptPrinter.test.ts", "src/receipt/receipt.py", "src/receipt/index.js", "packages/babel-core/test/fixtures/x/input.js",
+    "packages/babel-core/test/fixtures/x/output.js", "packages/babel-core/test/fixtures/y/input.js", "docs/Receipt-Layout.md",
+    "λόγος/Οδός.py", "ΟΔΟΣ/λόγοσ.txt", "v2/api_v10/HTTPServer2.go", ".github/workflows/ci.yml", "Makefile", "a.b/c.d.e", "x/.hidden",
+    "deep/" + "/".join(f"part{n}Word{n}" for n in range(150)) + "/leaf_name.py",       # more words than a query is read for
+    "many/" + "_".join(f"w{n}x" for n in range(450)) + ".py",
+]
+
+
+def test_the_words_of_paths_are_what_reading_each_path_by_itself_gives():
+    # The maps are built by the directory and by the file's name (a repository has far fewer of both than files);
+    # the answer is that of reading every path by itself, stop words, long paths and two scripts included.
+    for wanted in (None, {"receipt", "printer", "the", "of", "input", "babel", "λόγοσ", "οδόσ", "10", "leaf", "w3x", "part149", "word149", "e"}):
+        from aleph_zero import indexer
+
+        anywhere, in_name = indexer._path_words(_PATHS, wanted)
+        expected = _words_path_by_path(_PATHS, wanted)
+        for built, by_definition in ((anywhere, expected[0]), (in_name, expected[1])):
+            assert {word: sorted(paths) for word, paths in built.items()} == {word: sorted(paths) for word, paths in by_definition.items()}
+            assert all(len(paths) == len(set(paths)) for paths in built.values())      # a path is counted once for a word
+
+
+def test_a_directory_and_a_file_name_are_read_into_words_once_however_many_files_share_them(monkeypatch):
+    # babel: 26,000 files, most of them `input.js` and `output.js` in a directory of fixtures. Reading every path by
+    # itself cost 140 ms of the first question there.
+    from aleph_zero import lexical
+
+    read = []
+    for name in ("query_terms", "all_forms"):
+        real = getattr(lexical, name, None)
+        if real is not None:
+            monkeypatch.setattr(lexical, name, lambda text, real=real: read.append(text) or real(text))
+    paths = [f"packages/core/test/fixtures/case{n}/{name}" for n in range(100) for name in ("input.js", "output.js")]
+    from aleph_zero import indexer
+
+    anywhere, in_name = indexer._path_words(paths, None)
+    assert len(anywhere["fixtures"]) == 200 and len(in_name["input"]) == 100 and anywhere["case7"] == [paths[14], paths[15]]
+    assert len(read) <= 110, len(read)          # a hundred directories and two names, not four hundred readings

@@ -474,16 +474,56 @@ def newer_build(index_file: str, theirs: int) -> str:
 
 
 def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """(word -> paths it occurs in anywhere, word -> paths whose own name has it), for all words or the wanted ones."""
+    """(word -> paths it occurs in anywhere, word -> paths whose own name has it), for all words or the wanted ones.
+
+    The words of a path are those `lexical.query_terms` gives for it. They are read by the directory and by the
+    file's name, since a repository has far fewer of both than files (babel: 26,000 files, most of them `input.js`
+    and `output.js` in a directory of their own; path by path that was 140 ms of a first question). A word is
+    cut at no `/`, so a path's words are its directory's and its name's; what `query_terms` does to a whole text
+    (stop words left out unless nothing else is there, a limit on the words read) is kept by reading a path by
+    itself wherever either could differ."""
     anywhere: dict[str, list[str]] = {}
     in_name: dict[str, list[str]] = {}
+    keep = (lambda words: words) if wanted is None else (lambda words: words & wanted)
+    short = lexical.MAX_TERMS // 2          # under this in the directory and in the name, no limit is reached
+    by_directory: dict[str, list[str]] = {}
     for path in paths:
-        for word in set(lexical.query_terms(path)):
-            if wanted is None or word in wanted:
+        by_directory.setdefault(path.rpartition("/")[0], []).append(path)
+    names: dict[str, tuple[frozenset[str], frozenset[str]]] = {}      # a name's words: all of them, and without stop words
+    by_name: dict[str, list[str]] = {}
+    endings: dict[str, frozenset[str]] = {}                           # the words of `.js`, `.test.ts`: a handful in a repository
+    for directory, held in by_directory.items():
+        forms = lexical.all_forms(directory)
+        shared = forms - lexical.STOPWORDS if len(forms) < short else frozenset()
+        for word in keep(shared):
+            anywhere.setdefault(word, []).extend(held)
+        start = len(directory) + 1 if directory else 0
+        for path in held:
+            name = path[start:]
+            known = names.get(name)
+            if known is None:
+                # The name is read once, as its stem and its ending: the stem's words are wanted by themselves below.
+                stem = stem_of(name)
+                of_stem = lexical.all_forms(stem)
+                ending = endings.get(name[len(stem):])
+                if ending is None:
+                    ending = endings[name[len(stem):]] = lexical.all_forms(name[len(stem):])
+                every = of_stem | ending if ending else of_stem
+                known = names[name] = (every, every - lexical.STOPWORDS)
+                in_stem = (of_stem - lexical.STOPWORDS or of_stem) if len(of_stem) < short else frozenset(lexical.query_terms(stem))
+                by_name[name] = [in_stem]
+            by_name[name].append(path)
+            if len(forms) >= short or len(known[0]) >= short:
+                own = frozenset(lexical.query_terms(path)) - shared
+            elif shared:
+                own = known[1] - shared
+            else:                               # nothing but stop words above it, or nothing at all
+                own = known[1] or (forms | known[0])
+            for word in keep(own):
                 anywhere.setdefault(word, []).append(path)
-        for word in set(lexical.query_terms(stem_of(path))):
-            if wanted is None or word in wanted:
-                in_name.setdefault(word, []).append(path)
+    for in_stem, *held in by_name.values():
+        for word in keep(in_stem):
+            in_name.setdefault(word, []).extend(held)
     return anywhere, in_name
 
 
