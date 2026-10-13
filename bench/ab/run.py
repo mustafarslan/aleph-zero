@@ -58,17 +58,20 @@ ARMS = ("none", "L0", "L1n", "L1", "L2", "L3")
 JOB = "A/B run"
 
 
-def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False) -> list[dict]:
-    """`count` Loc-Bench issues from the repositories already prepared for Benchmark C,
-    spread over repositories, the same ones for a given seed. Tasks the steering was
-    developed on (dev_tasks.txt) are left out unless `with_dev`."""
+def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False, source: str = "locbench",
+          language: str | None = None) -> list[dict]:
+    """`count` issues from the repositories already prepared for Benchmark C, spread over
+    repositories, the same ones for a given seed: Loc-Bench's (Python), or with `source` and
+    `language` those of the other languages' question sets. Tasks the steering was developed on
+    (dev_tasks.txt) are left out unless `with_dev`."""
     sys.path.insert(0, str(ROOT / "bench" / "eval"))
     import benchmark_c
 
     prepared = {path.name.replace("__", "/", 1) for path in workdir.iterdir() if (path / ".git").exists() or path.is_symlink()}
     seen = {line.strip() for line in (Path(__file__).with_name("dev_tasks.txt")).read_text().splitlines()
             if line.strip() and not line.startswith("#")} if with_dev is False else set()
-    rows = [row for row in benchmark_c.instances(prepared) if row["gold"] and row["instance_id"] not in seen]
+    found = benchmark_c.instances(prepared) if source == "locbench" else benchmark_c.instances(prepared, source, language, 40)
+    rows = [row for row in found if row["gold"] and row["instance_id"] not in seen]
     by_repo: dict[str, list[dict]] = {}
     for row in rows:
         by_repo.setdefault(row["repo"], []).append(row)
@@ -84,6 +87,33 @@ def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False) -> 
                 picked.append(by_repo[repo].pop())
     return [{"id": row["instance_id"], "repo": row["repo"], "commit": row["base_commit"],
              "issue": row["problem_statement"], "gold": sorted(row["gold"])} for row in picked]
+
+
+STORE = Path.home() / ".claude" / "plugins" / "store"     # where Claude Code keeps what a mod stores
+
+
+def mod_meter(store: Path = STORE) -> dict | None:
+    """What the plugin's mod counted for the session that just ended: whether it added locations to the prompt.
+    The mod keeps its last session only, so this is read after each session. None when nothing can be read."""
+    try:
+        newest = max(store.glob("aleph-zero_inline-*.json"), key=lambda path: path.stat().st_mtime)
+        kept = json.loads(newest.read_text())["aleph-zero.last-session"]
+        meter = kept["meter"]
+        return {"rung": kept["rung"], "added_to_prompt": meter["added"]["prompt"], "added_to_grep": meter["added"]["grep"],
+                "aleph_calls": meter["aleph"]}
+    except (ValueError, OSError, KeyError, TypeError):
+        return None
+
+
+def warm_worker() -> str:
+    """The embedding worker running and its model loaded, as in a working session. The engine never starts the
+    worker for a question: a first prompt after a cold start gets words alone, and that is not what is measured."""
+    done = subprocess.run([str(ROOT / ".venv" / "bin" / "python"), "-c",
+                           "from aleph_zero.embed import worker\nfrom aleph_zero.embed.client import EmbedClient\n"
+                           "client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)\n"
+                           "client.embed(['is the worker awake'], kind='query')\nprint('warm')"],
+                          capture_output=True, text=True, timeout=300)
+    return "warm" if "warm" in done.stdout else f"not warm: {(done.stderr or done.stdout).strip()[-200:]}"
 
 
 def clone_of(workdir: Path, repo: str) -> Path:
@@ -196,7 +226,7 @@ def _reads_gold(call: dict, gold: list[str]) -> bool:
     return any(target == path or target.endswith("/" + path) for path in gold)
 
 
-def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seconds: int) -> dict:
+def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seconds: int, warm: bool = False) -> dict:
     clone = clone_of(workdir, task["repo"]).resolve()
     scratch = Path(tempfile.mkdtemp(prefix="az-ab-", dir="/tmp"))
     tree = scratch / "repo"
@@ -210,6 +240,7 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
                 subprocess.run([str(ROOT / ".venv" / "bin" / "aleph"), "--cwd", str(tree), "index"], capture_output=True, timeout=1800)
             except subprocess.TimeoutExpired:
                 return {"task": task["id"], "arm": arm, "model": model, "ok": False, "ended": "indexing took over 30 minutes"}
+        worker_state = warm_worker() if warm and arm != "none" else None
         started = time.monotonic()
         # Its own process group: on a timeout the session and everything it started (the engine's
         # server among them) are stopped together, not left behind.
@@ -229,6 +260,8 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
         record = read_stream(stream or "", task["gold"], str(tree.resolve()))
         record.update(task=task["id"], repo=task["repo"], arm=arm, model=model, gold=task["gold"],
                       wall_seconds=round(time.monotonic() - started, 1))
+        if arm != "none":
+            record.update(mod=mod_meter(), worker=worker_state)   # whether the mod added its locations, by its own count
         if ended_by:
             record.update(ok=False, ended=ended_by)
         return record
@@ -345,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seconds", type=int, default=900, help="wall-clock limit of one session")
     parser.add_argument("--max-sessions", type=int, default=8, help="refuse to start more sessions than this")
     parser.add_argument("--baseline", default="none")
+    parser.add_argument("--set", default="locbench", help="tasks/run: where the issues come from: locbench (Python), or others with --language")
+    parser.add_argument("--language", help="tasks/run: with --set others: the language of the issues")
+    parser.add_argument("--warm-worker", action="store_true",
+                        help="run: before each session with the plugin, have the embedding worker running with its model loaded")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--take-up", type=Path, metavar="FILE",
                         help="run: a results file of an interrupted run of the same command: only its missing sessions are run "
@@ -360,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
         records = [json.loads(line) for line in args.target.read_text().splitlines() if line.strip()]
         print(json.dumps(report(records, args.baseline), indent=2))
         return 0
-    chosen = tasks(args.target, args.count, args.seed)
+    chosen = tasks(args.target, args.count, args.seed, source=args.set, language=args.language)
     if args.action == "tasks":
         for task in chosen:
             print(f"{task['id']:45} {task['repo']:32} gold {len(task['gold'])} issue {len(task['issue'])} chars")
@@ -405,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"stopped on request. To go on: the same command with --take-up {out}", flush=True)
                 return 3
             job.unit(number, f"{task['id']} {arm}")
-            record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds)
+            record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds, warm=args.warm_worker)
             with out.open("a") as handle:
                 handle.write(json.dumps(record) + "\n")
             print(f"{number:3}/{len(chosen)} {task['id']:40} {arm:5} ok={record.get('ok')} tokens={record.get('tokens')} "

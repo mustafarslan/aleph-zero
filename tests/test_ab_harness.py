@@ -169,10 +169,10 @@ def test_taking_up_counts_and_runs_only_what_is_missing(tmp_path, monkeypatch, c
     import pytest
 
     chosen = [{"id": "c"}, {"id": "d"}]
-    monkeypatch.setattr(ab, "tasks", lambda *_: chosen)
+    monkeypatch.setattr(ab, "tasks", lambda *_, **__: chosen)
     asked = []
 
-    def one(workdir, task, arm, *_):
+    def one(workdir, task, arm, *_, **_more):
         asked.append((task["id"], arm))
         return _row(task["id"], arm, 100, 3, True)
 
@@ -205,9 +205,9 @@ def test_a_run_does_not_start_afresh_on_a_mistyped_take_up_or_wait_on_a_pause_le
     import longrun
     import pytest
 
-    monkeypatch.setattr(ab, "tasks", lambda *_: [{"id": "c"}])
+    monkeypatch.setattr(ab, "tasks", lambda *_, **__: [{"id": "c"}])
     asked = []
-    monkeypatch.setattr(ab, "run_one", lambda workdir, task, arm, *_: asked.append(arm) or _row(task["id"], arm, 100, 3, True))
+    monkeypatch.setattr(ab, "run_one", lambda workdir, task, arm, *_, **__: asked.append(arm) or _row(task["id"], arm, 100, 3, True))
     out = tmp_path / "ab" / "run.jsonl"
     with pytest.raises(SystemExit):
         ab.main(["run", str(tmp_path), "--take-up", str(out)])        # no such file: not "nothing is done yet, run it all"
@@ -279,3 +279,31 @@ def test_locations_can_be_read_one_line_a_file_with_the_further_places_of_a_file
         "added": True, "locations": ["src/a.py:1-10, 40-49, 80-89", "src/b.py:5-14"], "files": ["src/a.py", "src/b.py"], "answer_named": False}
     assert injected.added(hits, gold=["src/c.py"], files=5, per_file=True)["answer_named"] is True
     assert injected.added(hits, gold=["src/c.py"])["files"] == ["src/a.py", "src/b.py"]          # as the mod has it: five places, three of them in one file
+
+
+def test_tasks_can_come_from_the_other_languages_question_sets(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "eval"))
+    import benchmark_c
+
+    asked = {}
+
+    def instances(repos, source="locbench", language=None, per_repo=None):
+        asked.update(source=source, language=language, per_repo=per_repo, repos=repos)
+        return [{"instance_id": f"o__r-{n}", "repo": "o/r", "base_commit": f"c{n}", "problem_statement": f"issue {n}", "gold": ["src/a.ts"]}
+                for n in range(5)]
+
+    monkeypatch.setattr(benchmark_c, "instances", instances)
+    (tmp_path / "o__r" / ".git").mkdir(parents=True)
+    chosen = ab.tasks(tmp_path, 3, seed=11, source="others", language="typescript")
+    assert asked == {"source": "others", "language": "typescript", "per_repo": 40, "repos": {"o/r"}}
+    assert len(chosen) == 3 and chosen[0]["gold"] == ["src/a.ts"] and {task["repo"] for task in chosen} == {"o/r"}
+    ab.tasks(tmp_path, 3, seed=11)                                 # as before: Loc-Bench, no language
+    assert asked["source"] == "locbench" and asked["language"] is None
+
+
+def test_what_the_mod_counted_for_a_session_is_read_from_its_store(tmp_path):
+    store = tmp_path / "aleph-zero_inline-abc.json"
+    store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": {"turns": 1, "aleph": 0, "added": {"prompt": 1, "grep": 0}}}}))
+    assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "aleph_calls": 0}
+    store.write_text("not json")
+    assert ab.mod_meter(tmp_path) is None and ab.mod_meter(tmp_path / "nowhere") is None      # no store, or not readable: nothing known

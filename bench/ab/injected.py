@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run as ab  # noqa: E402
 
 LOCATIONS = 5        # as the mod asks and shows
+ENGINE_MS = 400      # what the mod gives the engine to answer (plugin/hooks/register.js)
 PROMPT_CHARS = 2000  # of the prompt, as the mod cuts it
 NAMED = "locations added, a file of the answer among them"
 NOT_NAMED = "locations added, no file of the answer among them"
@@ -77,8 +78,9 @@ def _first_places(hits: list[dict], count: int) -> list[dict]:
     return out
 
 
-def asked_again(workdir: Path, task: dict, variant: str = NOW) -> dict:
-    """The engine's answer to the session's prompt at the task's commit, asked and read as that variant of the mod does."""
+def asked_again(workdir: Path, task: dict, variant: str = NOW, timeout_ms: int | None = None) -> dict:
+    """The engine's answer to the session's prompt at the task's commit, asked and read as that variant of the mod does.
+    With `timeout_ms` the engine is given as long as the mod gives it, and the answer says whether that was enough."""
     k, kind, per_file = VARIANTS[variant]
     from aleph_zero import render
     from aleph_zero.engine import Engine
@@ -92,8 +94,11 @@ def asked_again(workdir: Path, task: dict, variant: str = NOW) -> dict:
         raise SystemExit(f"no worktree of {task['id']}: {made.stderr[-200:]}")
     try:
         engine = Engine()
-        answer = render.as_json(engine.search((task["issue"] + ab.QUESTION)[:PROMPT_CHARS], k=k, kind=kind, cwd=tree))
-        return {**added(answer["hits"], task["gold"], per_file=per_file), "vectors": answer["dense"], "pending": answer["pending"]}
+        engine.status(tree)        # the session's server has answered before the first prompt arrives: not a cold process
+        answer = render.as_json(engine.search((task["issue"] + ab.QUESTION)[:PROMPT_CHARS], k=k, kind=kind, cwd=tree,
+                                              timeout_ms=timeout_ms))
+        return {**added(answer["hits"], task["gold"], per_file=per_file), "vectors": answer["dense"], "pending": answer["pending"],
+                "timed_out": answer["timed_out"], "elapsed_ms": answer["elapsed_ms"]}
     finally:
         git("worktree", "remove", "--force", str(tree))
         subprocess.run(["rm", "-rf", str(scratch)])
@@ -192,9 +197,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--arm", default="L2")
     parser.add_argument("--out", type=Path, help="keep what was added per task here")
     parser.add_argument("--dense", action="store_true", help="without a results file: the one query also uses vectors (needs the worker)")
+    parser.add_argument("--set", default="locbench", help="where the run's issues came from: locbench, or others with --language")
+    parser.add_argument("--language")
+    parser.add_argument("--tasks-only", action="store_true",
+                        help="no results file needed: what rung 2 would add for the tasks a run with --count and --seed would take, "
+                             "asked as the mod asks (the mod's time limit, vectors by the engine's own decision)")
     parser.add_argument("--variant", choices=sorted(VARIANTS), default=NOW,
                         help=f"the mod the run was made with; the run of 2026-10-13 was made with '{AS_RUN}'")
     args = parser.parse_args(argv)
+    if args.tasks_only:
+        given = {}
+        for task in ab.tasks(args.target, args.count, args.seed, source=args.set, language=args.language):
+            entry = given[task["id"]] = asked_again(args.target, task, args.variant, timeout_ms=ENGINE_MS)
+            print(f"{task['id']:40} {entry['elapsed_ms']:5} ms {'late ' if entry['timed_out'] else '     '}"
+                  f"{'added' if entry['added'] else 'silent':6} {'answer among them' if entry['answer_named'] else '':18} "
+                  f"vectors: {entry['vectors'] or 'off'}", file=sys.stderr, flush=True)
+        took = sorted(entry["elapsed_ms"] for entry in given.values())
+        report = {"tasks": len(given), "in_time": sum(not entry["timed_out"] for entry in given.values()),
+                  "with_vectors": sum(entry["vectors"] == "used" for entry in given.values()),
+                  "locations_added": sum(entry["added"] for entry in given.values()),
+                  "answer_among_them": sum(entry["answer_named"] for entry in given.values()),
+                  "median_ms": took[len(took) // 2] if took else None, "slowest_ms": took[-1] if took else None}
+        print(json.dumps(report, indent=2))
+        if args.out:
+            args.out.write_text(json.dumps({"summary": report, "tasks": given}, indent=2) + "\n")
+        return 0
     if args.results is None:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
         import benchmark_c

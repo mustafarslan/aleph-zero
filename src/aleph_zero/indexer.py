@@ -45,8 +45,14 @@ def _temp_tables(conn: apsw.Connection):
     try:
         yield
     except BaseException:
-        conn.execute("ROLLBACK TO temp_tables")
-        conn.execute("RELEASE temp_tables")
+        # When SQLite interrupts a write inside a transaction (a query out of time) it rolls the whole
+        # transaction back by itself, and the savepoint is gone with it: undoing it again is then an error of
+        # its own, and that error, not the interruption, would go up. What matters is the first one.
+        try:
+            conn.execute("ROLLBACK TO temp_tables")
+            conn.execute("RELEASE temp_tables")
+        except apsw.Error:
+            pass
         raise
     conn.execute("RELEASE temp_tables")
 

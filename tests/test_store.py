@@ -104,3 +104,25 @@ def test_threads_that_first_ask_where_a_repository_s_state_lives_all_get_the_sam
             thread.join()
         assert set(answers) == {(beside, "")}
     db.forget_state_dirs()
+
+
+def test_a_rewrite_of_the_temporary_tables_that_is_interrupted_says_interrupted(tmp_path):
+    """Found 2026-10-13 by asking the engine as the plugin's second rung asks it (a kind filter and 400 ms) on a large
+    repository. When SQLite interrupts a write inside a transaction it rolls the whole transaction back, the savepoint
+    with it; rolling back to that savepoint then failed with "no such savepoint", and that error, not the
+    interruption, went up through a search that should have answered "out of time"."""
+    from aleph_zero import indexer
+
+    conn = open_db(tmp_path / "index.db")
+    with pytest.raises(apsw.InterruptError):
+        with indexer._temp_tables(conn):
+            conn.execute("DELETE FROM temp.scope_chunks")
+            conn.execute("ROLLBACK")                      # what SQLite has done by itself when it interrupts
+            raise apsw.InterruptError("interrupted")
+    with indexer._temp_tables(conn):                      # and the connection is usable afterwards
+        conn.execute("DELETE FROM temp.scope_chunks")
+    with pytest.raises(RuntimeError):                     # anything else still undoes the rewrite and goes up as it is
+        with indexer._temp_tables(conn):
+            conn.execute("INSERT INTO temp.scope_chunks(chunk_id) VALUES (7)")
+            raise RuntimeError("boom")
+    assert conn.execute("SELECT count(*) FROM temp.scope_chunks").fetchall() == [(0,)]
