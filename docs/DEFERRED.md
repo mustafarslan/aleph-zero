@@ -126,6 +126,18 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **Three voices.** *The advisor:* the population by main language for all six languages; a held-out draw before the shipped value moves, as for Python. *agy (Gemini 4 Argon, no boost):* keep JavaScript off now; a new draw from the same repositories only measures those repositories again, the check that counts is JavaScript repositories never asked, and the interval by repository should be the deciding one. Two of its figures did not hold when computed: leaving material-ui out does not bring the gain under 5 (+5.5; dayjs and tailwindcss do), and the gain is not on TypeScript files inside JavaScript repositories (answers in `.js` files: +6.1 on 224; answers in `.ts` files: −6.2 on 27). *Mine:* the advisor's run with agy's interval by repository added to the rule; agy's objection stands whatever the run says, and is what "JavaScript repositories never asked" below is for.
 - **Left for later, whatever the run says:** JavaScript repositories that none of the three sets holds (a fourth source of issues with fixes), which is what would answer agy; TypeScript's unasked questions (vscode 157, vue 11), not run since its verdict stands under both readings.
 
+## 1d. Making Aleph better where it can be, by a rule written first (your goal of 2026-10-13, late)
+
+Your words: "analyze capabilities of aleph zero and do research webseaech literature search about how to improve it whether it is speed or performance or efficiency without sacrificing accuracy precision recall ... make sure that we would pick best option to improve. you are done when improvement cannot go up durther si stantially". With the advisor and agy (with boost, as you said).
+
+- **How a candidate is adopted (written 2026-10-13 before the first measurement under this goal):**
+  - *Speed:* it takes a stage that is 20% or more of a settled question's median time and cuts that stage by half or more, and the results of the questions it is tried on are the same, hit for hit. A smaller saving is adopted only if it is free of risk and of new state.
+  - *Quality:* read as every verdict is: the first line of an issue, file recall@10, in the arm the language ships with. Not lower in any language with an interval clear of zero, and higher by the amount stated for that candidate before its run, with an interval clear of zero.
+  - *Efficiency:* disk or memory of the part it touches is halved, at no measured loss by the quality rule.
+  - *What is delivered:* a measured gain that does not reach a real session (found at once: vectors are not there for a session's first question) counts as a defect and is fixed as found, without a bar.
+- **When it ends:** a round of candidates in which none passes.
+- **Baseline, settled worktrees, worker awake, vectors on (median of five warm first-line questions):** vscode 88 ms (git status 36, the repository's facts 10, the query's vector 17, words 15, vector scan 4); material-ui 183 (98, 11, 21, 30, 3); trino 108 (46, 11, 19, 16, 4); django 131 (69, 11, 19, 18, 5); pandas 64 (14, 11, 19, 14, 2); fmt 34 (8, 9, 9, 2, 1). On whole issue text the query's vector takes 14 to 45 ms and words 4 to 42. A process's first question: 76 to 560 ms. The record of what was searched for, found and measured is `bench/data/improvement-ledger.md`.
+
 ## 1c. Tuning runs that need the GPU for hours
 
 - **What:** two things the M2 plan lists and that were not run. (a) The split-threshold sweep of ADR-001: chunk at 96, 128, 192, 256 and 384 tokens and compare on Loc-Bench, with a signature-only control. (b) Re-tuning M1's starting values against Benchmark C: the column weights of the text index, the path and name rules, how many words a long query keeps.
