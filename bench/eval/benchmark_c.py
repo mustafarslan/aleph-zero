@@ -69,7 +69,7 @@ from aleph_zero import embedder, filters, gitio, lexical
 from aleph_zero.embed import worker
 from aleph_zero.embed.client import VECTOR_KIND, EmbedClient, EmbedPool, Unavailable
 from aleph_zero.indexer import Index
-from aleph_zero.search import search
+from aleph_zero.search import arrange, search
 from aleph_zero.store import index_file, open_db
 from aleph_zero.vectors import VectorStore
 from aleph_zero.view import View
@@ -85,7 +85,10 @@ FORMS = ("full", "title", "rare")
 ALPHAS = (0.2, 0.4, 0.6, 0.8)   # weight of the vector score in the convex combination
 # `dense` and the convex arms are read to ten files, however many chunks that takes; `dense10` is vectors alone read
 # as the engine's own arms are, on ten results, of which several are in one file. Only like is compared with like.
-MODES = ("lexical", "dense", "dense10", "hybrid", *(f"convex{alpha}" for alpha in ALPHAS))
+# `lexical1` and `hybrid1`: the engine's two arms with at most one result a file among the ten (a layout that is
+# tried here and is not the engine's): ten results name about six files.
+MODES = ("lexical", "dense", "dense10", "hybrid", "lexical1", "hybrid1", *(f"convex{alpha}" for alpha in ALPHAS))
+DEEP = 50   # results asked for when the list is cut again here; the engine's pool is the same as for ten (300)
 
 
 def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None) -> list[dict]:
@@ -297,6 +300,20 @@ def first_files(paths: list[str], count: int = 10) -> list[str]:
     return list(dict.fromkeys(paths))[:count]
 
 
+def cut(hits: list, k: int, a_file: int | None = None, kind: str = "any") -> list:
+    """The engine's own cut of a deeper list to k results (code first, documentation capped), after keeping at
+    most `a_file` results of one file. Without `a_file` it is what the engine returns when asked for k."""
+    if a_file is not None:
+        seen: dict[str, int] = {}
+        kept = []
+        for hit in hits:
+            if seen.get(hit.path, 0) < a_file:
+                seen[hit.path] = seen.get(hit.path, 0) + 1
+                kept.append(hit)
+        hits = kept
+    return arrange(hits, k, kind)
+
+
 def bm25_files(view: View, question: str) -> list[str]:
     conn = apsw.Connection(":memory:")
     conn.execute("CREATE VIRTUAL TABLE files USING fts5(path UNINDEXED, body)")
@@ -375,6 +392,7 @@ def paired_bootstrap(a: list[float], b: list[float], rounds: int = 10_000, seed:
 def summarise(results: list[dict], passed_over: dict[str, int]) -> dict:
     """The means over the questions that were scored, and what vectors add, with its interval."""
     summary: dict = {"instances": len(results), "left_out": passed_over, "repos": sorted({entry["repo"] for entry in results}),
+                     "cut_differs": sum(entry.get("cut_differs", 0) for entry in results),
                      "bm25_full": {key: round(statistics.mean(entry["bm25"][key] for entry in results), 3)
                                    for key in results[0]["bm25"]}}
     for form in FORMS:
@@ -386,7 +404,8 @@ def summarise(results: list[dict], passed_over: dict[str, int]) -> dict:
             # is not compared with one read to ten results.
             block[mode]["files"] = round(statistics.mean(len(entry["files"][form][mode]) for entry in results), 1)
         for name, (first, second) in {"hybrid_minus_lexical": ("hybrid", "lexical"), "dense_minus_lexical": ("dense", "lexical"),
-                                      "hybrid_minus_dense10": ("hybrid", "dense10")}.items():
+                                      "hybrid_minus_dense10": ("hybrid", "dense10"), "lexical1_minus_lexical": ("lexical1", "lexical"),
+                                      "hybrid1_minus_hybrid": ("hybrid1", "hybrid"), "hybrid1_minus_lexical1": ("hybrid1", "lexical1")}.items():
             block[name] = {}
             for key in ("recall@10", "recall@1", "mrr"):
                 mean, low, high = paired_bootstrap([entry["scores"][form][first][key] for entry in results],
@@ -463,23 +482,28 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
         except Unavailable as exc:
             raise SystemExit(f"the worker is needed for the query vectors: {exc}") from exc
         found: dict[str, dict[str, list[str]]] = {}
+        differs = 0     # times this harness's cut of the deeper list was not what the engine returns for k: the new arms rest on it
         for form, question in forms.items():
             vector = vectors[form]
             nearest = lambda limit, scoped, vector=vector: [  # noqa: E731
                 chunk_id for chunk_id, _ in vector_search(vector, limit, scoped)]
             text_scores = lexical.search(index.conn, question, 200)
             vector_scores = vector_search(vector, 200)
+            deep = {"lexical": search(index, view, question, k=DEEP), "hybrid": search(index, view, question, k=DEEP, dense=nearest)}
             found[form] = {
                 "lexical": first_files([hit.path for hit in search(index, view, question, k=k)]),
                 "hybrid": first_files([hit.path for hit in search(index, view, question, k=k, dense=nearest)]),
+                "lexical1": first_files([hit.path for hit in cut(deep["lexical"], k, a_file=1)]),
+                "hybrid1": first_files([hit.path for hit in cut(deep["hybrid"], k, a_file=1)]),
                 "dense": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores]),
                 "dense10": chunk_files(index, [chunk_id for chunk_id, _ in vector_scores], chunks=k),
                 **{f"convex{alpha}": chunk_files(index, convex_chunks(text_scores, vector_scores, alpha)) for alpha in ALPHAS},
             }
+            differs += sum(first_files([hit.path for hit in cut(deep[mode], k)]) != found[form][mode] for mode in ("lexical", "hybrid"))
         bm25 = bm25_files(view, forms["full"]) if with_bm25 else []
         index.conn.close()
         entry = {"instance": row["instance_id"], "repo": row["repo"], "gold": row["gold"], "chunks": total,
-                 "title": forms["title"][:120], "files": found, "bm25_files": bm25,
+                 "title": forms["title"][:120], "files": found, "bm25_files": bm25, "cut_differs": differs,
                  "bm25": score(row["gold"], bm25),
                  "scores": {form: {mode: score(row["gold"], found[form][mode]) for mode in MODES} for form in FORMS}}
         results.append(entry)

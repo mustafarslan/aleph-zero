@@ -122,9 +122,11 @@ def groups(records: list[dict], given: dict[str, dict], baseline: str, arm: str)
     return out
 
 
-def offline(workdir: Path, rows: list[dict], say=lambda text: None) -> dict:
+def offline(workdir: Path, rows: list[dict], say=lambda text: None, dense: bool = False) -> dict:
     """For every prepared question: what each variant of rung 2 would add to the session's prompt. Words and names only,
-    asked of the commit's tree in the index (no worktree, no worker): what the engine answers while vectors are off."""
+    asked of the commit's tree in the index (no worktree, no worker): what the engine answers while vectors are off.
+    With `dense` the one query also goes to the vectors the benchmark's `prepare` made (the worker embeds the query);
+    a question whose index is not fully embedded is then left out and counted."""
     import benchmark_c
     from dataclasses import asdict
 
@@ -134,7 +136,14 @@ def offline(workdir: Path, rows: list[dict], say=lambda text: None) -> dict:
     from aleph_zero.store import index_file, open_db
 
     counts = {name: {"added": 0, "answer_named": 0, "files": 0} for name in VARIANTS}
-    scored = 0
+    scored = partly = 0
+    client = None
+    if dense:
+        from aleph_zero.embed import worker
+        from aleph_zero.embed.client import VECTOR_KIND, EmbedClient
+        from aleph_zero.vectors import VectorStore
+
+        client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
     for number, row in enumerate(rows, 1):
         try:
             view = benchmark_c.view_at(benchmark_c.clone_of(workdir, row["repo"]), row["base_commit"])
@@ -144,10 +153,21 @@ def offline(workdir: Path, rows: list[dict], say=lambda text: None) -> dict:
         if index.sync(view, budget_seconds=0.0).pending:
             index.conn.close()
             continue
-        scored += 1
         prompt = (row["problem_statement"] + ab.QUESTION)[:PROMPT_CHARS]
+        nearest = None
+        if client is not None:
+            store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
+            have, total = store.coverage(index)
+            if have < total:
+                partly += 1
+                index.conn.close()
+                continue
+            vector = client.embed([prompt], kind="query")[0]
+            nearest = lambda limit, scoped, vector=vector, store=store, index=index: [  # noqa: E731
+                chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
+        scored += 1
         for name, (k, kind, per_file) in VARIANTS.items():
-            hits = [asdict(hit) for hit in search(index, view, prompt, k=k, kind=kind)]
+            hits = [asdict(hit) for hit in search(index, view, prompt, k=k, kind=kind, dense=nearest)]
             entry = added(hits, row["gold"], per_file=per_file)
             counts[name]["added"] += entry["added"]
             counts[name]["answer_named"] += entry["answer_named"]
@@ -155,7 +175,7 @@ def offline(workdir: Path, rows: list[dict], say=lambda text: None) -> dict:
         index.conn.close()
         if number % 50 == 0:
             say(f"{number} of {len(rows)}")
-    return {"questions": scored, "variants": {
+    return {"questions": scored, "vectors": dense, "left_out_not_fully_embedded": partly, "variants": {
         name: {"added": entry["added"], "added_share": round(entry["added"] / scored, 3) if scored else None,
                "answer_named": entry["answer_named"], "answer_named_share": round(entry["answer_named"] / scored, 3) if scored else None,
                "files_when_added": round(entry["files"] / entry["added"], 2) if entry["added"] else None}
@@ -171,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", default="none")
     parser.add_argument("--arm", default="L2")
     parser.add_argument("--out", type=Path, help="keep what was added per task here")
+    parser.add_argument("--dense", action="store_true", help="without a results file: the one query also uses vectors (needs the worker)")
     parser.add_argument("--variant", choices=sorted(VARIANTS), default=NOW,
                         help=f"the mod the run was made with; the run of 2026-10-13 was made with '{AS_RUN}'")
     args = parser.parse_args(argv)
@@ -178,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
         import benchmark_c
 
-        report = offline(args.target, benchmark_c.instances(None), say=lambda text: print(text, file=sys.stderr, flush=True))
+        report = offline(args.target, benchmark_c.instances(None), say=lambda text: print(text, file=sys.stderr, flush=True), dense=args.dense)
         print(json.dumps(report, indent=2))
         if args.out:
             args.out.write_text(json.dumps(report, indent=2) + "\n")

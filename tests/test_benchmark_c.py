@@ -42,3 +42,19 @@ def test_the_summary_says_how_many_files_each_ranker_s_answer_named():
     assert summary["title"]["lexical"]["recall@10"] == 0.5 and summary["title"]["hybrid"]["recall@10"] == 1.0
     assert summary["title"]["hybrid_minus_lexical"]["recall@10"]["mean"] == 0.5
     assert "dense10" in bench.MODES     # vectors alone at the depth the engine's arms are read at
+
+
+def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo):
+    from aleph_zero.search import search
+
+    repo.write("src/auth/more.py", "".join(f"def rotate_helper_{n}(token):\n    return rotate(token, {n})\n\n\n" for n in range(6)))
+    repo.write("src/auth/other.py", "def rotate(token, n):\n    return token\n")
+    index = Index(open_db(index_path(repo.root)))
+    view = build_view(repo.root)
+    index.sync(view)
+    deep = search(index, view, "rotate token helper", k=50)
+    as_it_is = [hit.path for hit in search(index, view, "rotate token helper", k=3)]
+    assert [hit.path for hit in bench.cut(deep, 3)] == as_it_is                     # the same cut the engine makes
+    assert as_it_is.count("src/auth/more.py") >= 2                                  # several results in one file
+    one_each = [hit.path for hit in bench.cut(deep, 3, a_file=1)]
+    assert len(set(one_each)) == len(one_each) == 3 and one_each[0] == as_it_is[0]  # three files, and first place is what it was

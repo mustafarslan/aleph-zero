@@ -165,6 +165,28 @@ The owner's instruction for the questions the pass left open: "for open question
 5. **One result a file among the engine's ten: measured without a session, nothing changed.** The rule, written before the measurement: Python's 400 and C++'s 108 by their first lines, each language in the arm it ships with (Python: words and names; C++: with vectors), the other arm beside it; at most one result a file, applied where the engine cuts its list to ten. It passes if file recall@10 rises by 5 points or more with a paired interval clear of zero in both languages' shipped arms and first place is not lower. A pass is a proposal that re-reads both vector verdicts, not a change.
 6. **The default stays rung 1.** agy would make it rung 0: the standing instruction was followed in 2 of 30 sessions and its text rides on every turn. Not adopted, for the advisor's reason: there was no rung-0 arm, so 2 of 30 may be what the tools alone give; the text is about a thousand characters; and how often it is followed differs by model and prompt (two short sessions on the cheap model that day called the engine first, both). What is known about rung 1 is this and no more: **followed in 2 of 30 sonnet sessions on issue texts; no rung-0 control.** Rung 0 against rung 1 on that count alone is the cheapest arm to add to a later run.
 
+**Result of 4 (vectors for rung 2's one query; 400 questions, none left out, no session):**
+
+| What rung 2 asks for and shows | Words and names: added / answer among them | With vectors: added / answer among them |
+|---|---|---|
+| Five places, any kind | 258 / 126 (31.5%) | 367 / 181 (45.3%) |
+| Five places, code only | 258 / 141 (35.3%) | 375 / 209 (52.3%) |
+| Five files, any kind | 258 / 143 (35.8%) | 367 / 215 (53.8%) |
+| Five files, code only (the mod now) | 258 / 146 (36.5%) | 375 / 214 (53.5%) |
+
+Up by 17.0 points for the mod as it is now: by the rule, a reason to put vectors on in a next measured arm. Two things the table also says. The gain is in how often rung 2 speaks, not in how often it is right when it does: a third generator makes "two agree on the first hit" easier to meet, so locations are added for 375 questions instead of 258, and a file of the answer is among them in 57% of those either way. And so the sessions that are handed locations without the answer rise too, from 112 to 161; in the pass those were the pairs that cost more (1.18, 8 pairs, a lean). Whether the bar for speaking should rise when vectors take part is part of designing that arm.
+
+**Result of 5 (at most one result a file among the ten; both benchmarks run again with the two arms beside the engine's own; no session).** The harness's own cut of the deeper list is what the engine returns for ten in every question (0 differences in 1,016 comparisons), and the engine's arms reproduce the recorded verdicts to the digit (Python +3.9, C++ +6.7).
+
+| First lines, file recall@10 | As it is (files named) | One result a file (files named) | Gain (95% interval) | First place |
+|---|---|---|---|---|
+| **Python, words and names** (its shipped arm), 400 questions | 0.563 (7.3) | 0.597 (10.0) | +3.4 points (+1.8 to +5.2) | unchanged |
+| Python, with vectors | 0.603 (6.8) | 0.643 (10.0) | +4.1 (+2.2 to +6.1) | unchanged |
+| C++, words and names, 108 questions | 0.389 (6.6) | 0.445 (9.9) | +5.5 (+2.5 to +9.2) | unchanged |
+| **C++, with vectors** (its shipped arm) | 0.456 (6.2) | 0.526 (9.8) | +7.0 (+3.6 to +11.0) | unchanged |
+
+**By the rule it does not pass:** 5 points were asked of both languages' shipped arms, and Python's gains 3.4. So there is no proposal and the layout stays. What is recorded: the gain is real in every cell (no interval holds zero, on whole issue texts neither: +1.5 to +3.4 points), it costs nothing at first place, and it would flip neither vector verdict (under it Python's gate reads +4.6, interval +1.3 to +7.9, still under 5; C++'s +8.1, +2.2 to +14.6). What it would cost is not measured here: the second and third place inside a file, which an agent also uses. Rung 2's own lines now keep those places on the file's line; a layout for the engine's results that does the same is the form in which this would be worth asking again.
+
 The design said rung 2 would be "dropped if flat or negative". It is flat within what 30 pairs can see. It was already off by default and stays an option: the run could not exclude a saving under about 30%, and what it hands over has changed since.
 
 ## Views consulted
