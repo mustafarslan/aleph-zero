@@ -168,8 +168,11 @@ The owner's words: "we can use opensource peojects with mid size of repo for lan
 | Language | Questions, repositories | First line: words and names | With vectors | Gain (95% interval) | Better / worse | By repository | Whole text: gain | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | **Go** | 110, 8 | 0.500 | 0.520 | +2.0 points (−3.8 to +7.9) | 17 / 13 | −8.2 to +8.2 | +18.2 (+11.1 to +25.5), 31 / 4 | **not shown: off** |
+| **TypeScript** | 165, 11 | 0.355 | 0.456 | **+10.2 points (+5.3 to +15.2)** | 32 / 5 | +6.2 to +15.8 | +9.9 (+5.5 to +14.6), 27 / 3 | **passes: on** |
 
 **Go.** Embedded in 29 minutes (the chip at 76 °C at most, no waits), all 110 scored. On first lines vectors are not shown to help: the interval holds zero and nearly as many questions get worse as better. On whole issue text they add 18 points, the largest such gain measured so far, and first place on first lines rises from 0.165 to 0.245. It is Python's pattern again, more sharply: little for a title, much for a whole issue. All eight repositories are under 50,000 chunks, so the reading beside is the same reading. cli gives 40 of the 110 questions.
+
+**TypeScript.** Embedded in two and a half hours (the chip at 77 °C at most, no waits; paused twice by me for three minutes for a test run), all 165 scored. The gate is met clearly: ten points on first lines with an interval from 5.3 up, six times as many questions better as worse, and clear of zero when repositories are resampled. vscode, material-ui and vuejs/core give 40 questions each. On the repositories at or under 50,000 chunks (70 questions; vscode, code-server, material-ui and angular left out), which is the reading the owner's "mid size" asks for: +12.4 points (+3.6 to +21.9), 15 better and 3 worse: the same answer from fewer questions. Words and names alone find less here than in any other language so far (0.355 on first lines, 0.203 on whole text), which is where vectors have room.
 
 ## The starting values, each tried against others (2026-10-13): none is replaced
 
