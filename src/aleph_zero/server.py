@@ -192,6 +192,10 @@ class _BadArguments(ValueError):
     """The caller's arguments do not fit the tool's schema."""
 
 
+_WAKE = object()      # asked of the background thread at a session's start
+_WARM = object()      # asked of the thread that answers calls, before the first of them
+
+
 class _Background:
     """Makes vectors for whatever worktree was last asked about, on its own thread and with
     its own engine and database connections, so it never holds up a call. Only started
@@ -213,6 +217,10 @@ class _Background:
         """A call was just answered for `cwd`: its chunks may need vectors."""
         self._wanted.put(cwd)
 
+    def wake(self) -> None:
+        """The session has just begun: have the worker running and its model loaded before the first question."""
+        self._wanted.put(_WAKE)
+
     def stop(self) -> None:
         self._stopping.set()
         self._wanted.put(None)
@@ -228,8 +236,14 @@ class _Background:
                 # otherwise hold one of each for every worktree ever asked about.
                 self._engine.close()
                 continue
+            wake = cwd is _WAKE
             while not self._wanted.empty():  # only the latest matters
                 cwd = self._wanted.get()
+                wake = wake or cwd is _WAKE
+            if wake and not self._stopping.is_set():
+                self._engine.wake(None)
+            if cwd is _WAKE:
+                cwd = None                       # and then its chunks' vectors, as after a call
             while not self._stopping.is_set():
                 try:
                     if not self._engine.dense_enabled(cwd):
@@ -276,6 +290,13 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             item = calls.get()
             if item is None:
                 return
+            if item is _WARM:
+                # What the first question would have to do first, done while nobody waits: on a large repository
+                # that is seconds, and the plugin gives its own question, the session's first, 400 ms.
+                engine.warm()
+                with state:
+                    engine.resume()
+                continue
             ident, name, arguments, stateless = item
             with state:
                 waiting.discard(ident)
@@ -304,6 +325,9 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     modern = stateless_enabled()
     worker = threading.Thread(target=work, name="aleph-calls", daemon=True)
     worker.start()
+    calls.put(_WARM)
+    if background is not None:
+        background.wake()
     for line in incoming:
         line = line.strip()
         if not line:

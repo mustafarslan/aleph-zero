@@ -40,6 +40,8 @@ GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for readi
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
+WARM_SECONDS = 5.0              # for the server's warming at its start: what a first question may take to index
+WAKE_SECONDS = 10.0             # for the one vector that wakes the worker at a session's start, on a thread of its own
 RECORD_EMBED_SECONDS = 5.0      # in all, for the vectors of a view's decision records at one question; made once and kept
 RECORD_BATCH = 16               # records embedded and kept at a time
 RECORD_RETRY_SECONDS = 30.0     # after the worker failed to make them, before it is asked again
@@ -726,6 +728,43 @@ class Engine:
             cached = (key, (enabled, why))
             self._decisions[id(index)] = cached
         return cached[1]
+
+    def warm(self, cwd: Path | str | None = None) -> bool:
+        """Do before a first question what it would have to do first, for the worktree containing `cwd`: the view,
+        the index brought up to it, the words of its paths and, where vectors take part, how many chunks have one.
+        On a large repository that is seconds (material-ui: 3 s for a process's first question, 0.2 s for the next),
+        and the plugin gives its own question 400 ms. Never raises: whether a worktree was warmed."""
+        started = time.monotonic()
+        try:
+            index, view, _, _ = self._ready(cwd, started, started + WARM_SECONDS)
+            index.path_words(view)
+            if self._dense_decision(index)[0]:
+                self._store(index, view).coverage(index)
+        except Exception:  # noqa: BLE001 - no repository, a locked index, out of time: the first question finds out itself
+            return False
+        return True
+
+    def wake(self, cwd: Path | str | None = None) -> bool:
+        """Start the embedding worker and have it load its model, where vectors take part for the worktree
+        containing `cwd`. A worker that was not running takes three to four seconds, a sleeping one half a second,
+        and a question waits 0.3 s for its vector: without this a session's first question is answered by words
+        alone. Slow, so for a thread that answers nobody. Never raises: whether the worker is awake."""
+        from .embed import worker
+        from .embed.client import EmbedClient, Unavailable
+
+        try:
+            if not self.dense_enabled(cwd):
+                return False
+            client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=WAKE_SECONDS)
+            try:
+                client.embed(["awake"], kind="query")
+            finally:
+                client.close()
+        except Unavailable:
+            return False
+        except Exception:  # noqa: BLE001 - no repository, a locked index: nothing to wake a worker for
+            return False
+        return True
 
     def dense_enabled(self, cwd: Path | str | None = None) -> bool:
         """Whether vectors take part for the worktree containing `cwd`. Does not index."""

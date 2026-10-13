@@ -434,3 +434,60 @@ def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
         assert on.text("facts", kind="route") == "GET /invoices/{invoice_id}  src/api.py:1  fastapi"
     finally:
         on.close()
+
+
+def test_a_session_s_first_search_has_vectors_because_the_server_wakes_the_worker_when_it_starts(repo):
+    # The worker used to be started only after a first call had been answered, so a session's first question, which
+    # is the plugin's own and most of what an agent ever asks, was answered by words alone. Measured with the real
+    # worker: the first two searches of a session without vectors.
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    cache = Path(tempfile.mkdtemp(prefix="az-", dir="/tmp"))
+    home = cache / "aleph-zero" / "worker"
+    (home / "bin").mkdir(parents=True)
+    (home / "models").mkdir()
+    fake = Path(__file__).parent / "fake_worker.py"
+    (home / "bin" / "llama-server").write_text(f"#!/bin/sh\nexec {sys.executable} {fake} \"$@\"\n")
+    (home / "bin" / "llama-server").chmod(0o755)
+    (home / "models" / "embeddinggemma-2-Q8_0.gguf").write_bytes(b"not a real model")
+    env = {**os.environ, "XDG_CACHE_HOME": str(cache), "ALEPH_DENSE": "1", "ALEPH_WORKER_POLL_SECONDS": "0.2",
+           "ALEPH_WORKER_IDLE_EXIT_SECONDS": "60", "ALEPH_WORKER_LOAD_SECONDS": "10"}
+    aleph = [sys.executable, "-m", "aleph_zero.cli", "--cwd", str(repo.root)]
+    run = lambda *args: subprocess.run([*aleph, *args], capture_output=True, text=True, env=env, timeout=120)  # noqa: E731
+
+    def session() -> Client:
+        client = Client.__new__(Client)
+        client.proc = subprocess.Popen([*aleph, "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        client.next_id = 0
+        return client
+
+    try:
+        assert run("embed", "run").returncode == 0                       # every chunk has its vector
+        assert "stopped" in run("embed", "stop").stdout and "running: no" in run("embed", "status").stdout
+        client = session()
+        try:
+            client.start()
+            deadline = time.monotonic() + 20                              # no call is made: the server does this by itself
+            while time.monotonic() < deadline and "running: yes" not in run("embed", "status").stdout:
+                time.sleep(0.2)
+            assert "running: yes" in run("embed", "status").stdout
+            # Running is not awake: a worker that sleeps has unloaded its model and takes longer to wake than a
+            # question waits. The server has asked it for one vector, so the model is loaded.
+            decoded = "from aleph_zero.embed import supervisor, worker; from aleph_zero.embed.client import EmbedClient; " \
+                      "print(supervisor._requests_served(EmbedClient(worker.socket_path())))"
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and (asked := subprocess.run([sys.executable, "-c", decoded], capture_output=True, text=True, env=env).stdout.strip()) in ("", "0", "None"):
+                time.sleep(0.2)
+            assert asked not in ("", "0", "None")
+            first = json.loads(client.text("search", query="render_invoice", format="json"))
+            assert first["dense"] == "used" and first["hits"][0]["path"] == "src/billing/invoice.py"
+            assert client.close() == 0
+        finally:
+            if client.proc.poll() is None:
+                client.proc.kill()
+    finally:
+        run("embed", "stop")
+        shutil.rmtree(cache, ignore_errors=True)

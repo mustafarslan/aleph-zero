@@ -203,3 +203,29 @@ def test_the_engine_collects_old_content_after_indexing_when_it_is_due(repo):
     repo.write("src/newer_file.py", "def even_newer():\n    return 1\n")
     assert engine.search("even_newer").hits      # stored something, no limit: old content goes
     assert index.conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0] == before + 1
+
+
+def test_warming_does_what_a_first_question_needs_and_changes_no_answer(repo, tmp_path):
+    # The server warms the worktree it was started in: on a large repository a process's first question took seconds
+    # (the view's tables, the vectors' coverage, every path's words), which the plugin's 400 ms never had.
+    from aleph_zero.engine import Engine
+
+    asked = [("render_invoice", {}), ("how is an invoice rendered", {"kind": "code"}), ("guide", {"kind": "docs"})]
+    plain = Engine(repo.root)
+    expected = [[(hit.path, hit.start_line) for hit in plain.search(query, **options).hits] for query, options in asked]
+    warmed = Engine(repo.root)
+    assert warmed.warm() is True
+    index = warmed._indexes[warmed._last]
+    assert index._path_words is not None                      # the words of every path are read: the first question does not wait for them
+    assert [[(hit.path, hit.start_line) for hit in warmed.search(query, **options).hits] for query, options in asked] == expected
+    assert warmed.warm() is True                              # and again costs nothing and breaks nothing
+
+
+def test_warming_never_raises_where_there_is_nothing_to_warm(tmp_path):
+    from aleph_zero.engine import Engine
+
+    assert Engine(tmp_path / "not there").warm() is False
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert Engine(empty).warm() in (True, False)              # a plain directory: searched as it is, or nothing to do
+    assert Engine(tmp_path).warm(tmp_path / "also not there") is False
