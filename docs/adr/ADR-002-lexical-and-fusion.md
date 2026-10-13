@@ -155,7 +155,7 @@ Questions for the other languages come from three public sets read into this ben
 
 **By the letter the gate is met.** Resampling repositories instead of questions, since two of the five give 80 of the 108: +4.0 to +13.8 on the first line, +2.3 to +9.6 on whole text; clear of zero either way.
 
-**Verdict recorded:** `dense_policy.VERDICTS["cpp"]` is on. It takes effect in projects whose main language is C++ and where the embedding worker is installed. C is another language with its own questions (110 in six repositories) and is not run; a `.h` file counts as C++, as everywhere in Aleph.
+**Verdict recorded:** `dense_policy.VERDICTS["cpp"]` is on. It takes effect in projects whose main language is C++ and where the embedding worker is installed. C is another language with its own questions (110 in six repositories) and is not run; a `.h` file counts as C++, as everywhere in Aleph. One consequence to know: a C project with more header files than `.c` files has C++ as its main language and so gets this verdict, though C was not measured; `ALEPH_DENSE=0` switches vectors off there.
 
 What else the table says, and what it does not: on C++ vectors alone find more than words and names alone, the reverse of Python; fusing them gives back part of that (0.493 against 0.531), so the fusion, tuned on nothing, is leaving recall on the table for this language. 108 questions from five repositories is a small set: the interval is ten points wide, and a sixth repository could move the mean by more than a point. There is no second, held-out set for C++ as there was for Python.
 
