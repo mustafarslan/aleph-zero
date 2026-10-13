@@ -138,8 +138,11 @@ def from_multi_swe(row: dict, language: str) -> dict | None:
                      statement, row.get("fix_patch") or "", language, "multi-swe")
 
 
-def select(rows: list[dict], per_repo: int | None, language: str | None = None, seed: int = SEED) -> tuple[list[dict], dict[str, int]]:
-    """The questions that are asked, in the order given, and how many were left out, by reason."""
+def select(rows: list[dict], per_repo: int | None, language: str | None = None, seed: int = SEED,
+           asked: frozenset[str] | set[str] = frozenset()) -> tuple[list[dict], dict[str, int]]:
+    """The questions that are asked, in the order given, and how many were left out, by reason. With `asked` (the
+    names of questions an earlier run scored) it is a second draw: only questions never asked, and none that is one
+    of those under another number."""
     left: dict[str, int] = {}
 
     def leave(why: str, count: int = 1) -> None:
@@ -161,6 +164,10 @@ def select(rows: list[dict], per_repo: int | None, language: str | None = None, 
             leave("asked already in another set" if elsewhere[0] in seen else "asked already at another commit")
         elif len(row["gold"]) > MOST_FILES:
             leave("more than ten files changed")
+        elif row["instance_id"] in asked:
+            leave("asked in an earlier run")
+            seen.add(key)
+            seen.update(elsewhere)
         else:
             seen.add(key)
             seen.update(elsewhere)

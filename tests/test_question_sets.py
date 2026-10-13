@@ -128,3 +128,17 @@ def test_a_fix_that_two_sets_give_at_different_commits_is_asked_once():
     kept, left = sets.select([first, again, backport, other], per_repo=None)
     assert [(row["instance_id"], row["base_commit"]) for row in kept] == [("fmtlib__fmt-2310", "bc13c6de"), ("fmtlib__fmt-3272", "bfc0924e")]
     assert left == {"asked already in another set": 1, "asked already at another commit": 1}
+
+
+def test_a_second_draw_takes_only_questions_that_were_never_asked_and_none_that_is_one_of_them_under_another_number():
+    rows = [*_rows("big/one", 100), *_rows("small/two", 7)]
+    first, _ = sets.select(rows, per_repo=25)
+    asked = {row["instance_id"] for row in first}
+    # A backport of a question that was asked: another number and commit, the same words and files. It is not a new question.
+    again = {**first[0], "instance_id": "big/one-backport", "base_commit": "elsewhere"}
+    second, left = sets.select([*rows, again], per_repo=25, asked=asked)
+    assert not asked & {row["instance_id"] for row in second} and "big/one-backport" not in {row["instance_id"] for row in second}
+    assert {row["repo"] for row in second} == {"big/one"} and len(second) == 25        # small/two has none left
+    assert left == {"asked already at another commit": 1, "asked in an earlier run": 32, "over the limit for one repository": 50}
+    assert sets.select([*rows, again], per_repo=25, asked=asked)[0] == second          # the same draw every time
+    assert sets.select(rows, per_repo=25)[0] == first                                  # and the first draw is as it was

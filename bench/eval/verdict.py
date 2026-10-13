@@ -1,6 +1,11 @@
 """A language's benchmark result read by the gate of ADR-002, the same way for every language.
 
   uv run --group bench python bench/eval/verdict.py bench/data/results/benchmark_c_go.json
+  uv run --group bench python bench/eval/verdict.py --main-language javascript benchmark_c_javascript.json benchmark_c_typescript.json
+
+A verdict is applied by a repository's main language, so with `--main-language` the questions are those whose
+repository the engine calls that language at the question's commit, from every file given, whatever set or label
+they came under (`population.py` writes that language into a result file; docs/DEFERRED.md, entry 1b-2).
 
 The gate: on the question's first line, vectors add 5 points or more of file recall@10 with a paired
 interval that excludes zero. Beside it and deciding nothing: the whole issue text, the interval when
@@ -76,11 +81,32 @@ def read(rows: list[dict]) -> dict:
     return out
 
 
+def of_main_language(rows: list[dict], language: str) -> list[dict]:
+    """The questions whose repository's main language is `language`. A question whose repository's language was
+    never read, or one that is there twice, ends the reading: neither is quietly counted or dropped."""
+    unread = [row["instance"] for row in rows if not row.get("main_language")]
+    if unread:
+        raise SystemExit(f"no main language recorded for {len(unread)} questions ({', '.join(unread[:3])}): run population.py on their file first")
+    names = [row["instance"] for row in rows]
+    twice = sorted({name for name in names if names.count(name) > 1})
+    if twice:
+        raise SystemExit(f"the same question in two files: {', '.join(twice[:3])}")
+    return [row for row in rows if row["main_language"] == language]
+
+
 def main(argv: list[str] | None = None) -> int:
-    path = Path((argv or sys.argv[1:])[0])
-    found = json.loads(path.read_text())
-    report = read(found["instances"])
-    report["left out of the run"] = found["summary"].get("left_out", {})
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("results", type=Path, nargs="+")
+    parser.add_argument("--main-language", help="only the questions whose repository's main language is this, from all the files")
+    args = parser.parse_args(argv)
+    found = [json.loads(path.read_text()) for path in args.results]
+    if len(found) > 1 and not args.main_language:
+        parser.error("several files are read together only by --main-language")
+    rows = [row for one in found for row in one["instances"]]
+    report = read(of_main_language(rows, args.main_language) if args.main_language else rows)
+    report["left out of the run"] = found[0]["summary"].get("left_out", {}) if len(found) == 1 else [one["summary"].get("left_out", {}) for one in found]
     print(json.dumps(report, indent=2))
     return 0
 

@@ -91,15 +91,22 @@ MODES = ("lexical", "dense", "dense10", "hybrid", "lexical1", "hybrid1", *(f"con
 DEEP = 50   # results asked for when the list is cut again here; the engine's pool is the same as for ten (300)
 
 
-def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None) -> list[dict]:
-    """The questions: Loc-Bench's (Python), or those of another set for another language (`question_sets`)."""
+def asked_in(results: list[Path]) -> set[str]:
+    """The names of the questions that these result files scored."""
+    return {row["instance"] for path in results for row in json.loads(path.read_text())["instances"]}
+
+
+def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None,
+              asked: set[str] | frozenset[str] = frozenset()) -> list[dict]:
+    """The questions: Loc-Bench's (Python), or those of another set for another language (`question_sets`). With
+    `asked`, a second draw from another set: only questions that no earlier run scored."""
     if source != "locbench":
         import question_sets
 
         # `others`: the three together, a fix that is in two of them asked once (the first of this order is kept).
         names = ("multi-swe", "multilingual", "polybench") if source == "others" else (source,)
         found = [row for name in names for row in question_sets.load(name, CACHE.parent / "question-sets")]
-        rows, left = question_sets.select(found, per_repo, language)
+        rows, left = question_sets.select(found, per_repo, language, asked=asked)
         for why, count in sorted(left.items()):
             print(f"left out, {why}: {count}", file=sys.stderr)
         return [row for row in rows if repos is None or row["repo"] in repos]
@@ -540,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
                              "all three of them together (bench/eval/question_sets.py)")
     parser.add_argument("--language", help="with another --set: only the questions of this language (cpp, c, go, rust, java, javascript, typescript)")
     parser.add_argument("--per-repo", type=int, default=40, help="with another --set: at most this many questions of one repository in a language (default 40)")
+    parser.add_argument("--not-asked-in", help="with another --set: comma-separated result files; a second draw, of questions none of them scored")
     parser.add_argument("--max-chunks", type=int, default=250_000, help="prepare: skip a commit with more chunks than this")
     parser.add_argument("--temp-limit", type=float, default=95.0,
                         help="prepare and run: wait while the chip is at or above this many degrees Celsius")
@@ -567,7 +575,10 @@ def main(argv: list[str] | None = None) -> int:
     workdir = args.workdir.resolve()
     if args.action in ("status", "pause", "resume", "stop"):
         return longrun.main([args.action, str(workdir)])
-    rows = instances(set(args.repos.split(",")) if args.repos else None, args.set, args.language, args.per_repo)[: args.limit]
+    if args.not_asked_in and args.set == "locbench":
+        parser.error("--not-asked-in is for the other sets: Loc-Bench is asked whole")
+    asked = asked_in([Path(name) for name in args.not_asked_in.split(",")]) if args.not_asked_in else frozenset()
+    rows = instances(set(args.repos.split(",")) if args.repos else None, args.set, args.language, args.per_repo, asked)[: args.limit]
     if args.action == "list":
         if args.set != "locbench":
             import question_sets
