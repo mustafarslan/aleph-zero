@@ -218,3 +218,21 @@ def test_a_run_does_not_start_afresh_on_a_mistyped_take_up_or_wait_on_a_pause_le
     assert "pause" in capsys.readouterr().err and asked == []
     longrun.resume(out.parent)
     assert ab.main(["run", str(tmp_path), "--out", str(out)]) == 0 and sorted(asked) == ["L1", "none"]
+
+
+def test_what_the_agent_asked_the_engine_is_kept_word_for_word():
+    """The gate for vectors was read on issue titles as "the closest to what an agent types". Nobody had looked at
+    what an agent types. Every query a session sends to the engine's search is kept, with its length in words."""
+    text = _stream(
+        _use("mcp__plugin_aleph-zero_aleph__search", query="token rotation"),
+        _use("mcp__plugin_aleph-zero_aleph__symbol", k=5),               # another tool of the engine: not a search query
+        _use("mcp__plugin_aleph-zero_aleph__search", parent="toolu_1", query="where are refresh tokens stored and how are they rotated"),
+        _use("Bash", command="grep -rn rotate src"),
+        RESULT,
+    )
+    record = ab.read_stream(text, ["src/auth/store.py"])
+    assert record["aleph_queries"] == ["token rotation", "where are refresh tokens stored and how are they rotated"]
+    assert record["aleph_query_words"] == [2, 10]
+    assert ab.read_stream(_stream(RESULT), [])["aleph_queries"] == []
+    summary = ab.query_lengths([record, {"aleph_query_words": [4]}, {"ok": False}])
+    assert summary == {"queries": 3, "median_words": 4, "up_to_8_words": 2, "over_20_words": 0}

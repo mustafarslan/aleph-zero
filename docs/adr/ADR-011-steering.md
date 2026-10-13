@@ -95,6 +95,18 @@ What it shows:
 
 The four tasks of the pilot are listed in `bench/ab/dev_tasks.txt` and left out of every later run: the steering was adjusted after looking at them.
 
+## The run of 2026-10-13: what was fixed before its first session
+
+The owner released the run and left its choices to me with the advisor and agy ("go work on 7 items and yes you can do them"). Three voices on the design, kept apart. *agy:* compare no plugin with rung 2, where the context is put in for the agent, so that whether the agent followed the steering is no longer mixed into the result (in the pilot rung 1 was followed in two sessions of four); run with vectors on; do not stop for low use of the tools. *The advisor:* rung 2, yes; vectors as the product ships them, which is off since the held-out check (ADR-002): a win with them on would not say that what ships wins; the mid model; a first pass of 60 sessions capped by the harness; and start only when the benchmark's indexes are up to date, because the sessions' worktrees share them. *Mine:* the advisor's.
+
+- **Arms:** `none` (Claude Code as it is) and `L2`. **Model:** sonnet. **Tasks:** the harness's 30 (`--count 30`, seed 11), each once in each arm, interleaved: 60 sessions.
+- **Bounds:** `--budget-usd 0.75 --max-sessions 60`: at most $45, about $18 expected from the pilot. 900 s of wall clock a session.
+- **The product as it ships:** vectors off (the embedding worker is not consulted), the handshake revision of MCP (the stateless one stays behind its switch until this pass is over), the plugin from this repository at the commit of the run.
+- **Read as fixed above:** total tokens, the ratio per task, geometric mean with a bootstrap interval over tasks; tool calls the same way; the hit rate not lower by more than one task. The gate is the design's: 20% fewer tokens or tool calls than no plugin. Thirty pairs can show an effect of about 30% and cannot settle a smaller one (see below): a ratio whose interval holds 1 is recorded as "not shown", not as a pass and not as a fail.
+- **A second pass** of the same 60 sessions is made only if the first cost at most $22.50 and its token ratio is 0.90 or lower: an effect worth the money to resolve, within the same $45.
+- **What the agent types, kept and read (new).** The gate for vectors is read on issue titles as "the closest to what an agent types"; that was never looked at. Every query a session sends to the engine's search is kept word for word. If at least 20 queries are logged: a median of 12 words or fewer leaves the title form as it is; a median over 20 words means the Python verdict is read again on whole-issue text, by a rule written down then, before that reading; in between, it is noted and nothing changes. Fewer than 20 queries: nothing is concluded.
+- **Known and equal in both arms:** the owner's other plugins and connectors load in every headless session (about 35 servers were listed in a check): they add tokens to both arms alike and are not removed, since this is the owner's Claude Code as it runs.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

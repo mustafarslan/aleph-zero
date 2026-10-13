@@ -132,7 +132,10 @@ def read_stream(text: str, gold: list[str], root: str | None = None) -> dict:
     names = [call["name"] for call in calls]
     searches = [_search_kind(call) for call in calls]
     first_gold = next((position for position, call in enumerate(calls) if _reads_gold(call, gold)), None)
+    # What the agent typed into the engine's search, word for word: the gate for vectors assumes it is short (ADR-002).
+    asked = [str(call["input"].get("query", "")) for call in calls if call["name"].endswith("aleph__search")]
     return {
+        "aleph_queries": asked, "aleph_query_words": [len(query.split()) for query in asked],
         "ok": bool(result) and not result.get("is_error"),
         "ended": result.get("terminal_reason") or result.get("subtype") or "no result event",
         "tokens": sum(tokens.values()), "tokens_by_kind": tokens,
@@ -259,7 +262,7 @@ def report(records: list[dict], baseline: str) -> dict:
             failed[record.get("arm", "?")] = failed.get(record.get("arm", "?"), 0) + 1
             runs.setdefault(record.get("arm", "?"), {})
     mean = lambda rows, key: statistics.fmean(float(row[key]) for row in rows)  # noqa: E731
-    out: dict = {"baseline": baseline, "model": models[0] if models else None, "arms": {}}
+    out: dict = {"baseline": baseline, "model": models[0] if models else None, "engine_queries": query_lengths(records), "arms": {}}
     base = runs.get(baseline, {})
     for arm, done in sorted(runs.items()):
         rows = [row for group in done.values() for row in group]
@@ -286,6 +289,13 @@ def report(records: list[dict], baseline: str) -> dict:
                                                        round(sum(mean(base[task], "file_hit") for task in shared), 2)]
         out["arms"][arm] = entry
     return out
+
+
+def query_lengths(records: list[dict]) -> dict:
+    """How long the queries were that the sessions sent to the engine's search, over every session that sent any."""
+    words = sorted(count for record in records for count in record.get("aleph_query_words", []))
+    return {"queries": len(words), "median_words": statistics.median(words) if words else None,
+            "up_to_8_words": sum(count <= 8 for count in words), "over_20_words": sum(count > 20 for count in words)}
 
 
 TRIES = 2    # a session that failed this often is not asked again: every try spends plan usage
