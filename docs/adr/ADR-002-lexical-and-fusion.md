@@ -270,6 +270,33 @@ At 19:04 TypeScript came to ship with vectors, which is what the morning's readi
 
 Not lower anywhere; higher nowhere with an interval clear of zero. **Not adopted; the fusion stays as it is.** TypeScript was where it was expected to show, and it changes six questions, three each way. Where it does gain with an interval clear of zero is with vectors on first lines in the languages whose default is words: Python +1.6, JavaScript +1.5, Java +1.5 (Go +1.4, its interval holds zero), and on whole text Python +2.3. So merging the votes helps a fusion that has vectors in exactly the places where vectors do not ship, and does nearly nothing where they do. That has been read twice now by rules written first; it is not read a third time unless what ships changes again.
 
+## Two changes to the name and path generators (2026-10-14): read twice, not adopted; a gain on whole issue text is recorded
+
+Found by agy (Gemini 4 Argon, with boost) reading the generators, and true in the code: **a name written with what it is called on finds nothing** (`self.rotate`, `pkg.Func`, `df.to_csv`: the whole dotted text is looked up, and a definition's qualified name does not hold a variable or a module), and **a file's path votes for the file's first lines, not for what was found in the file** (the file then comes twice, and the function found has one generator's word for it). Both were built behind switches that were off (`DOTTED_FALLBACK`: the name looked up without what stands before the dot when the whole finds nothing; `PATH_VOTE = "found"`: the path's vote goes to the best chunk found in the file), and the rule was written before each reading (the deferred list, entry 1d). `bench/eval/trial.py` reads a switch on the kept indexes, each language in the arm it ships with.
+
+**First reading: every kept question (1,479; Python 400, JavaScript 448, Java 296, TypeScript 116, Go 111, C++ 108), first line.** The rule: adopted if the files among ten gain with an interval clear of zero over all questions, no language lower, first place not lower.
+
+| | Files among ten | First place | Whole issue text, files among ten |
+|---|---|---|---|
+| Dotted names | +0.44 (+0.00 to +0.88), 10 better / 3 worse | +0.94 (+0.41 to +1.51) | +1.10 (+0.24 to +1.96) |
+| Path vote | +0.09 (−0.28 to +0.49), 12 / 12 | +1.40 (+0.60 to +2.20) | +0.90 (+0.38 to +1.44) |
+| Both | +0.53 (−0.04 to +1.13), 22 / 15 | +2.25 (+1.35 to +3.17), 52 / 16 | +2.07 (+1.15 to +3.01), 66 / 23 |
+
+Not adopted by that rule: the files among ten barely move. First place did, most of all in Python (31.5% → 37.0%, +5.5, +3.25 to +8.0, 24 better and 2 worse), and first place was named in the rule only as "not lower". A rule is not changed on the questions that suggested the change, so a second reading was set, with its rule written before anything was fetched.
+
+**Second reading: Loc-Bench's 160 Python questions that no run had asked, in 129 repositories none of which had been fetched** (158 scored, two over 150,000 chunks), words and names. The rule: both are switched on if first place on first lines gains with an interval clear of zero and the files among ten are not lower; otherwise both stay off and their code is taken out.
+
+| Both together, 158 questions | First line | Whole issue text |
+|---|---|---|
+| Files among ten | 52.9 → 53.2, +0.32 (+0.00 to +0.95), 1 / 0 | 54.4 → 57.2, **+2.76 (+0.76 to +5.27)**, 7 / 0 |
+| First place | 28.3 → 29.1, +0.84 (−1.90 to +3.80), 4 / 2 | 23.3 → 29.3, **+6.0 (+2.1 to +10.3)**, 12 / 2 |
+
+**Not adopted: first place on first lines holds zero. The code is taken out** (it is in the history at commit `1a18dd4`). The first reading's +5.5 at first place for Python did not come again on repositories it had not seen; that is what the second reading was for.
+
+**What both readings do show, and what it is not:** on whole issue text the two changes gain files among ten with an interval clear of zero in both (+2.07 on 1,479 questions, +2.76 on 158 unseen ones), and on the unseen ones first place gains six points, nearly all of it from the path vote. A verdict here is read on first lines because an agent's own question is nearer a first line; but the plugin's own question at a session's first prompt is the user's whole text. Whoever takes this up writes a rule that names whole text first, and reads it on questions not used here (339 unasked Go questions in one repository, about a thousand JavaScript and six hundred TypeScript ones over the limit of forty a repository are left).
+
+*Three voices.* agy found both and proposed them as "a free recall win for Python, Go, and Java". The advisor: the rule written at 00:15 names first lines; it fails; the code comes out and the whole-text finding is written down, not acted on. Mine: the same; and the first reading is a lesson in why a second was needed.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.

@@ -126,6 +126,10 @@ So the figure above was low by a factor of six on a repository of this size, and
 - *The A/B harness* was in exactly the state nobody's worktree stays in: it makes a worktree, indexes it and starts a session, and no ordinary git command ever runs. It now waits a second and runs one `git status` in the worktree first, in both arms (`bench/ab/run.py`, `as_after_a_first_git_command`). Pass 1's Python worktrees were in that state too; its median for rung 2's question was 154 ms against a limit of 400, so its result is not moved.
 - *Not built, a question for the owner (the deferred list, entry 3):* a hook that runs one ordinary `git status` after a checkout would heal it, and takes the lock this decision refuses to take from a background reader. In a hook the user's own git command has just ended, so the collision is less likely than from a query, and it is still theirs to choose.
 
+## Git's two calls side by side (2026-10-14)
+
+A view asks git twice: for the repository's facts (`rev-parse`: 9 to 11 ms) and for what differs from HEAD (`status`). They ran one after the other. `status` is now started before `rev-parse` is waited for (`gitio.StatusAhead`): two processes at once, no thread, nothing kept between questions. It can be started where the question was asked from, since git gives `status` paths from the worktree's top wherever it runs; what is listed afterwards (the files of a wholly untracked directory) is asked for at the top, and a test asks for a view from a sub-directory. Where there is no repository the process has ended by itself and is only reaped. Measured, settled worktrees: vscode's view 45.6 → 38.9 ms, django 74.6 → 67.8, material-ui 110.8 → 101.8. agy (boost) proposed it over remembering the facts between questions, which it showed to be wrong: HEAD's tree is among them and would go stale after a commit.
+
 ## Sparse checkouts, partial clones, submodules (M3, 2026-10-12)
 
 What a view contains in those cases, and how a query makes sure the index it reads still holds the view it checked, are in ADR-010.

@@ -5,9 +5,11 @@
   uv run --group bench python bench/eval/trial.py fetch bench/data/benchc-python-unasked --not-asked-in bench/data/results/benchmark_c_400.json
   uv run --group bench python bench/eval/trial.py score bench/data/benchc-python-unasked --words-only --not-asked-in ... --out ...
 
-A trial is a switch of the engine set for the run (`search.DOTTED_FALLBACK`, `search.PATH_VOTE`); `score` asks every
-question with words and names and with vectors, as it is and with each trial and all of them together; nothing is
-indexed or embedded but the questions. `read` gives each language (by its repositories' main language, as a
+A trial is a switch of the engine set for the run (a module constant of `aleph_zero.search`, named in `TRIALS`);
+`score` asks every question with words and names and with vectors, as it is and with each trial and all of them
+together; nothing is indexed or embedded but the questions. The two trials of 2026-10-14 (a name written with what
+it is called on looked up without it; a file's path voting for what was found in the file) were read twice and not
+adopted (ADR-002); their code is in the history at commit 1a18dd4, and `TRIALS` is empty until the next. `read` gives each language (by its repositories' main language, as a
 verdict is read) in the arm it ships with, and all questions together each in its language's shipped arm.
 """
 from __future__ import annotations
@@ -27,8 +29,16 @@ from aleph_zero import search as ranker  # noqa: E402
 from aleph_zero.indexer import Index  # noqa: E402
 from aleph_zero.store import index_file, open_db  # noqa: E402
 
-TRIALS = {"dotted": {"DOTTED_FALLBACK": True}, "path vote": {"PATH_VOTE": "found"}}
-ARMS = {"as it is": {}, **TRIALS, "all": {name: value for switches in TRIALS.values() for name, value in switches.items()}}
+TRIALS: dict[str, dict] = {}        # a name -> the switches of `aleph_zero.search` it sets
+
+
+def arms(trials: dict[str, dict]) -> dict[str, dict]:
+    """The engine as it is, each trial, and (of two or more) all of them together."""
+    together = {"all": {name: value for switches in trials.values() for name, value in switches.items()}} if len(trials) > 1 else {}
+    return {"as it is": {}, **trials, **together}
+
+
+ARMS = arms(TRIALS)
 FORMS = ("title", "full")
 MEASURES = ("recall@10", "recall@1", "mrr")
 

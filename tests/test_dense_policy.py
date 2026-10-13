@@ -263,3 +263,25 @@ def test_a_question_s_early_vector_is_not_asked_for_where_vectors_take_no_part(r
     for _ in range(3):
         undecided.search("how is an invoice rendered")
     assert asked == []
+
+
+def test_a_warmed_session_s_first_question_has_its_vector_asked_for_early_too(repo, fake_worker, monkeypatch):
+    # The first question of a session is the plugin's own: warming knows whether vectors take part for the worktree,
+    # so that question does not have to be the one that finds out.
+    from aleph_zero import gitio
+    from aleph_zero.embed.client import EmbedClient
+
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    Engine(repo.root, dense=True).embed()                         # another session made the vectors
+    engine = Engine(repo.root, dense=True)
+    assert engine.warm() is True
+    events: list[str] = []
+    real_embed, real_paths = EmbedClient.embed, gitio.StatusAhead.paths
+    monkeypatch.setattr(EmbedClient, "embed", lambda self, texts, kind: events.append("the worker is asked") or real_embed(self, texts, kind))
+    monkeypatch.setattr(gitio.StatusAhead, "paths", lambda self, root: (real_paths(self, root), events.append("git has answered"))[0])
+    answer = engine.search("how is an invoice rendered")
+    assert answer.dense == "used" and events.index("the worker is asked") < events.index("git has answered")
+    cold = Engine(repo.root)                                      # Python, nobody's choice: warming asks for nothing early
+    assert cold.warm() is True and cold._with_vectors == {str(repo.root): False}

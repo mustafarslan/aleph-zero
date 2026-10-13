@@ -815,8 +815,9 @@ class Engine:
         try:
             index, view, _, _ = self._ready(cwd, started, started + WARM_SECONDS)
             index.path_words(view)
-            if self._dense_decision(index)[0]:
-                self._store(index, view).coverage(index)
+            covered = self._store(index, view).coverage(index)[0] if self._dense_decision(index)[0] else 0
+            # The first question is then not the one that finds out: its vector is asked for while git is asked.
+            self._with_vectors[str(self.default_cwd if cwd is None else cwd)] = covered > 0
         except Exception:  # noqa: BLE001 - no repository, a locked index, out of time: the first question finds out itself
             return False
         return True
