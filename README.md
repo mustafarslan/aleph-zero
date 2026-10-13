@@ -39,6 +39,27 @@ point Claude Code at a checkout (see below).
 Useful options for `search`: `--kind code|docs`, `--glob "src/api/*"`, `--lang python`,
 `--detail locations|snippets|full`, `--json`, `--timeout-ms 500`.
 
+## Setting it up, once
+
+Search by words and names needs no setup. Everything else is one checklist:
+
+    uv run aleph setup                        # on a terminal: shows the list and asks about what is open
+
+It asks five things, each with what a yes costs, and keeps the answers so that nothing is asked twice:
+whether Claude Code is connected (it prints the command and never changes Claude Code's settings);
+the embedding worker and its model (310 MB; offered where it will be used); documentation or code in
+another repository to search beside this one (a path or a URL); search by meaning in this repository
+(makes its vectors, what you linked included; can be interrupted and continued); and git's untracked
+cache (in the repository's index; no git configuration is changed). What belongs to the machine is
+answered once for every repository. A no is kept: `aleph setup --again` asks about it again.
+
+Without a terminal (a script, an agent) it only shows the list. Each thing then has a flag of its own,
+and nothing that costs is done without it: `--worker`, `--source LOCATION`, `--embed`, `--dense` or
+`--no-dense` (this repository's own choice about search by meaning, kept beside its index),
+`--untracked-cache`; `--json` gives the list as data. `aleph doctor` and the agent's `status` tool
+show the same list and act on nothing. The first time you use `aleph` in a repository on a terminal,
+one line names this command, once.
+
 ## Use it from Claude Code
 
     claude mcp add aleph-zero -- /absolute/path/to/aleph-zero/.venv/bin/aleph serve

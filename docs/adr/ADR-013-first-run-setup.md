@@ -1,6 +1,6 @@
 # ADR-013: Setting Aleph up the first time
 
-Status: decided 2026-10-13; being built
+Status: built 2026-10-13 (`aleph setup`); tried in a pseudo-terminal on a scratch repository, not yet by the owner
 
 ## Question
 
@@ -42,3 +42,11 @@ Search by meaning can now be chosen per repository and kept (`settings.json` bes
 ## Accepted when
 
 A fresh repository of Python files, no worker installed: `aleph setup` without a terminal shows five lines, none done except what is found to be so, and changes nothing. With a terminal: a documentation directory given as a source is then found by `aleph search`; a no to the worker is kept; `aleph setup` again asks nothing; `aleph setup --again` asks about what was declined. `aleph doctor` and `status` show the same list. The hint appears once, on a terminal, and never from `aleph serve`.
+
+## As built
+
+- `firstrun.plan` (the list), `settings` (the kept answers), `aleph setup` (the menu and the flags), a row in `aleph doctor`, `setup` in the status the agent's tool returns, and the hint after the commands a person runs (`cli.HINTED`).
+- The acceptance above was run through a real pseudo-terminal on a scratch repository with a cache directory of its own: Claude Code answered yes, the worker no, a documentation repository linked by path, git's cache yes. `aleph search` then found the documentation under `handbook:`, the machine's file held the two machine answers, `git config --get core.untrackedCache` was still empty, and a second `aleph setup` asked nothing. Search by meaning was not asked about, since the worker had been declined; the list says so first in that line.
+- Differences from the decision: linked sources are asked for before vectors (the decision listed them after), so that what is linked is embedded with the rest. There is no `--yes`: every thing has its own flag.
+- Not covered by a test that uses the network: `--worker` and a URL source go through the same code as `aleph embed setup` and `aleph source add`, which have their own tests.
+

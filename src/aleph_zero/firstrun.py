@@ -76,12 +76,13 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
     minutes = max(1, round(missing / CHUNKS_A_SECOND / 60))
     no_worker = not found.worker and steps[1].state == "declined"      # nothing to make vectors with, and none wanted
     vectors = "declined" if asked_for is False or no_worker else _state(made and wanted and found.worker, repo, "vectors")
+    count = lambda number: f"{number:,} chunk" + ("" if number == 1 else "s")  # noqa: E731
     steps.append(Step(
         "vectors", "repository", "Search by meaning in this repository", vectors,
-        f"{found.verdict_why}; {found.with_vector:,} of {found.chunks:,} chunks have a vector"
-        + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors")
-        + ("; it needs the embedding worker, which was declined" if no_worker else ""),
-        "" if made else f"about {minutes} min of this machine's GPU for {missing:,} chunks; it can be interrupted and continued",
+        ("needs the embedding worker, which was declined; " if no_worker else "")
+        + f"{found.verdict_why}; {found.with_vector:,} of {count(found.chunks)} with a vector"
+        + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors"),
+        "" if made else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",
         "aleph embed run", wanted))
     if found.repository:
         steps.append(Step(

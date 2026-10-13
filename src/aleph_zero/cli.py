@@ -223,15 +223,15 @@ def _setup(args) -> int:
     from .embed import setup as embed_setup
 
     say = lambda text: print(text, flush=True)  # noqa: E731
-    index, view = _open(args.cwd)
-    while index.sync(view, budget_seconds=30.0).pending:       # the list needs the counts; indexing costs seconds and nothing else
-        fresh = build_view(args.cwd)
-        if fresh.fingerprint == view.fingerprint:
-            break
-        view = fresh
-    index.conn.close()
 
     def now():
+        index, view = _open(args.cwd)                           # the list needs the counts, also of what was just linked;
+        while index.sync(view, budget_seconds=30.0).pending:    # indexing costs seconds and nothing else
+            fresh = build_view(args.cwd)
+            if fresh.fingerprint == view.fingerprint:
+                break
+            view = fresh
+        index.conn.close()
         status = Engine(args.cwd).status()
         found = firstrun.look(status)
         kept = settings.read(Path(status["index"]).parent / "settings.json")

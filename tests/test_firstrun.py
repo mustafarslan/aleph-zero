@@ -94,3 +94,10 @@ def test_a_repository_s_answers_live_beside_its_index(repo):
 
     common = gitio.common_dir(repo.root)
     assert settings.repo_file(common) == index_file(common).parent / "settings.json"
+
+
+def test_the_cost_of_vectors_is_said_in_plain_numbers_and_the_reason_for_a_no_comes_first():
+    one = _by_key(firstrun.plan(replace(CPP, chunks=1), repo={}, machine={}))["vectors"]
+    assert "for 1 chunk;" in one.cost and "1 chunks" not in one.cost and "0 of 1 chunk have" not in one.detail
+    declined = _by_key(firstrun.plan(CPP, repo={}, machine={"setup": {"worker": "declined"}}))["vectors"]
+    assert declined.detail.startswith("needs the embedding worker, which was declined")      # the first thing read, not the last
