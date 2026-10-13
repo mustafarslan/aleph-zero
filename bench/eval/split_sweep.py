@@ -2,6 +2,7 @@
 
   uv run --group bench python bench/eval/split_sweep.py bench/data/benchc --out bench/data/results/split_sweep_python.json
   uv run --group bench python bench/eval/split_sweep.py bench/data/benchc-cpp --set others --language cpp --out ...
+  ... --dense --settings 256,96,128,192,384     # with vectors: every setting embedded again (GPU), the shipped one first
 
 Every setting chunks every question's commit again, into a scratch index of its own that is deleted when its
 repository is done. The prepared indexes beside the clones are read by every recorded verdict and are never opened.
@@ -11,6 +12,9 @@ the arm Python ships with, not the choice of the threshold. The threshold exists
 pieces of a definition are merged back into one result. A setting is dropped if its file recall@10 on first lines
 is lower than at the shipped setting with a paired interval clear of zero. Beside it: the chunks each setting makes,
 which is what embedding it would cost, and how many files ten results name.
+
+With `--dense` every setting's chunks are embedded into a scratch vector file beside its scratch index, and the fused
+arm is scored beside words and names. That is the measurement ADR-001 left open (the threshold exists for vectors).
 """
 from __future__ import annotations
 
@@ -28,11 +32,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import benchmark_c as bench  # noqa: E402
 from temps import Guard, TooHot  # noqa: E402  (bench/tools is on the path once benchmark_c is imported)
 
-from aleph_zero import gitio  # noqa: E402
+from aleph_zero import embedder, gitio  # noqa: E402
 from aleph_zero.chunking import code as chunker  # noqa: E402
 from aleph_zero.indexer import Index  # noqa: E402
 from aleph_zero.search import search  # noqa: E402
 from aleph_zero.store import open_db  # noqa: E402
+from aleph_zero.vectors import VectorStore  # noqa: E402
 
 SETTINGS = (96, 128, 192, 256, 384)
 SHIPPED = chunker.SPLIT_TOKENS
@@ -58,9 +63,33 @@ def guard(shipped: list[float], other: list[float]) -> dict:
     return {"difference": round(mean, 3), "low": round(low, 3), "high": round(high, 3), "dropped": high < 0}
 
 
-def one_setting(workdir: Path, rows: list[dict], tokens: int, scratch: Path, cool, say) -> dict:
+ARMS = ("lexical", "hybrid")
+
+
+def _embed(index: Index, home: Path, cool) -> VectorStore:
+    """Vectors for every chunk of the index's current view, in a vector file of the scratch index's own."""
+    from aleph_zero.embed import worker
+    from aleph_zero.embed.client import VECTOR_KIND, EmbedPool
+
+    store = VectorStore(index.conn, home, VECTOR_KIND)
+    for _ in range(3):      # a worker that went away between two repositories is started again, as `prepare` does
+        pool = EmbedPool(worker.ensure(), capacity=worker.capacity_tokens(), connections=worker.slots())
+        try:
+            report = embedder.embed_pending(index, store, pool, batch=embedder.BATCH * worker.slots(), progress=cool)
+        finally:
+            pool.close()
+        if not report.remaining:
+            return store
+    raise SystemExit(f"{report.remaining} chunks could not be embedded: {report.reason}")
+
+
+def one_setting(workdir: Path, rows: list[dict], tokens: int, scratch: Path, cool, say, dense: bool = False) -> dict:
     """Every question asked of its commit chunked at `tokens`. One scratch index a repository: a later commit of it
     adds only what changed, as in an index that is used."""
+    client = None
+    if dense:
+        from aleph_zero.embed import worker
+        from aleph_zero.embed.client import EmbedClient
     by_repo: dict[str, list[dict]] = {}
     for row in rows:
         by_repo.setdefault(row["repo"], []).append(row)
@@ -83,6 +112,8 @@ def one_setting(workdir: Path, rows: list[dict], tokens: int, scratch: Path, coo
                         continue
                     while index.sync(views[row["instance_id"]], budget_seconds=600).pending:
                         pass
+                    if dense:
+                        store = _embed(index, home, cool)
                 for row in some:
                     view = views.get(row["instance_id"])
                     if view is None:
@@ -91,9 +122,21 @@ def one_setting(workdir: Path, rows: list[dict], tokens: int, scratch: Path, coo
                         pass
                     forms = bench.question_forms(index, row["problem_statement"])
                     entry: dict = {"chunks": index.conn.execute("SELECT count(*) FROM temp.view_chunks").fetchall()[0][0]}
+                    vectors: dict = {}
+                    if dense:
+                        have, total = store.coverage(index)
+                        if have < total:
+                            raise SystemExit(f"{row['instance_id']}: {total - have} chunks of its commit have no vector")
+                        client = client or EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
+                        vectors = dict(zip(FORMS, client.embed([forms[form] for form in FORMS], kind="query")))
                     for form in FORMS:
                         files = bench.first_files([hit.path for hit in search(index, view, forms[form], k=10)])
                         entry[form] = {**bench.score(row["gold"], files), "files": len(files)}
+                        if dense:
+                            nearest = lambda limit, scoped, vector=vectors[form]: [  # noqa: E731
+                                chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
+                            files = bench.first_files([hit.path for hit in search(index, view, forms[form], k=10, dense=nearest)])
+                            entry[form]["hybrid"] = {**bench.score(row["gold"], files), "files": len(files)}
                     scored[row["instance_id"]] = entry
                     chunks += entry["chunks"]
             finally:
@@ -120,6 +163,11 @@ def summarise(by_setting: dict[int, dict]) -> dict:
             if base is not None and tokens != SHIPPED:
                 block[form]["against_shipped"] = guard([base["questions"][name][form]["recall@10"] for name in shared],
                                                        [entry["questions"][name][form]["recall@10"] for name in shared])
+            if all("hybrid" in e["questions"][name][form] for e in by_setting.values() for name in shared):
+                fused = lambda e, measure: [e["questions"][name][form]["hybrid"][measure] for name in shared]  # noqa: E731
+                block[form]["hybrid"] = {measure: round(statistics.fmean(fused(entry, measure)), 3) for measure in (*MEASURES, "files")}
+                if base is not None and tokens != SHIPPED:
+                    block[form]["hybrid"]["against_shipped"] = guard(fused(base, "recall@10"), fused(entry, "recall@10"))
         out["settings"][tokens] = block
     return out
 
@@ -133,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--settings", default=",".join(str(tokens) for tokens in SETTINGS))
     parser.add_argument("--only", type=Path, help="a benchmark result file: only the questions it scored are asked")
     parser.add_argument("--scratch", type=Path, default=Path(tempfile.gettempdir()), help="where the scratch indexes go")
+    parser.add_argument("--dense", action="store_true", help="embed every setting's chunks (GPU) and score the fused arm too")
     parser.add_argument("--temp-limit", type=float, default=95.0)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
@@ -146,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     by_setting: dict[int, dict] = {}
     try:
         for tokens in (int(part) for part in args.settings.split(",")):
-            by_setting[tokens] = one_setting(args.workdir, rows, tokens, args.scratch, cool, say)
+            by_setting[tokens] = one_setting(args.workdir, rows, tokens, args.scratch, cool, say, dense=args.dense)
             if args.out:    # kept after every setting: an hour's work is not lost to the next one
                 args.out.write_text(json.dumps({"summary": summarise(by_setting), "by_setting": by_setting}, indent=1) + "\n")
     except TooHot as hot:

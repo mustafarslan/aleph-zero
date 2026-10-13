@@ -28,3 +28,18 @@ def test_a_setting_is_dropped_only_when_it_is_lower_with_an_interval_clear_of_ze
     assert sweep.guard(same, lower)["dropped"] is True
     assert sweep.guard(same, noisy)["dropped"] is False
     assert sweep.guard(same, same) == {"difference": 0.0, "low": 0.0, "high": 0.0, "dropped": False}
+
+
+def test_the_summary_reads_the_fused_arm_against_the_shipped_setting_when_every_setting_has_it():
+    def question(lexical, fused, chunks=10):
+        score = lambda hit: {"recall@10": hit, "recall@1": hit, "mrr": hit, "files": 6}  # noqa: E731
+        return {"chunks": chunks, "title": {**score(lexical), "hybrid": score(fused)}, "full": {**score(lexical), "hybrid": score(fused)}}
+
+    names = [f"q{n}" for n in range(40)]
+    by_setting = {sweep.SHIPPED: {"questions": {name: question(0.0, 0.0) for name in names}, "chunks": 400},
+                  96: {"questions": {name: question(0.0, 1.0, chunks=20) for name in names}, "chunks": 800}}
+    summary = sweep.summarise(by_setting)
+    assert summary["settings"][96]["title"]["hybrid"]["recall@10"] == 1.0 and summary["settings"][96]["chunks_against_shipped"] == 2.0
+    assert summary["settings"][96]["title"]["hybrid"]["against_shipped"] == {"difference": 1.0, "low": 1.0, "high": 1.0, "dropped": False}
+    assert summary["settings"][96]["title"]["against_shipped"]["difference"] == 0.0            # words and names did not move
+    assert "against_shipped" not in summary["settings"][sweep.SHIPPED]["title"]["hybrid"]
