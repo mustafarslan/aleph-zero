@@ -159,9 +159,8 @@ answered by the resolver again until a new index is imported; the answer says so
 
 `aleph scip run` runs the indexer for the languages where its memory was measured under
 the limit (Python, Go, Rust, Java with Maven, TypeScript with its dependencies installed),
-watches it, and stops it above 2,048 MB (`ALEPH_SCIP_MEMORY_MB`). JavaScript needs more than
-that (2.3 GB on eslint) and runs only when you name both the language and a limit above the default:
-`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang javascript`. For Java and Rust this compiles the project, in a copy of its
+watches it, and stops it above 2,048 MB. JavaScript's indexer needs more (2.3 GB on eslint)
+and has a limit of its own, 3,072 MB. `ALEPH_SCIP_MEMORY_MB` names another limit for all. For Java and Rust this compiles the project, in a copy of its
 files: your worktree is not touched, and it is only ever done when you ask. Aleph never
 installs an indexer; `aleph doctor` says which are present.
 

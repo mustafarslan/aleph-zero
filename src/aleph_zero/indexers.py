@@ -4,9 +4,9 @@ Aleph never installs an indexer and never runs one for a query. `aleph scip run`
 one for a language whose peak memory was measured under the limit on a mid-size project
 (M9: scip-python 459 MB, scip-java with Maven 881 MB, scip-go 948 MB, rust-analyzer
 1,499 MB; scip-typescript 694 MB on TypeScript), watches the memory of everything it starts,
-and stops it all above the limit. JavaScript is not run by default (scip-typescript took
-2,295 MB on eslint): its index is made elsewhere and imported, or the owner names the memory
-the indexer may take (`ALEPH_SCIP_MEMORY_MB`) and it is run and watched like the others. A file the indexer
+and stops it all above the limit. JavaScript's indexer took 2,295 MB on eslint: it has a
+limit of its own, 3,072 MB, and is run and watched like the others. `ALEPH_SCIP_MEMORY_MB`
+names another limit for every language. A file the indexer
 writes at the root of the worktree (a `tsconfig.json` it inferred) is removed again.
 
 An indexer for a compiled language runs the project's own build. That is the project's
@@ -48,6 +48,7 @@ class Indexer:
     in_a_copy: bool = False         # the indexer runs the project's build: on a copy of the files, never in the worktree
     why_not: str = ""               # for a language not run by default: what the measurement said
     leaves: tuple[str, ...] = ()    # files the indexer may write at the root of the worktree: removed again if they were not there
+    limit_mb: float = 0.0           # a memory limit of this language's own, where it was measured over the usual one; 0: the usual
 
 
 INDEXERS: dict[str, Indexer] = {
@@ -68,10 +69,19 @@ INDEXERS: dict[str, Indexer] = {
     "typescript": Indexer("typescript", "scip-typescript", ("index", "--output", "{out}"), True,
                           "npm install -g @sourcegraph/scip-typescript", needs="tsconfig.json",
                           note="the project's dependencies must already be installed (node_modules)"),
-    "javascript": Indexer("javascript", "scip-typescript", ("index", "--infer-tsconfig", "--output", "{out}"), False,
+    # Measured at 2,295 MB on eslint (15,000 graded call sites), over the usual limit. A limit is a cap on a run that is
+    # asked for, watched and stopped: JavaScript gets one of its own rather than everybody a higher one (2026-10-13).
+    "javascript": Indexer("javascript", "scip-typescript", ("index", "--infer-tsconfig", "--output", "{out}"), True,
                           "npm install -g @sourcegraph/scip-typescript",
-                          why_not="it was measured at 2,295 MB on eslint, over the limit", leaves=("tsconfig.json",)),
+                          note="measured at 2,295 MB on eslint: it may use 3,072 MB", leaves=("tsconfig.json",), limit_mb=3072.0),
 }
+
+
+def limit_for(language: str) -> float:
+    """The most a run of this language's indexer may use: what the owner names (ALEPH_SCIP_MEMORY_MB), else the
+    language's own limit where it has one, else the usual."""
+    own = INDEXERS[language].limit_mb if language in INDEXERS else 0.0
+    return limit_mb() if os.environ.get("ALEPH_SCIP_MEMORY_MB") is not None or not own else own
 
 
 def limit_mb() -> float:
@@ -235,7 +245,7 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
     if indexer.needs and not (root / indexer.needs).is_file():
         raise CannotRun(f"{indexer.program} is run on request only the way it was measured ({indexer.note}); "
                         f"this worktree has no {indexer.needs}: import-only here")
-    limit = limit_mb() if limit is None else limit
+    limit = (limit_mb() if os.environ.get("ALEPH_SCIP_MEMORY_MB") is not None or not indexer.limit_mb else indexer.limit_mb) if limit is None else limit
     command = [indexer.program, *[part.format(out=out, name=root.name) for part in indexer.arguments]]
     with tempfile.TemporaryDirectory(prefix="aleph-scip-") as scratch:
         where = root

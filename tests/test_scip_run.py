@@ -51,9 +51,13 @@ def test_a_worktree_that_changed_while_the_indexer_ran_is_not_stamped(project, t
 
 
 def test_a_language_that_was_not_measured_or_an_indexer_that_is_absent_is_said_not_run(project, tmp_path, monkeypatch, capsys):
+    import dataclasses
+
     repo, _ = project
+    monkeypatch.setitem(indexers.INDEXERS, "javascript", dataclasses.replace(
+        indexers.INDEXERS["javascript"], on_demand=False, why_not="its memory was never measured"))    # as a language would stand before it is
     with pytest.raises(indexers.CannotRun, match="import-only"):
-        Engine(repo.root).scip_run("javascript")                             # measured, over the limit
+        Engine(repo.root).scip_run("javascript")
     monkeypatch.setitem(indexers.INDEXERS, "python", indexers.Indexer(
         "python", "aleph-no-such-indexer", ("{out}",), on_demand=True, how_to_get="npm install -g @sourcegraph/scip-python"))
     assert cli.main(["--cwd", str(repo.root), "scip", "run", "--lang", "python"]) == 1
@@ -65,12 +69,17 @@ def test_a_language_that_was_not_measured_or_an_indexer_that_is_absent_is_said_n
         Engine(repo.root).scip_run("python")
 
 
-def test_doctor_says_which_indexers_are_here_and_which_languages_are_import_only(project):
+def test_doctor_says_which_indexers_are_here_and_which_languages_are_import_only(project, monkeypatch):
+    import dataclasses
+
     from aleph_zero import doctor
 
     repo, _ = project
     rows = {row.name: row for row in doctor.check(repo.root)}
-    assert "compiler indexes" in rows and "import-only" in rows["compiler indexes"].detail
+    assert "compiler indexes" in rows and "import-only" not in rows["compiler indexes"].detail     # every language is measured now
+    assert "3,072 MB" in rows["compiler indexes"].detail                                           # and JavaScript's own limit is said
+    monkeypatch.setitem(indexers.INDEXERS, "go", dataclasses.replace(indexers.INDEXERS["go"], on_demand=False, why_not="its memory was never measured"))
+    assert "import-only" in {row.name: row for row in doctor.check(repo.root)}["compiler indexes"].detail
 
 
 def test_a_child_that_outlives_the_indexer_is_stopped_too(project, tmp_path, monkeypatch):
@@ -182,7 +191,18 @@ def test_a_file_that_appears_during_the_run_and_is_not_what_the_indexer_infers_i
 def test_the_languages_run_on_request_are_those_measured_under_the_limit():
     """ADR-004's table, as the code has it: TypeScript since its indexer was measured (694 MB on rxjs); JavaScript was over."""
     on_request = {language for language, indexer in indexers.INDEXERS.items() if indexer.on_demand}
-    assert on_request == {"python", "go", "rust", "java", "typescript"}
+    assert on_request == {"python", "go", "rust", "java", "typescript", "javascript"}
     typescript = indexers.INDEXERS["typescript"]
     assert typescript.needs == "tsconfig.json" and "installed" in typescript.note and not typescript.why_not
-    assert "2,295 MB" in indexers.INDEXERS["javascript"].why_not
+
+
+def test_javascript_runs_on_request_under_a_limit_of_its_own(monkeypatch):
+    """Its indexer was measured at 2,295 MB on eslint, over the 2,048 MB the others are held to. It is given 3,072 and
+    watched like them; the others keep their limit. A limit the owner names is the limit for every language."""
+    monkeypatch.delenv("ALEPH_SCIP_MEMORY_MB", raising=False)
+    javascript = indexers.INDEXERS["javascript"]
+    assert javascript.on_demand and javascript.limit_mb == 3072.0 and "2,295 MB" in javascript.note and not javascript.why_not
+    assert indexers.limit_for("javascript") == 3072.0
+    assert {indexers.limit_for(language) for language in ("python", "go", "rust", "java", "typescript")} == {indexers.LIMIT_MB} == {2048.0}
+    monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", "1024")
+    assert indexers.limit_for("javascript") == 1024.0 and indexers.limit_for("python") == 1024.0      # a smaller machine's ceiling holds for all
