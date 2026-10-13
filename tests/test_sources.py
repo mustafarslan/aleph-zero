@@ -160,3 +160,47 @@ def test_odd_source_lists_and_self_links(repo, docs_repo):
     listing.write_text("{ not json")
     status = engine.status()                             # status still answers and says what is wrong
     assert status["sources"] == [] and "sources.json" in status["sources_error"]
+
+
+def test_with_git_dir_in_the_environment_a_source_s_commands_do_not_act_on_this_repository(repo, docs_repo, tmp_path, monkeypatch):
+    """A repository used through `git --git-dir=… --work-tree=…` has GIT_DIR and GIT_WORK_TREE in the environment of
+    everything started from it. The fetch of a linked source carried them along and so ran in THIS repository:
+    with `--prune` and `+refs/heads/*:refs/heads/*` it replaced `main` and deleted the branches the remote lacks."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(docs_repo.root), str(remote)], check=True)
+    repo.git("branch", "precious")
+    repo.git("checkout", "-q", "-b", "work")
+    before = {name: repo.git("rev-parse", name).strip() for name in ("main", "precious", "work")}
+    monkeypatch.setenv("GIT_DIR", str(repo.root / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo.root))
+    sources.add(repo.root, remote.as_uri(), name="handbook")                       # cloned somewhere else, with the variables set
+    docs_repo.write("guides/new.md", "# New\n\nThe quokka_scheduler is new.\n")
+    monkeypatch.delenv("GIT_DIR"), monkeypatch.delenv("GIT_WORK_TREE")
+    docs_repo.commit("more docs")
+    docs_repo.git("push", "-q", str(remote), "HEAD:refs/heads/main")
+    monkeypatch.setenv("GIT_DIR", str(repo.root / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo.root))
+    assert sources.refresh(repo.root) == {"handbook": "updated"}
+    engine = Engine(repo.root)
+    assert paths(engine.search("quokka_scheduler")) == ["handbook:guides/new.md"]  # read from the source's clone, not from here
+    assert paths(engine.search("render_invoice"))[0] == "src/billing/invoice.py"   # and this repository is still read as itself
+    monkeypatch.delenv("GIT_DIR"), monkeypatch.delenv("GIT_WORK_TREE")
+    after = {name: repo.git("rev-parse", name).strip() for name in ("main", "precious", "work")}
+    assert after == before                                                         # no branch replaced, none deleted
+    assert repo.git("branch", "--list").split() == ["main", "precious", "*", "work"]
+
+
+def test_a_source_linked_by_path_is_read_as_itself_with_git_dir_in_the_environment(repo, docs_repo, monkeypatch):
+    sources.add(repo.root, str(docs_repo.root), name="docs")
+    monkeypatch.setenv("GIT_DIR", str(repo.root / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo.root))
+    engine = Engine(repo.root)
+    assert paths(engine.search("wombat_rotator")) == ["docs:guides/auth.md"]
+    assert [row["files"] for row in sources.describe(gitio_common(repo))] == [2]
+
+
+def gitio_common(repo):
+    from aleph_zero import gitio
+
+    return gitio.common_dir(repo.root)

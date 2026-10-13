@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,11 +48,43 @@ def unattended():
         _UNATTENDED.reset(token)
 
 
+# What says WHICH repository a git command works on, whatever directory it is run in. In the environment they
+# belong to the repository Aleph was pointed at: a repository used through `git --git-dir=… --work-tree=…` has
+# no `.git` to be found and is a repository only by them. A command meant for ANOTHER repository (a linked
+# source's clone, a source linked by path) must not carry them: `git -C <clone> fetch` with GIT_DIR set fetches
+# into the repository GIT_DIR names, and with `--prune +refs/heads/*:refs/heads/*` that replaced and deleted
+# its branches.
+_WHICH_REPOSITORY = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX")
+# Options of the command that started us (`git -c … pull` and its hook), not the user's own configuration
+# files (GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM): those stay.
+_CALLERS_OPTIONS = re.compile(r"GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\Z")
+_ELSEWHERE: ContextVar[bool] = ContextVar("aleph_git_elsewhere", default=False)
+
+
+@contextmanager
+def elsewhere():
+    """Inside this block git is run for a repository other than the one Aleph was pointed at: what the
+    environment says about which repository is meant is not passed on, so `-C` decides."""
+    token = _ELSEWHERE.set(True)
+    try:
+        yield
+    finally:
+        _ELSEWHERE.reset(token)
+
+
 def _env() -> dict[str, str]:
-    if not _UNATTENDED.get():
-        return {**os.environ, **_ENV}
-    kept = {name: value for name, value in os.environ.items() if not name.startswith("GIT_CONFIG_")}
-    return {**kept, **_ENV, "GIT_TERMINAL_PROMPT": "0"}
+    env = {**os.environ, **_ENV}
+    if _ELSEWHERE.get():
+        for name in _WHICH_REPOSITORY:
+            env.pop(name, None)
+    if _UNATTENDED.get():
+        for name in [name for name in env if _CALLERS_OPTIONS.match(name)]:
+            del env[name]
+        # Nobody is there to answer: no question on the terminal, none in a window, none from ssh.
+        env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true", "SSH_ASKPASS": "true", "GCM_INTERACTIVE": "never"})
+        env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    return env
 
 
 _DEADLINE: ContextVar[float | None] = ContextVar("aleph_git_deadline", default=None)
@@ -228,10 +261,12 @@ class Readers:
     def __init__(self) -> None:
         self._open: dict[Path, BlobReader] = {}
 
-    def reader(self, root: Path) -> "BlobReader":
+    def reader(self, root: Path, other: bool = False) -> "BlobReader":
+        """The reader of the repository at `root`; `other` for a repository that is not the one Aleph was
+        pointed at (a linked source), whose git must not be told by the environment which repository it is in."""
         found = self._open.get(root)
         if found is None:
-            found = self._open[root] = BlobReader(root)
+            found = self._open[root] = BlobReader(root, other)
         return found
 
     def close(self) -> None:
@@ -318,8 +353,9 @@ class BlobReader:
     """Reads blobs by id through one long-lived `git cat-file --batch`, with no checkout.
     Git starts on the first read, so a reader that is never used costs nothing."""
 
-    def __init__(self, cwd: Path) -> None:
+    def __init__(self, cwd: Path, other: bool = False) -> None:
         self._cwd = cwd
+        self._other = other
         self._proc: subprocess.Popen | None = None
 
     def read(self, oid: str, max_bytes: int | None = None) -> bytes | TooLarge | None:
@@ -327,9 +363,11 @@ class BlobReader:
         `max_bytes` is passed over in small steps and reported as TooLarge: someone's
         committed 100 MB database must not be held in memory just to be skipped."""
         if self._proc is None:
+            with (elsewhere() if self._other else nullcontext()):
+                environment = _env()
             self._proc = subprocess.Popen(
                 ["git", "-C", str(self._cwd), "cat-file", "--batch"],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_env(),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
             )
         try:
             self._proc.stdin.write(oid.encode() + b"\n")

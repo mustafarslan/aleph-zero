@@ -217,8 +217,12 @@ def test_a_fetch_nobody_watches_does_not_ask_and_does_not_carry_the_caller_s_opt
     assert "GIT_CONFIG_PARAMETERS" in usual and "GIT_TERMINAL_PROMPT" not in usual      # a person's own command is as they gave it
     with gitio.unattended():
         quiet = gitio._env()
-    assert quiet["GIT_TERMINAL_PROMPT"] == "0"
+    assert quiet["GIT_TERMINAL_PROMPT"] == "0" and quiet["GIT_ASKPASS"] == "true" and "BatchMode=yes" in quiet["GIT_SSH_COMMAND"]
     assert not any(name.startswith("GIT_CONFIG_") for name in quiet)                    # options given to `git pull` stay with that pull
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/somewhere/gitconfig")                     # the user's own configuration file is not such an option
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i /my/key")
+    with gitio.unattended():
+        assert gitio._env()["GIT_CONFIG_GLOBAL"] == "/somewhere/gitconfig" and gitio._env()["GIT_SSH_COMMAND"] == "ssh -i /my/key"
     assert "GIT_CONFIG_PARAMETERS" in gitio._env()                                      # and only inside the block
 
 

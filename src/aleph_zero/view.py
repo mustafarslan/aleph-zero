@@ -89,7 +89,7 @@ class View:
             except OSError:
                 return None
             return data if gitio.hash_blob(data, fmt) == self.files[path] else None
-        return readers.reader(root).read(self.files[path], max_bytes)
+        return readers.reader(root, other=root != self.root).read(self.files[path], max_bytes)
 
 
 def forget_trees() -> None:
