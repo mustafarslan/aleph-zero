@@ -189,6 +189,22 @@ Up by 17.0 points for the mod as it is now: by the rule, a reason to put vectors
 
 The design said rung 2 would be "dropped if flat or negative". It is flat within what 30 pairs can see. It was already off by default and stays an option: the run could not exclude a saving under about 30%, and what it hands over has changed since.
 
+### A second arm on TypeScript: asked for free first, and not run (2026-10-13, evening)
+
+The owner asked for the open items to be looked at with the advisor and agy (with boost) and worked on. One of them was a second paid arm where rung 2 should have most to offer: TypeScript, which ships with vectors since the same day. The advisor was for one arm of 60 sessions inside the limit; agy was against any run ("the wrong bottleneck": the agent does not follow the steering, and more arms measure that again). Before a session was paid for, the harness was made to ask what rung 2 would hand over on its 30 tasks, as the mod asks it and with the mod's 400 ms (`bench/ab/injected.py --tasks-only`; the embedding worker awake, which is kinder than the product: it sleeps after ten idle minutes).
+
+| 30 tasks, the mod as it is (15 hits, code only, a line a file) | In time | Vectors used | Locations added | A file of the answer among them | Median |
+|---|---|---|---|---|---|
+| TypeScript set, scratch worktrees as the harness made them | 22 | 17 | 20 | 9 | about 300 ms |
+| TypeScript set, worktrees as after a first git command | 27 | 18 | 24 | 11 | 119 ms |
+| Python (pass 1's tasks) | 30 | none | 22 | 16 | 154 ms |
+
+- **The first row was the harness's own doing.** Its scratch worktrees were in the state ADR-008 describes for a fresh checkout, which no worktree in use stays in: every question paid 320 to 620 ms of `git status`. The harness now runs one ordinary `git status` first, in both arms. The three tasks still late are babel's (ranking by path, 150 to 210 ms a question there).
+- **A crash found on the way and fixed:** a search with a kind filter that ran out of time while narrowing answered with an error ("no such savepoint") instead of "out of time". Rung 2 had used that path since the morning's change to code only.
+- **Not run, and why.** In time is repaired; what it hands over is not better than where pass 1 showed nothing: a file of the answer in 11 of 30 against Python's 16 of 30. And the set is not what its name says: 12 of the 30 tasks are in repositories Aleph calls JavaScript or Go (babel, material-ui, tailwindcss, preact; prometheus) and are answered with words alone, so the arm would be "TypeScript as it ships" for 18. *The advisor* after these figures: do not spend. *agy:* was against from the start. *Mine:* the same. $32.90 of the limit is unspent; one word from the owner runs the arm (`--set others --language typescript --warm-worker`).
+- **What it costs if wrong:** an effect of rung 2 on TypeScript stays unseen.
+- **Noted, not changed:** asking for code only costs time once a session on the largest repositories (63 to 80 ms where the scope is rebuilt, nothing on the next question), and the morning's rule for that change had no term for time. On Python the median went from 86 to 154 ms, inside the limit.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

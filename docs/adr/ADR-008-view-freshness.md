@@ -26,7 +26,7 @@ Every query must answer for the worktree as it is at that moment: uncommitted ed
 Two things explain the cost:
 
 - **About 50 ms is the search for untracked files.** Git walks every directory and applies the ignore rules.
-- **Up to 50 ms more appears on a freshly checked-out tree.** Files written in the same second as the index look "possibly changed" to git, so it re-reads them. Git normally fixes this by rewriting the index, but we call it with `GIT_OPTIONAL_LOCKS=0` so that a background reader never holds `index.lock`. The cost disappears the first time the user or the agent runs any ordinary git command. It is time only: git still reports the right answer.
+- **Up to 50 ms more appears on a freshly checked-out tree.** Files written in the same second as the index look "possibly changed" to git, so it re-reads them. Git normally fixes this by rewriting the index, but we call it with `GIT_OPTIONAL_LOCKS=0` so that a background reader never holds `index.lock`. The cost disappears the first time the user or the agent runs any ordinary git command. It is time only: git still reports the right answer. ("Up to 50 ms" was Django's figure. Measured on 2026-10-13 on a fresh worktree of vscode, 5,176 files: 340 to 390 ms for every status until an ordinary git command has run, 36 ms after one, 13 ms with the untracked cache in the index. See "The fresh-checkout cost, measured again" at the end.)
 
 ## Options considered
 
@@ -104,6 +104,27 @@ Measured on Django (7,080 files):
 **What is given up:** the "5 ms when nothing changed" that the watcher promised. A query costs about 30 ms on a 7,000-file repository with the cache on and about 80 ms with it off.
 
 **Left open:** on Linux, inotify delivers events synchronously from the kernel queue and might not have this lag. It was not built, because it cannot be tested on this machine; if it is ever added it must pass the same "change, then ask at once" test before it is trusted. The agent's own edits could also be reported to the engine by the Claude Code mod (M4) through its tool hooks; that would be exact for those edits but not for the user's editor, so it cannot replace the git check either.
+
+## The fresh-checkout cost, measured again (2026-10-13)
+
+Found while asking why the plugin's rung 2 was out of time on TypeScript repositories: in the A/B harness every question spent 320 to 620 ms on the view, all of it in one `git status`.
+
+| A fresh worktree of vscode (5,176 files), `git status` as Aleph asks (`GIT_OPTIONAL_LOCKS=0`) | Time |
+|---|---|
+| Right after `git worktree add`, four times | 372, 384, 339, 323 ms |
+| The same 2.5 s later | 387, 345, 338 ms |
+| After one ordinary `git status` (which rewrites the index) | 37, 36, 36 ms |
+| With the untracked cache in the index | 14, 13, 13 ms |
+
+So the figure above was low by a factor of six on a repository of this size, and waiting does not help: the files stay "possibly changed" until some git command that may write the index has run.
+
+**The decision stands: Aleph never takes `index.lock`** (option B, above). What follows from the measurement:
+
+- *Who meets it.* The first questions after `git clone`, `git worktree add` or a checkout that rewrites many files, in a large repository, until any ordinary git command runs: a shell prompt that shows the branch's state, an editor's git panel, the agent's own `git status` or `git diff`. In a worktree someone works in, that is seconds. A worktree made by a script and only ever read by Aleph stays slow for good.
+- *What does not heal it.* `aleph index`, `aleph update` and the hooks it prints: they are Aleph's git calls and write no index.
+- *What does.* Any ordinary git command; and `git update-index --untracked-cache` (what `aleph setup` offers) takes the cost to 13 ms either way.
+- *The A/B harness* was in exactly the state nobody's worktree stays in: it makes a worktree, indexes it and starts a session, and no ordinary git command ever runs. It now runs one `git status` in the worktree first, in both arms (`bench/ab/run.py`, `as_after_a_first_git_command`). Pass 1's Python worktrees were in that state too; its median for rung 2's question was 154 ms against a limit of 400, so its result is not moved.
+- *Not built, a question for the owner (the deferred list, entry 3):* a hook that runs one ordinary `git status` after a checkout would heal it, and takes the lock this decision refuses to take from a background reader. In a hook the user's own git command has just ended, so the collision is less likely than from a query, and it is still theirs to choose.
 
 ## Sparse checkouts, partial clones, submodules (M3, 2026-10-12)
 
