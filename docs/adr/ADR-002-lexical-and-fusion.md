@@ -169,7 +169,7 @@ The owner's words: "we can use opensource peojects with mid size of repo for lan
 |---|---|---|---|---|---|---|---|---|
 | **Go** | 110, 8 | 0.500 | 0.520 | +2.0 points (−3.8 to +7.9) | 17 / 13 | −8.2 to +8.2 | +18.2 (+11.1 to +25.5), 31 / 4 | **not shown: off** |
 | **TypeScript** | 165, 11 | 0.355 | 0.456 | **+10.2 points (+5.3 to +15.2)** | 32 / 5 | +6.2 to +15.8 | +9.9 (+5.5 to +14.6), 27 / 3 | **passes: on** |
-| **JavaScript** | 230, 12 | 0.445 | 0.482 | +3.7 points (−1.4 to +8.7) | 39 / 22 | −1.7 to +9.9 | +12.4 (+7.7 to +17.2), 47 / 11 | **not shown: off** |
+| **JavaScript** | 230, 12 | 0.445 | 0.482 | +3.7 points (−1.4 to +8.7) | 39 / 22 | −1.7 to +9.9 | +12.4 (+7.7 to +17.2), 47 / 11 | **not shown: off** (by label; **on** since the same evening, see the next section) |
 | **Java** | 296, 18 | 0.469 | 0.470 | +0.1 points (−3.2 to +3.4) | 28 / 29 | −3.8 to +4.3 | +5.3 (+1.5 to +9.2), 46 / 19 | **not shown: off** |
 
 **Go.** Embedded in 29 minutes (the chip at 76 °C at most, no waits), all 110 scored. On first lines vectors are not shown to help: the interval holds zero and nearly as many questions get worse as better. On whole issue text they add 18 points, the largest such gain measured so far, and first place on first lines rises from 0.165 to 0.245. It is Python's pattern again, more sharply: little for a title, much for a whole issue. All eight repositories are under 50,000 chunks, so the reading beside is the same reading. cli gives 40 of the 110 questions.
@@ -181,6 +181,46 @@ The owner's words: "we can use opensource peojects with mid size of repo for lan
 **Java.** Embedded in two hours and eight minutes (the chip at 76 °C at most, no waits), all 296 scored. On first lines vectors change nothing: 0.469 against 0.470, as many questions worse as better, and with the largest set of the four the interval is the narrowest (−3.2 to +3.4), so this is the one "not shown" that is close to "shown not to". On whole issue text the gain is 5.3 points, the smallest of any language. On the repositories at or under 50,000 chunks (242 questions; druid, lucene and trino left out): −1.0 points (−4.8 to +2.8). Java's names are long and say what they are; words and names already find what a first line asks for.
 
 **The four together, and with Python and C++.** The chain ran from 13:12 to 19:04, under six hours for an estimate of ten, with no waits for heat. Verdicts recorded in `dense_policy.VERDICTS`: on for TypeScript; off for Go, JavaScript and Java, each with its figures and the way to switch vectors on by hand or for one repository (`aleph setup`). Across six languages the first-line gain runs from +0.1 (Java) to +10.2 (TypeScript), and it is large where words and names alone find little: C++ 0.389 and TypeScript 0.355 pass; Python 0.563, Go 0.500, Java 0.469 and JavaScript 0.445 do not. On whole issue text every language gains, from +5.3 (Java) to +18.2 (Go), with an interval clear of zero each time. That is the same thing the A/B run's look afterwards pointed at (ADR-011): what vectors are good for is a question asked in many words. The gate reads first lines because that is nearer what an agent types, and of that there is still almost no record (two queries in sixty sessions); the verdicts stand on the gate as written, and the whole-text column is the reason a later rule for whole-text questions (rung 2's own) would be worth writing.
+
+## Which questions a verdict is read from: the repository's main language, not the set's label (2026-10-13, late)
+
+**The table above was read on a population the product does not use, and for JavaScript that changed the verdict.** A verdict is applied by a repository's main language (`Index.languages()`: the language most of its indexed source is written in). The four languages above were read by the question sets' own labels. Looked at because the plugin's TypeScript tasks turned out to be in JavaScript repositories for a third: of the 165 questions labelled TypeScript, 62 are in repositories the engine calls JavaScript at the question's commit (material-ui 40, tailwindcss 17, babel 4, preact 1) and one in a Go repository; 8 labelled JavaScript are in repositories it calls TypeScript. tailwindcss is JavaScript to the last file and every answer of its questions is a `.js` file: the label is the set's directory, not a fact about the code. Go's, Java's, C++'s and Python's questions are all in repositories of that language already, and no question is in two files.
+
+**The rule from here on, for every language:** a verdict is read from the questions whose repository's main language, by the engine's own rule at the question's commit, is that language, whatever set or label they came under. `bench/eval/population.py` writes that language into a result; `bench/eval/verdict.py --main-language` reads a language from every file given. The gate is unchanged.
+
+| Main language | Questions, repositories | Words and names | With vectors | Gain (95%) | By repository | Better / worse | Whole text | By label it read |
+|---|---|---|---|---|---|---|---|---|
+| **TypeScript** | 110, 9 | 0.305 | 0.377 | **+7.3 (+1.8 to +12.9)** | +1.3 to +9.5 | 18 / 4 | +8.6 (+4.0 to +14.0) | +10.2 on 165: on, and stays on |
+| **JavaScript**, as asked until then | 284, 12 | 0.447 | 0.508 | +6.1 (+1.7 to +10.7) | +0.4 to +12.3 | 53 / 23 | +12.3 (+8.2 to +16.7) | +3.7 on 230, holding zero: off |
+| **Go** | 111, 8 | 0.499 | 0.519 | +2.0 (−3.9 to +7.8) | −8.0 to +8.2 | 17 / 13 | +18.4 (+11.3 to +25.7) | +2.0 on 110: off, and stays off |
+
+JavaScript passed the gate read this way, and was not switched on by that: the grouping has no parameter and is the right one, but it was looked for after the figures were seen, and with one repository left out at a time the reading fell under the bar twice in twelve (without dayjs +4.5, −0.4 to +9.6; without tailwindcss +4.8). TypeScript falls under it once in nine (without vscode, 70 questions: +5.8, −1.7 to +13.3).
+
+**The run that decided, by a rule written before it** (the deferred list, entry 1b-2, committed before anything was fetched): a second draw by the same seed of at most 40 questions from each JavaScript repository that had questions left over the limit and never asked. Switched on only if the new questions alone pass the gate and the interval by repository of all JavaScript questions together excludes zero.
+
+| JavaScript | Questions, repositories | Words and names | With vectors | Gain (95%) | By repository | Better / worse | Whole text |
+|---|---|---|---|---|---|---|---|
+| **The second draw alone** | 164, 5 | 0.350 | 0.512 | **+16.2 (+9.4 to +23.1)** | +13.1 to +18.7 | 48 / 11 | +15.5 (+9.7 to +21.5) |
+| All, first and second draw | 448, 12 | 0.412 | 0.509 | +9.8 (+6.0 to +13.6) | +6.2 to +13.3 | 101 / 34 | +13.5 (+10.1 to +16.9) |
+
+| Repository | First draw: gain, better / worse | Second draw: gain, better / worse |
+|---|---|---|
+| material-ui | +9.5 on 40, 8 / 1 | +13.4 on 40, 10 / 4 |
+| serverless | +5.8 on 40, 5 / 2 | +20.2 on 40, 14 / 2 |
+| prettier | −2.5 on 40, 6 / 5 | +18.3 on 40, 12 / 4 |
+| svelte | −5.3 on 35, 3 / 5 | +14.0 on 34, 9 / 0 |
+| dayjs | +15.6 on 40, 9 / 1 | +10.0 on 10, 3 / 1 |
+
+Both halves of the rule are met, the first by a wide margin and in each of the five repositories: **`dense_policy.VERDICTS["javascript"]` is on.** Embedding and scoring took 17 minutes (22:24 to 22:41), the chip at 77 °C at most, no waits; 170 questions scored, six of svelte's left out of JavaScript because the repository was mainly TypeScript at their commits (with them TypeScript reads +6.4, +1.3 to +11.9, on 116).
+
+**What this does not settle, and three voices.**
+
+- In the reading of all 448, four repositories have 80 questions each: the limit of 40 a repository, which keeps one project from deciding a language, holds for each draw and not for the two together. The guard for that reading is the interval by repository, which was in the rule; the second draw alone keeps the limit.
+- The second draw asks more of five repositories that were asked before. It answers "was the grouping an accident of those questions" (no) and not "does this hold for a JavaScript repository none of the sets holds". Every verdict here has that limit (C++'s rests on five repositories), and JavaScript's twelve are the second most of any language.
+- Words and names find less in the second draw (0.350 against 0.447), so there is more for vectors to add; why the leftover questions are harder for words is not looked into.
+- *The advisor:* the population by main language for all languages; a held-out draw before the shipped value moves, as Python had. *agy (Gemini 4 Argon, no boost), asked before the run:* keep JavaScript off; more questions of the same repositories measure those repositories again; repositories never asked are the check that counts; the interval by repository should decide. Two figures it gave did not hold when computed (leaving material-ui out does not bring the first reading under 5: +5.5; and the gain is not on TypeScript files inside JavaScript repositories: answers in `.js` files +6.1 on 224, in `.ts` files −6.2 on 27). Its objection about unseen repositories stands after the run. *Mine:* the advisor's run with agy's interval by repository in the rule; both are met.
+
+The verdict can be set aside for a repository as before (`aleph setup --no-dense`, `--no-dense`, `ALEPH_DENSE=0`), and takes effect only where the embedding worker is installed.
 
 ## The starting values, each tried against others (2026-10-13): none is replaced
 

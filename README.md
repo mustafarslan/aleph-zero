@@ -142,11 +142,11 @@ line of an issue, with an interval that excludes zero. Measured so far:
 
 | Main language | Gain on first lines (95% interval) | Default |
 |---|---|---|
-| TypeScript | +10.2 points (+5.3 to +15.2), 165 questions | on |
+| JavaScript | +9.8 points (+6.0 to +13.6), 448 questions; +16.2 (+9.4 to +23.1) on the 164 asked last, alone | on |
+| TypeScript | +7.3 (+1.8 to +12.9), 110 questions | on |
 | C++ | +6.7 (+1.4 to +12.3), 108 questions | on |
 | Python | +3.9 (+0.6 to +7.2), 400 questions; +1.6 on the 165 held out | off |
-| JavaScript | +3.7 (−1.4 to +8.7), 230 questions | off |
-| Go | +2.0 (−3.8 to +7.9), 110 questions | off |
+| Go | +2.0 (−3.9 to +7.8), 111 questions | off |
 | Java | +0.1 (−3.2 to +3.4), 296 questions | off |
 
 C and Rust are not measured and are off. On whole issue text vectors gain in every language (5 to 18

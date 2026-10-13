@@ -165,14 +165,25 @@ def test_a_repository_s_own_choice_decides_where_no_flag_does_and_is_read_again_
 def test_go_typescript_javascript_and_java_each_have_their_own_verdict_from_their_own_questions():
     """The owner's release of 2026-10-13. The same gate for each: the first line, 5 points, an interval that excludes zero."""
     verdicts = dense_policy.VERDICTS
-    assert verdicts["typescript"].helps is True and "+10.2 points" in verdicts["typescript"].evidence and "165 questions" in verdicts["typescript"].evidence
-    for language, gain, questions in (("go", "+2.0", "110"), ("javascript", "+3.7", "230"), ("java", "+0.1", "296")):
+    assert verdicts["typescript"].helps is True and "+7.3 points" in verdicts["typescript"].evidence and "110 questions" in verdicts["typescript"].evidence
+    for language, gain, questions in (("go", "+2.0", "111"), ("java", "+0.1", "296")):
         verdict = verdicts[language]
         assert verdict.helps is False and f"{gain} points" in verdict.evidence and f"{questions} questions" in verdict.evidence
         assert "holds zero" in verdict.evidence and "whole issue text" in verdict.evidence and "ADR-002" in verdict.evidence
         on, why = dense_policy.decide(None, language)
         assert on is False and "ALEPH_DENSE=1" in why            # and how to have them all the same
     assert dense_policy.decide(None, "typescript")[0] is True and dense_policy.decide(None, "tsx")[0] is True
-    assert dense_policy.decide(None, "javascript")[0] is False   # two languages, two verdicts: they came out on different sides
+
+
+def test_a_verdict_is_read_from_the_repositories_the_product_calls_that_language_and_javascript_is_on_by_it():
+    """A verdict is applied by a repository's main language, so that is the population it is read from, not a question
+    set's label (the deferred list, entry 1b-2). Read so, JavaScript passed on what had been asked; it was switched on
+    only after questions nobody had asked passed alone, by a rule written before they were run."""
+    javascript = dense_policy.VERDICTS["javascript"]
+    assert javascript.helps is True and dense_policy.decide(None, "javascript")[0] is True
+    assert "+16.2 points" in javascript.evidence and "164 questions" in javascript.evidence      # the questions never asked, alone
+    assert "+9.8" in javascript.evidence and "448" in javascript.evidence                        # and all of them together
+    assert "main language" in javascript.evidence and "main language" in dense_policy.VERDICTS["typescript"].evidence
+    assert "main language" in dense_policy.VERDICTS["go"].evidence
     for unmeasured in ("c", "rust"):
         assert "no benchmark has been run" in dense_policy.decide(None, unmeasured)[1]

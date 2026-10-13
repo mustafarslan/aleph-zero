@@ -36,15 +36,22 @@ VERDICTS: dict[str, Verdict] = {
     "cpp": Verdict(True, "+6.7 points of file recall@10, interval +1.4 to +12.3, on 108 questions from five repositories "
                          "asked by their first line; ADR-002, 2026-10-13"),
     # Four languages on public repositories, released by the owner on 2026-10-13; the reading was written down for
-    # all four before anything was embedded, and is C++'s. JavaScript and TypeScript are two languages with two sets
-    # of questions and came out on different sides. Where the first line shows nothing, whole issue text still
+    # all four before anything was embedded, and is C++'s. Where the first line shows nothing, whole issue text still
     # gains much: an agent's own query is nearer a first line, and that is what the gate reads.
-    "typescript": Verdict(True, "+10.2 points of file recall@10, interval +5.3 to +15.2, on 165 questions from eleven repositories "
-                                "asked by their first line; ADR-002, 2026-10-13"),
-    "go": Verdict(False, "+2.0 points of file recall@10 on 110 questions from eight repositories asked by their first line, "
-                         "interval -3.8 to +7.9, which holds zero; on whole issue text +18.2; ADR-002, 2026-10-13"),
-    "javascript": Verdict(False, "+3.7 points of file recall@10 on 230 questions from twelve repositories asked by their first line, "
-                                 "interval -1.4 to +8.7, which holds zero; on whole issue text +12.4; ADR-002, 2026-10-13"),
+    #
+    # A verdict is applied by a repository's main language, so it is read from the questions in repositories the
+    # engine calls that language at the question's commit, not from a question set's label: 62 questions filed
+    # under TypeScript are in JavaScript repositories (ADR-002, "Which questions a verdict is read from"). By label
+    # TypeScript read +10.2 on 165 and JavaScript +3.7 on 230, which held zero. Read by main language JavaScript
+    # passed on the 284 asked (+6.1); since that was seen after the figures, it was switched on only when 164
+    # questions never asked passed alone, by a rule written before they were run.
+    "typescript": Verdict(True, "+7.3 points of file recall@10, interval +1.8 to +12.9, on 110 questions from nine repositories "
+                                "whose main language is TypeScript, asked by their first line; ADR-002, 2026-10-13"),
+    "go": Verdict(False, "+2.0 points of file recall@10 on 111 questions from eight repositories whose main language is Go, asked by "
+                         "their first line, interval -3.9 to +7.8, which holds zero; on whole issue text +18.4; ADR-002, 2026-10-13"),
+    "javascript": Verdict(True, "+16.2 points of file recall@10, interval +9.4 to +23.1, on 164 questions never asked before, from five "
+                                "repositories whose main language is JavaScript, asked by their first line; +9.8 (+6.0 to +13.6) on all "
+                                "448 from twelve repositories; ADR-002, 2026-10-13"),
     "java": Verdict(False, "+0.1 points of file recall@10 on 296 questions from eighteen repositories asked by their first line, "
                            "interval -3.2 to +3.4, which holds zero; on whole issue text +5.3; ADR-002, 2026-10-13"),
 }
