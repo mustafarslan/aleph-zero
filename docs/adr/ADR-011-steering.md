@@ -107,6 +107,31 @@ The owner released the run and left its choices to me with the advisor and agy (
 - **What the agent types, kept and read (new).** The gate for vectors is read on issue titles as "the closest to what an agent types"; that was never looked at. Every query a session sends to the engine's search is kept word for word. If at least 20 queries are logged: a median of 12 words or fewer leaves the title form as it is; a median over 20 words means the Python verdict is read again on whole-issue text, by a rule written down then, before that reading; in between, it is noted and nothing changes. Fewer than 20 queries: nothing is concluded.
 - **Known and equal in both arms:** the owner's other plugins and connectors load in every headless session (about 35 servers were listed in a check): they add tokens to both arms alike and are not removed, since this is the owner's Claude Code as it runs.
 
+### Result of the first pass (2026-10-13, 07:01 to 07:37)
+
+60 sessions, none failed, $12.10 ($6.04 without the plugin, $6.06 on rung 2). Read by the rules above, in their order:
+
+| Measure, rung 2 against no plugin, 30 pairs | Ratio (geometric mean) | 95% interval | Reading |
+|---|---|---|---|
+| Total tokens | 1.02 | 0.915 to 1.142 | **not shown**: the interval holds 1 |
+| Tool calls | 0.948 | 0.824 to 1.089 | **not shown**: the interval holds 1 |
+
+- **Hit rate:** the right file was named in 29 of 30 sessions on rung 2 and in 30 of 30 without the plugin: lower by one task, which is as far as the rule allows and no further.
+- **The design's gate** (20% fewer tokens or tool calls than no plugin) **is not met on this pass.** Thirty pairs could have shown an effect of about 30%; they show none, and they cannot settle a smaller one either way. The point estimate for tokens is on the wrong side of 1.
+- **No second pass.** The cost was under the $22.50 that was one condition; the token ratio is not 0.90 or lower, which was the other.
+- **What the agent types:** two queries were sent to the engine in 60 sessions (6 and 10 words). Fewer than 20: nothing is concluded, and Python's verdict on vectors is not read again.
+- Medians, for scale: 160,080 tokens and 4 tool calls a session without the plugin, 167,958 and 5 on rung 2.
+
+### Read afterwards, and not a measure of the run
+
+What follows was looked at after the result was known. It says where to look next; it does not change the reading above.
+
+- **Whether rung 2 did anything in a session was not kept by the harness.** The mod adds its locations only when two generators proposed the first hit. `bench/ab/injected.py` asks the engine again with each session's prompt at its commit and reads the answer as the mod does; against the mod's own meter, copied after 26 of the 30 rung-2 sessions, it agrees in all 26. Locations were added in 22 of 30 sessions; a file of the answer was among them in 14.
+- **The pairs by what rung 2 gave them** (ratio of tokens, of tool calls): a file of the answer among the locations, 14 pairs: 0.984, 0.94. Locations without a file of the answer, 8 pairs: 1.18, 1.114. Nothing added, 8 pairs: 0.937, 0.817. Groups of 8 and 14 with run-to-run differences of 20 to 40% (above) carry no interval worth printing; the order of the three is what one would expect and no more is claimed.
+- **What the locations were.** Of five, two are kept for documentation, and for an issue text those were often the repository's own issue templates, its `CONTRIBUTING.md`, its `README.md` or its pull-request template: the words of a bug report match the form it was written on.
+- **What a session costs in either arm.** A session without the plugin took 5 turns at the median and 30,000 tokens a turn; on rung 2, 6 turns and 33,100 a turn. The agent without the plugin named the right file in all 30 tasks, in 4 tool calls at the median: on these tasks there is little left to save.
+- **The engine was called by the agent in 2 of 30 rung-2 sessions.** Two sessions say nothing.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.
