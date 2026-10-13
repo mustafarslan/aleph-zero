@@ -33,7 +33,7 @@ VERDICTS: dict[str, Verdict] = {
     # The same gate, with how it would be read written down before the run: nothing was tuned on C++, so this
     # first reading is at settings chosen elsewhere. Two repositories give 80 of the 108 questions; resampling
     # repositories instead of questions the interval is +4.0 to +13.8.
-    "cpp": Verdict(True, "+8.1 points of file recall@10, interval +3.1 to +13.5, on 108 questions from five repositories "
+    "cpp": Verdict(True, "+6.7 points of file recall@10, interval +1.4 to +12.3, on 108 questions from five repositories "
                          "asked by their first line; ADR-002, 2026-10-13"),
 }
 

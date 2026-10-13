@@ -129,9 +129,10 @@ def test_a_worker_that_is_waking_does_not_hold_a_query_up(repo, fake_worker, mon
 
 def test_cpp_has_a_verdict_in_favour_and_says_on_what():
     """The same gate, written down for C++ before its run: 108 questions from five repositories, asked by their first
-    line: +8.1 points of file recall@10, interval +3.1 to +13.5."""
+    line. The first run counted four questions twice (+8.1); on 108 distinct ones: +6.7 points, interval +1.4 to +12.3."""
     verdict = dense_policy.VERDICTS["cpp"]
     assert verdict.helps is True and "108" in verdict.evidence and "five repositories" in verdict.evidence and "ADR-002" in verdict.evidence
+    assert "+6.7 points" in verdict.evidence and "+1.4 to +12.3" in verdict.evidence and "8.1" not in verdict.evidence
     on, why = dense_policy.decide(None, "cpp")
     assert on is True and "vectors help" in why
     assert dense_policy.decide(None, "c")[0] is False and "no benchmark has been run for c " in dense_policy.decide(None, "c")[1]      # C was not run: its own questions, its own verdict
