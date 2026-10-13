@@ -121,7 +121,7 @@ def test_a_question_waits_for_a_waking_worker_only_where_nobody_set_it_a_time_li
     monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
-    assert engine_module.QUERY_EMBED_SECONDS == 0.3 and engine_module.WAKING_EMBED_SECONDS == 1.0
+    assert engine_module.QUERY_EMBED_SECONDS == 0.3 and engine_module.WAKING_EMBED_SECONDS == 0.8
     engine = Engine(repo.root, dense=True)
     engine.search("render_invoice")
     engine.embed()
@@ -146,7 +146,7 @@ def test_a_question_waits_for_a_waking_worker_only_where_nobody_set_it_a_time_li
 
     monkeypatch.setattr(EmbedClient, "embed", lambda self, texts, kind: real(self, ["HANG " + text for text in texts], kind))
     answer, took = asked()
-    assert "did not answer" in answer.dense and took < 1.5 and answer.hits[0].path == "src/billing/invoice.py"
+    assert "did not answer" in answer.dense and took < 1.0 and answer.hits[0].path == "src/billing/invoice.py"
     answer, took = asked()
     assert "did not answer" in answer.dense and took < 0.6                 # it did not answer just now: no second long wait
 

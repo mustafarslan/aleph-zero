@@ -44,7 +44,7 @@ QUERY_EMBED_SECONDS = 0.3
 # worker takes to wake is waited for: the first question after every pause is most of what an agent asks, and
 # without its vector it loses what vectors were measured to give. Not again within MISSED_SECONDS of a question
 # whose vector did not come: a worker that does not answer at all costs the long wait once.
-WAKING_EMBED_SECONDS = 1.0
+WAKING_EMBED_SECONDS = 0.8      # waking was measured at 0.56 s; a worker that answers nothing must not hold a question a second
 MISSED_SECONDS = 30.0
 WARM_SECONDS = 5.0              # for the server's warming at its start: what a first question may take to index
 WAKE_SECONDS = 10.0             # for the one vector that wakes the worker at a session's start, on a thread of its own
