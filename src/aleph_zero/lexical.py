@@ -8,7 +8,7 @@ import apsw
 
 from .chunking import Chunk
 
-WEIGHTS = (5.0, 3.0, 2.0, 1.0)  # symbol, signature, doc, body: a starting grid, tuned in M2
+WEIGHTS = (5.0, 3.0, 2.0, 1.0)  # symbol, signature, doc, body. Five other grids were tried (ADR-002, 2026-10-13): none gains a point
 MAX_TERMS = 400      # words read from a query before the rarest are chosen
 LONG_QUERY = 16      # a query with more terms than this keeps only its rarest
 KEEP_TERMS = 24

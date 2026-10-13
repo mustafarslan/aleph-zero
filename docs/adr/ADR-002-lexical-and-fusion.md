@@ -161,6 +161,20 @@ Questions for the other languages come from three public sets read into this ben
 
 What else was measured, and what it does not say. The engine's answers are read on ten results, and ten results name about six files (6.6 with words and names, 6.2 with vectors, on first lines), because several results lie in one file. Vectors alone were first read to ten files, however many chunks that took, and at that depth they reach 0.494; an earlier version of this section set that beside the fusion's 0.493 and concluded that the fusion was leaving recall on the table. That compared unlike things. Read as the engine's answers are, on their first ten chunks (6.0 files), vectors alone reach 0.430 on first lines against the fusion's 0.456 (+2.6 points for the fusion, interval −1.9 to +7.4) and are behind it at first place (0.192 against 0.257; +6.5, interval +0.4 to +12.7). So on C++ the fusion is not behind vectors alone; what the comparison did show is that ten results cover few files, which is a question about how results are laid out and not about vectors (recorded in the deferred list, entry 1c). 108 questions from five repositories is a small set: the interval is eleven points wide, and a sixth repository could move the mean by more than the 1.7 points that separate it from the bar. There is no second, held-out set for C++ as there was for Python.
 
+## The starting values, each tried against others (2026-10-13): none is replaced
+
+The column weights of the text index, the number of candidates the path and name generators propose, the weight of the name generator's vote and the two numbers that govern long queries were set when the ranking was first written and called starting values since. All of them act when a question is asked, so they can be tried on the prepared indexes without indexing or embedding anything (`bench/eval/retune.py`). The design was fixed first, with the advisor and agy (the deferred list, entry 1c): each value alone against what ships, on the 235 Python questions that everything was first looked at on, with words and names; file recall@10 of ten results, the mean of the first-line and whole-text forms (the long-query numbers on whole text only); at most two changes of 1.5 points or more go forward and are read once on the 165 questions they were not chosen on and on C++. No chained search: on 235 questions a step of half a point is two questions.
+
+| Value | What ships | Tried, and the change in points |
+|---|---|---|
+| Column weights (symbol, signature, doc, body) | 5, 3, 2, 1 | 8, 4, 2, 1: +0.9 · 5, 3, 1, 1: +0.6 · 3, 2, 1.5, 1: +0.4 · 1, 1, 1, 1: +0.4 · 2, 1, 1, 1: −0.4 |
+| Long queries: cut from how many words, to how many (whole text) | 16, 24 | 16 or 24, to 48: +1.1 · 16 or 24, to 32: −0.9 · 12, to 16: −0.4 · 12, to 24: 0.0 |
+| Places the path generator proposes | 5 | 3: −1.1 · 8: −0.4 |
+| Places the name generator proposes for one name | 10 | 5: +0.9 · 20: −0.2 |
+| Weight of the name generator's vote | 1 | 1.5: 0.0 · 2: 0.0 (the order inside the ten changes in about one question of eight; the files among them do not) |
+
+**Nothing reaches 1.5 points, so nothing goes forward, and the 165 questions were not read for this.** The whole table lies within 1.1 points of what ships, which is two or three questions of 235 either way: the ranking is flat in these values over the ranges tried, including with every column weighted alike. They are no longer called starting values. What this does not cover: combinations (by design), the fusion's constant (left at 60), a weight for the path generator (its vote is written without one), and other languages than Python.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.

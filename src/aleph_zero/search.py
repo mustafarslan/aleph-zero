@@ -19,9 +19,10 @@ MIN_POOL = 300
 PATH_TIE_LIMIT = 25
 COPIES_SHOWN = 3  # places listed for one chunk that many files share
 SYMBOL_CANDIDATES = 10
-# How much one generator's vote counts in the fusion. All equal until the M2 benchmark says
-# otherwise: in a longer query, a word that happens to be a definition's name is one vote
-# among others. A query that is a single name is handled apart (see `search`).
+# How much one generator's vote counts in the fusion. All equal: in a longer query, a word
+# that happens to be a definition's name is one vote among others. A query that is a single
+# name is handled apart (see `search`). Weighing names 1.5 or 2 times was tried on 235 questions
+# (ADR-002, 2026-10-13): the order inside the ten results moves, the files among them do not.
 GENERATOR_WEIGHT: dict[str, float] = {}
 SYMBOL_TIE_LIMIT = 25
 # What makes a word of a longer query look like an identifier: an underscore, a digit, a
