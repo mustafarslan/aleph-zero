@@ -116,6 +116,16 @@ def warm_worker() -> str:
     return "warm" if "warm" in done.stdout else f"not warm: {(done.stderr or done.stdout).strip()[-200:]}"
 
 
+def as_after_a_first_git_command(tree: Path) -> None:
+    """One ordinary `git status` in a worktree that was just made. `git worktree add` leaves an index in which every
+    file looks possibly changed (written in the same second as the index), and git reads them all again on every
+    status until some ordinary git command rewrites the index. A developer's shell prompt, their editor or the
+    agent's first `git status` does that; the engine never does (ADR-008: it takes no lock on the index). Without
+    this a scratch worktree stays in a state no worktree in use is in: 340 to 380 ms a status on vscode against 36.
+    The worktree is the harness's own, so no one's commit can meet the lock."""
+    subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, timeout=300)
+
+
 def clone_of(workdir: Path, repo: str) -> Path:
     return workdir / repo.replace("/", "__")
 
@@ -235,6 +245,7 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
     if made.returncode != 0:
         return {"task": task["id"], "arm": arm, "ok": False, "ended": f"worktree failed: {made.stderr[-200:]}"}
     try:
+        as_after_a_first_git_command(tree)      # in both arms alike
         if arm != "none":  # index before the clock starts: indexing is not what is being measured
             try:
                 subprocess.run([str(ROOT / ".venv" / "bin" / "aleph"), "--cwd", str(tree), "index"], capture_output=True, timeout=1800)

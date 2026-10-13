@@ -307,3 +307,67 @@ def test_what_the_mod_counted_for_a_session_is_read_from_its_store(tmp_path):
     assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "aleph_calls": 0}
     store.write_text("not json")
     assert ab.mod_meter(tmp_path) is None and ab.mod_meter(tmp_path / "nowhere") is None      # no store, or not readable: nothing known
+
+
+def _a_repository(tmp_path: Path) -> tuple[Path, str]:
+    import subprocess
+
+    clone = tmp_path / "o__r"
+    clone.mkdir()
+    (clone / "a.py").write_text("def answer():\n    return 42\n")
+    git = lambda *args: subprocess.run(["git", "-C", str(clone), *args], capture_output=True, text=True, check=True).stdout.strip()  # noqa: E731
+    git("init", "-q")
+    git("add", "a.py")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "first")
+    return clone, git("rev-parse", "HEAD")
+
+
+def test_a_session_s_worktree_is_as_one_in_use_in_every_arm_before_anything_else_reads_it(tmp_path, monkeypatch):
+    # `git worktree add` leaves an index in which every file looks possibly changed, and the engine never rewrites it:
+    # without one ordinary git command first, each status costs what no worktree in use costs. Both arms alike.
+    clone, commit = _a_repository(tmp_path)
+    order: list[str] = []
+    healed = ab.as_after_a_first_git_command
+    monkeypatch.setattr(ab, "as_after_a_first_git_command",
+                        lambda tree: order.append(f"first git command, worktree there: {(tree / 'a.py').is_file()}") or healed(tree))
+    monkeypatch.setattr(ab, "command", lambda arm, *_: order.append(f"session {arm}") or ["true"])
+    real = ab.subprocess.run
+
+    def run(args, *rest, **kwargs):
+        if args[-1:] == ["index"]:
+            order.append("index")
+            return None
+        return real(args, *rest, **kwargs)
+
+    monkeypatch.setattr(ab.subprocess, "run", run)
+    task = {"id": "o__r-1", "repo": "o/r", "commit": commit, "issue": "what is the answer", "gold": ["a.py"]}
+    ab.run_one(tmp_path, task, "none", "m", 0.1, 30)
+    ab.run_one(tmp_path, task, "L2", "m", 0.1, 30)
+    assert order == ["first git command, worktree there: True", "session none",
+                     "first git command, worktree there: True", "index", "session L2"]
+
+
+def test_the_engine_asked_again_meets_a_worktree_as_one_in_use(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "ab"))
+    import injected
+
+    clone, commit = _a_repository(tmp_path)
+    seen: list[bool] = []
+    healed = ab.as_after_a_first_git_command
+    monkeypatch.setattr(ab, "as_after_a_first_git_command", lambda tree: seen.append((tree / "a.py").is_file()) or healed(tree))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    task = {"id": "o__r-1", "repo": "o/r", "commit": commit, "issue": "where is answer defined", "gold": ["a.py"]}
+    out = injected.asked_again(tmp_path, task)
+    assert seen == [True] and out["timed_out"] is False
+
+
+def test_the_first_git_command_leaves_the_worktree_s_files_as_they_were(tmp_path):
+    import subprocess
+
+    clone, _ = _a_repository(tmp_path)
+    (clone / "new.py").write_text("x = 1\n")
+    (clone / "a.py").write_text("def answer():\n    return 43\n")
+    before = subprocess.run(["git", "-C", str(clone), "status", "--porcelain"], capture_output=True, text=True).stdout
+    ab.as_after_a_first_git_command(clone)
+    assert subprocess.run(["git", "-C", str(clone), "status", "--porcelain"], capture_output=True, text=True).stdout == before
+    assert (clone / "a.py").read_text().endswith("43\n") and (clone / "new.py").is_file()

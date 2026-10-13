@@ -93,6 +93,7 @@ def asked_again(workdir: Path, task: dict, variant: str = NOW, timeout_ms: int |
     if made.returncode != 0:
         raise SystemExit(f"no worktree of {task['id']}: {made.stderr[-200:]}")
     try:
+        ab.as_after_a_first_git_command(tree)
         engine = Engine()
         engine.status(tree)        # the session's server has answered before the first prompt arrives: not a cold process
         answer = render.as_json(engine.search((task["issue"] + ab.QUESTION)[:PROMPT_CHARS], k=k, kind=kind, cwd=tree,
