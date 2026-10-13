@@ -12,7 +12,7 @@ _KIND_RANK = {
     "class": 0, "interface": 0, "enum": 0, "type": 0, "function": 0, "method": 1,
     "constant": 2, "macro": 2, "variable": 3, "namespace": 4, "field": 5,
 }
-_SEPARATOR = re.compile(r"::|\.")
+SEPARATOR = re.compile(r"::|\.")
 # A definition in test code is rarely the one meant when the same name exists outside it.
 # Only conventions that mean tests: a directory named `test` may be a test framework.
 _TEST_PATH = re.compile(
@@ -35,7 +35,7 @@ def rows(index: Index, name: str, scoped: bool = False) -> list[tuple]:
     """Definitions in the view whose name is `name`, any case: (blob, family, name, qualified,
     kind, signature, line, chunk id), best first. A dotted or `::` name must match the end
     of the qualified name. With `scoped`, only chunks in temp.scope_chunks."""
-    parts = [part for part in _SEPARATOR.split(name.strip()) if part]
+    parts = [part for part in SEPARATOR.split(name.strip()) if part]
     if not parts:
         return []
     wanted = ".".join(parts).lower()
