@@ -157,7 +157,8 @@ def read(scored: dict[str, dict]) -> dict:
     for entry in scored.values():
         by_language.setdefault(entry["main_language"], []).append(entry)
     report: dict = {}
-    for arm in ARMS:
+    found = next(iter(scored.values()))["arms"] if scored else {}
+    for arm in found:
         if arm == "as it is":
             continue
         block: dict = {}
@@ -176,6 +177,18 @@ def read(scored: dict[str, dict]) -> dict:
     return report
 
 
+def given(text: str) -> tuple[str, dict]:
+    """A trial written on the command line: `NAME:CONSTANT=VALUE`. The constant must be one the ranking has."""
+    name, _, setting = text.partition(":")
+    constant, _, value = setting.partition("=")
+    if not (name and constant and value) or not hasattr(ranker, constant):
+        raise SystemExit(f"not a trial: {text!r} (NAME:CONSTANT=VALUE, a constant of aleph_zero.search)")
+    try:
+        return name, {constant: json.loads(value)}
+    except ValueError:
+        return name, {constant: value}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     actions = parser.add_subparsers(dest="action", required=True)
@@ -188,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         action.add_argument("--not-asked-in", type=Path, nargs="+", help="benchmark results: the questions none of them scored")
         action.add_argument("--repos", help="comma-separated owner/name: only these repositories' questions")
         if name == "score":
+            action.add_argument("--trial", action="append", default=[], metavar="NAME:CONSTANT=VALUE",
+                                help="a trial for this run: a constant of aleph_zero.search set to a value (RRF20:RRF_K=20); may be given again")
             action.add_argument("--words-only", action="store_true", help="ask nothing of the worker: for a language that ships with words and names")
             action.add_argument("--out", type=Path, required=True)
     reading = actions.add_parser("read")
@@ -204,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if bool(args.only) == bool(args.not_asked_in):
         parser.error("one of --only and --not-asked-in")
+    if getattr(args, "trial", None):
+        global ARMS
+        ARMS = arms({**TRIALS, **dict(given(text) for text in args.trial)})
     say = lambda text: print(text, file=sys.stderr, flush=True)  # noqa: E731
     repos = set(args.repos.split(",")) if args.repos else None
     every = bench.instances(repos, args.set, args.language, None)
