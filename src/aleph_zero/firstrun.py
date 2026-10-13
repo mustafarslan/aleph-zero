@@ -123,6 +123,40 @@ def look(status: dict) -> Found:
                  repository=bool(status.get("repository", True)))
 
 
+def of(status: dict) -> list[Step]:
+    """The checklist for the worktree a status was taken of. Reads the kept answers; changes nothing."""
+    kept = settings.read(Path(status["index"]).parent / "settings.json")
+    return plan(look(status), kept, settings.read(settings.machine_file()))
+
+
+def summary(status: dict) -> dict:
+    """What the agent's status tool says of it: information for a person, nothing an agent should act on."""
+    return {"open": open_steps(of(status)),
+            "how": "a person answers these in a terminal with `aleph setup`; search needs none of them"}
+
+
+HINT = "aleph: `aleph setup` shows what else can be set up here (search by meaning, documentation from another repository). This line is shown once."
+
+
+def hint_wanted() -> bool:
+    """Standard error is a terminal: a person reads it. Not an agent's pipe, and never the server's log."""
+    return sys.stderr.isatty()
+
+
+def hint(cwd: Path) -> str | None:
+    """The one line that names `aleph setup`, the first time Aleph is used in a repository on a terminal; None
+    ever after, and where setup was answered. Never raises: a hint is not worth an error."""
+    try:
+        kept_in = settings.repo_file(gitio.common_dir(cwd))
+        kept = settings.read(kept_in)
+        if kept.get("hint_shown") or kept.get("setup") or "dense" in kept:
+            return None
+        settings.change(kept_in, hint_shown=True)
+        return HINT
+    except (gitio.GitError, OSError):
+        return None
+
+
 def answers_file(status: dict, step: Step) -> Path:
     """Where the answer to a step is kept: for the machine, or beside this repository's index."""
     return settings.machine_file() if step.scope == "machine" else Path(status["index"]).parent / "settings.json"

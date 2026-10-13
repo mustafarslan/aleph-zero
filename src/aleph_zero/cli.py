@@ -330,6 +330,11 @@ def _gc(args) -> int:
     return 0
 
 
+# The commands after which the one line about `aleph setup` may be said (once, on a terminal). Not `serve`, whose
+# standard error is Claude Code's log, and not the commands that are about setting up themselves.
+HINTED = ("index", "search", "symbol", "callers", "callees", "decisions", "facts", "outline", "status")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aleph", description="Local code search for coding agents.")
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="a directory inside the repository")
@@ -472,7 +477,15 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        return args.run(args)
+        done = args.run(args)
+        if args.command in HINTED:
+            from . import firstrun
+
+            if firstrun.hint_wanted():
+                said = firstrun.hint(args.cwd)
+                if said:
+                    print(said, file=sys.stderr)
+        return done
     except (gitio.GitError, StoreError, outline.OutlineError, ValueError, RuntimeError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2

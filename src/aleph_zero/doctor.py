@@ -9,7 +9,7 @@ from pathlib import Path
 
 import apsw
 
-from . import gitio, indexer, indexers, lang, plain
+from . import firstrun, gitio, indexer, indexers, lang, plain
 from .chunking import CHUNKER_VERSION
 from .lang import parse
 from .store import SCHEMA_VERSION, index_file, state_reason
@@ -38,6 +38,7 @@ def check(cwd: Path) -> list[Row]:
     if state_reason(info.common_dir):
         rows.append(Row("note", "index location", f"the index is kept in the cache directory: {state_reason(info.common_dir)}"))
     rows.append(_untracked_cache(info.root))
+    rows.append(_setup(info.root))
     rows.extend(_checkout(cwd))
     return rows
 
@@ -191,6 +192,21 @@ def _vector_rows(index: Path, said: str) -> str:
     except apsw.Error:
         return said
     return f"{said}, {used} rows in use, {free} free to be used again"
+
+
+def _setup(root: Path) -> Row:
+    """What `aleph setup` would still ask (ADR-013). Shown here; only that command asks."""
+    from .engine import Engine
+
+    try:
+        steps = firstrun.of(Engine(root).status())
+    except Exception as exc:  # noqa: BLE001 - the doctor reports, it does not fall over what it looks at
+        return Row("note", "setup", f"the setup list could not be made: {exc}")
+    waiting = [step.title for step in steps if step.state == "open"]
+    if not waiting:
+        return Row("ok", "setup", "nothing is open (`aleph setup --again` asks about what was declined)")
+    return Row("note", "setup", f"{len(waiting)} of {len(steps)} things are open: {'; '.join(waiting)}. "
+                                "`aleph setup` asks about them once; search needs none of them")
 
 
 def _untracked_cache(root: Path) -> Row:

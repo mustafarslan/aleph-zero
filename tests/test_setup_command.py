@@ -127,3 +127,39 @@ def test_each_thing_has_a_flag_of_its_own_for_a_script_or_an_agent(repo, docs_re
     assert built == ["binary", "model"]
     assert _setup(repo, "--dense") == 0
     assert settings.read(settings.repo_file(gitio.common_dir(repo.root)))["dense"] is True
+
+
+def test_the_doctor_and_the_agent_s_status_show_the_same_list_and_act_on_nothing(repo, monkeypatch):
+    from aleph_zero import doctor
+
+    row = next(row for row in doctor.check(repo.root) if row.name == "setup")
+    assert row.level == "note" and "aleph setup" in row.detail and "5 of 5" in row.detail
+    status = Engine(repo.root).status()["setup"]
+    assert status["open"] == ["claude", "worker", "sources", "vectors", "untracked_cache"] and "aleph setup" in status["how"]
+    assert not settings.repo_file(gitio.common_dir(repo.root)).exists()         # looking keeps nothing
+    _terminal(monkeypatch, "n", "n", "", "n")
+    assert _setup(repo) == 0
+    assert Engine(repo.root).status()["setup"]["open"] == []
+    row = next(row for row in doctor.check(repo.root) if row.name == "setup")
+    assert row.level == "ok" and "nothing is open" in row.detail
+
+
+def test_the_hint_is_one_line_once_on_a_terminal_and_never_from_the_server(repo, capsys, monkeypatch):
+    assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
+    assert "aleph setup" not in capsys.readouterr().err            # not a terminal: an agent or a pipe reads this
+    monkeypatch.setattr(firstrun, "hint_wanted", lambda: True)     # standard error is a terminal
+    assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err.count("aleph setup") == 1 and captured.err.count("\n") == 1 and "render_invoice" in captured.out
+    assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
+    assert capsys.readouterr().err == ""                           # once
+    assert "serve" not in cli.HINTED and "setup" not in cli.HINTED and "search" in cli.HINTED
+
+
+def test_no_hint_where_setup_was_already_answered(repo, capsys, monkeypatch):
+    _terminal(monkeypatch, "n", "n", "", "n")
+    assert _setup(repo) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(firstrun, "hint_wanted", lambda: True)
+    assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
+    assert capsys.readouterr().err == ""

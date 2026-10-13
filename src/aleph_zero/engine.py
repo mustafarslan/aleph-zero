@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import archfacts, architecture, callgraph, decisions, plain, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, settings, sources, symbols
+from . import archfacts, architecture, callgraph, decisions, plain, dense_policy, firstrun, gitio, indexers, lang, memory, memstat, render, scipstore, settings, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -561,7 +561,7 @@ class Engine:
             linked, problem = sources.describe(view.common_dir), ""
         except sources.SourceError as exc:
             linked, problem = [], str(exc)
-        return {
+        found = {
             "root": str(view.root), "files_in_view": len(view.files), "dirty": len(view.dirty), "pending": pending,
             "chunks_in_view": counts["chunks_in_view"], "symbols_in_view": counts["symbols_in_view"],
             "imports_in_view": counts["imports_in_view"], "index": str(index_file(view.common_dir)),
@@ -586,6 +586,8 @@ class Engine:
                       "compiler_index_documents": index.conn.execute("SELECT count(*) FROM scip_documents").fetchall()[0][0]},
             "memory": {**self._memory(), **self._memory_counts(view)},
         }
+        found["setup"] = firstrun.summary(found)     # what a person could still set up (ADR-013): shown, never acted on
+        return found
 
     # ---- long-term memory -----------------------------------------------------------------------
 
