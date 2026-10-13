@@ -89,8 +89,16 @@ MODERN = "2026-07-28"
 VERSION, SERVER = "io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/serverInfo"
 
 
-def test_until_it_is_switched_on_the_newer_revision_is_declined_and_the_client_falls_back(client):
-    # Claude Code 2.1.296 first sends server/discover and, on "method not found", sends initialize.
+@pytest.fixture
+def handshake_only(repo):
+    found = Client(repo.root, env={"ALEPH_MCP_STATELESS": "0"})
+    yield found
+    found.close()
+
+
+def test_switched_off_the_newer_revision_is_declined_and_the_client_falls_back(handshake_only):
+    # The way back. Claude Code 2.1.296 first sends server/discover and, on "method not found", sends initialize.
+    client = handshake_only
     for params in ({}, {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}):       # as it was seen to ask, and in full
         client.send({"jsonrpc": "2.0", "id": "server-discover-probe-1", "method": "server/discover", "params": params})
         reply = client.read()
@@ -101,7 +109,7 @@ def test_until_it_is_switched_on_the_newer_revision_is_declined_and_the_client_f
 
 @pytest.fixture
 def modern(repo):
-    found = Client(repo.root, env={"ALEPH_MCP_STATELESS": "1"})
+    found = Client(repo.root)     # nothing set: the revision without a handshake is what a session gets
     yield found
     found.close()
 
@@ -157,7 +165,7 @@ def test_the_sdk_s_client_of_the_new_revision_can_discover_list_and_call(repo):
     from mcp.client.stdio import stdio_client
 
     async def run():
-        params = StdioServerParameters(command=sys.executable, env={**os.environ, "ALEPH_MCP_STATELESS": "1"},
+        params = StdioServerParameters(command=sys.executable, env={**os.environ},
                                        args=["-m", "aleph_zero.cli", "--cwd", str(repo.root), "serve"])
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:

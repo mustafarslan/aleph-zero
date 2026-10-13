@@ -37,11 +37,11 @@ LIST_TTL_MS = 300_000       # the tools do not change while the server runs; a c
 
 
 def stateless_enabled() -> bool:
-    """Whether the revision without a handshake is answered. Off unless ALEPH_MCP_STATELESS=1: it is tested against
-    the protocol's own SDK client, but Claude Code's client, which asks for it first and falls back to the handshake
-    when told "method not found", has not been seen to work with it. Until it has, the fallback that is known to
-    work stays what a session gets."""
-    return os.environ.get("ALEPH_MCP_STATELESS", "") == "1"
+    """Whether the revision without a handshake is answered. On unless ALEPH_MCP_STATELESS=0. Claude Code's client asks
+    for it first (`server/discover`) and was watched to list the tools and have a search answered that way, with no
+    `initialize` on the wire (2.1.296, 2026-10-13). Switched off, the server says "method not found" to that first
+    question and the client falls back to the handshake, as every session did before."""
+    return os.environ.get("ALEPH_MCP_STATELESS", "") != "0"
 SERVER_INFO = {"name": "aleph-zero", "version": "0.1.0"}
 
 INSTRUCTIONS = """\
