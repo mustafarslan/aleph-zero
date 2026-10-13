@@ -97,6 +97,40 @@ def _rebuilding(method):
     return call
 
 
+class _EarlyVector:
+    """A question's vector, asked of the worker on a thread of its own while git is asked about the worktree: the
+    two took 17 to 45 ms and 40 to 100 ms one after the other. A connection of its own, so that nothing else reads
+    it; asked once, whatever the question does afterwards (it may look at the index up to three times)."""
+
+    def __init__(self, sock: Path, capacity: int, query: str) -> None:
+        self._vector = None
+        self._failed: Exception | None = None
+        self._thread = threading.Thread(target=self._ask, args=(sock, capacity, query), name="aleph-query-vector", daemon=True)
+        self._thread.start()
+
+    def _ask(self, sock: Path, capacity: int, query: str) -> None:
+        from .embed.client import EmbedClient
+
+        client = EmbedClient(sock, capacity=capacity, timeout=QUERY_EMBED_SECONDS)
+        try:
+            self._vector = client.embed([query], kind="query")[0]
+        except Exception as exc:  # noqa: BLE001 - whatever it is, the question is answered without its vector and says why
+            self._failed = exc
+        finally:
+            client.close()
+
+    def result(self):
+        """The vector. Raises Unavailable as the client does; waits no longer than the client itself would."""
+        from .embed.client import Unavailable
+
+        self._thread.join(QUERY_EMBED_SECONDS * 2 + 1.0)   # the client gives up by itself: twice its limit at the very most
+        if self._thread.is_alive():
+            raise Unavailable(f"the worker did not answer within {QUERY_EMBED_SECONDS} s")
+        if self._failed is not None:
+            raise self._failed if isinstance(self._failed, Unavailable) else Unavailable(str(self._failed))
+        return self._vector
+
+
 class Engine:
     def __init__(self, default_cwd: Path | None = None, dense: bool | None = None) -> None:
         self.default_cwd = Path(default_cwd) if default_cwd is not None else Path.cwd()
@@ -106,6 +140,7 @@ class Engine:
         self._stores: dict[Path, object] = {}
         self._decisions: dict[int, tuple] = {}
         self._embedder = None  # the connection to the worker used for queries
+        self._with_vectors: dict[str, bool] = {}   # per directory asked from: whether its last question used vectors
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
@@ -216,9 +251,11 @@ class Engine:
                timeout_ms: int | None = None) -> render.Answer:
         families = _families(lang)
         started, until = _limits(timeout_ms)
+        asked_from = str(self.default_cwd if cwd is None else cwd)
+        early = self._early_vector(asked_from, query)
 
         def read(index: Index, view: View):
-            note, covered, chunks, nearest = self._dense(index, view, query)
+            note, covered, chunks, nearest = self._dense(index, view, query, early)
             return note, covered, chunks, lambda: run_search(
                 index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest) or []
 
@@ -226,7 +263,21 @@ class Engine:
             (note, covered, chunks, hits), pending, late = self._consistent(cwd, started, until, read, ("", 0, 0))
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
+        self._with_vectors[asked_from] = note == "used"
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
+
+    def _early_vector(self, asked_from: str, query: str) -> _EarlyVector | None:
+        """The question's vector asked for now, before the worktree is known, where the last question from the same
+        directory used vectors. Whether they take part is decided afterwards as ever; where they do not, the
+        vector is not used."""
+        if self.dense is False or not self._with_vectors.get(asked_from):
+            return None
+        from .embed import worker
+
+        sock = worker.socket_path()
+        if not sock.exists():
+            return None
+        return _EarlyVector(sock, worker.capacity_tokens(), query)
 
     @_rebuilding
     def embed(self, cwd: Path | str | None = None, budget_seconds: float = float("inf"), batch: int | None = None,
@@ -784,7 +835,7 @@ class Engine:
         index, _, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
         return self._dense_decision(index)[0]
 
-    def _dense(self, index: Index, view: View, query: str):
+    def _dense(self, index: Index, view: View, query: str, early: _EarlyVector | None = None):
         """How vectors take part in this query: (note, chunks covered, chunks, the function
         that ranks by vector or None). Nothing here may fail or delay the query."""
         if not self._dense_decision(index)[0]:
@@ -799,10 +850,13 @@ class Engine:
         sock = worker.socket_path()
         if not sock.exists():  # no probe here: a hung worker would hold the query for the probe's timeout
             return "the embedding worker is not running", covered, chunks, None
-        if self._embedder is None or self._embedder.socket_path != sock:
-            self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
         try:
-            vector = self._embedder.embed([query], kind="query")[0]
+            if early is not None:
+                vector = early.result()
+            else:
+                if self._embedder is None or self._embedder.socket_path != sock:
+                    self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
+                vector = self._embedder.embed([query], kind="query")[0]
         except Unavailable as exc:
             return str(exc), covered, chunks, None
         return "used", covered, chunks, lambda limit, scoped: [chunk_id for chunk_id, _ in

@@ -187,3 +187,55 @@ def test_a_verdict_is_read_from_the_repositories_the_product_calls_that_language
     assert "main language" in dense_policy.VERDICTS["go"].evidence
     for unmeasured in ("c", "rust"):
         assert "no benchmark has been run" in dense_policy.decide(None, unmeasured)[1]
+
+
+def test_the_query_s_vector_is_asked_for_while_git_is_asked_about_the_worktree(repo, fake_worker, monkeypatch):
+    # The worker needs 17 to 45 ms for a question's vector and git 40 to 100 ms for the worktree; one after the other
+    # was a fifth to a third of a question with vectors. The same vector, the same answer.
+    from aleph_zero import gitio
+    from aleph_zero.embed.client import EmbedClient
+
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    engine = Engine(repo.root, dense=True)
+    first = engine.search("how is an invoice rendered")          # the first question: nothing is known of the worktree yet
+    engine.embed()
+    expected = engine.search("how is an invoice rendered")
+    assert expected.dense == "used"
+    events: list[str] = []
+    real_embed, real_status = EmbedClient.embed, gitio.status
+
+    def embed(self, texts, kind):
+        events.append("the worker is asked")
+        return real_embed(self, texts, kind)
+
+    def status(root):
+        found = list(real_status(root))
+        events.append("git has answered")
+        return found
+
+    monkeypatch.setattr(EmbedClient, "embed", embed)
+    monkeypatch.setattr(gitio, "status", status)
+    answer = engine.search("how is an invoice rendered")
+    assert events.index("the worker is asked") < events.index("git has answered") and events.count("the worker is asked") == 1
+    assert answer.dense == "used" and [(hit.path, hit.start_line, hit.score) for hit in answer.hits] == [(hit.path, hit.start_line, hit.score) for hit in expected.hits]
+    assert first.hits                                             # and the first question was answered as ever
+
+
+def test_a_question_s_early_vector_is_not_asked_for_where_vectors_take_no_part(repo, fake_worker, monkeypatch):
+    from aleph_zero.embed.client import EmbedClient
+
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    asked: list[str] = []
+    real = EmbedClient.embed
+    monkeypatch.setattr(EmbedClient, "embed", lambda self, texts, kind: asked.append(kind) or real(self, texts, kind))
+    off = Engine(repo.root, dense=False)
+    for _ in range(3):
+        assert off.search("how is an invoice rendered").dense == ""
+    undecided = Engine(repo.root)                                 # Python: the verdict is against, so nothing is asked either
+    for _ in range(3):
+        undecided.search("how is an invoice rendered")
+    assert asked == []
