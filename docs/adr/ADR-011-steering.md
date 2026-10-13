@@ -132,6 +132,28 @@ What follows was looked at after the result was known. It says where to look nex
 - **What a session costs in either arm.** A session without the plugin took 5 turns at the median and 30,000 tokens a turn; on rung 2, 6 turns and 33,100 a turn. The agent without the plugin named the right file in all 30 tasks, in 4 tool calls at the median: on these tasks there is little left to save.
 - **The engine was called by the agent in 2 of 30 rung-2 sessions.** Two sessions say nothing.
 
+### What was changed after the pass, and on what evidence (2026-10-13)
+
+Rung 2 now asks the engine for code only and fills five lines with five files, the further places of a listed file riding on its line (`src/a.py:3-9, 40-46  function  alpha`); until now it took the engine's five results of any kind, a line a result. The engine's ranking and its rule for documentation among results are not touched: every verdict of ADR-002 was read with them as they are.
+
+What "better" would mean was written before anything was run (the ledger of that day): on the 400 prepared Loc-Bench questions, each asked as a session's prompt is (issue text and the harness's instruction, first 2,000 characters; words and names, since vectors are off for Python), the share of questions where a file of the answer is among the files named up by at least 5 points, and the share where anything is added not down by more than 2. No session is spent on this: `bench/ab/injected.py bench/data/benchc`.
+
+| What rung 2 asks for and shows | Something added | A file of the answer among them | Files named when added |
+|---|---|---|---|
+| Five places, any kind (the run of 2026-10-13) | 258 of 400 | 126 (31.5%) | 4.45 |
+| Five places, code only | 258 | 141 (35.3%) | 4.24 |
+| Five files, any kind | 258 | 143 (35.8%) | 5.0 |
+| **Five files, code only (now)** | 258 | **146 (36.5%)** | 5.0 |
+
+Up by 20 questions, which is 5.0 points: the rule is met exactly at its edge, and that is all it is. On the 30 tasks of the run it is 16 instead of 14. The mod's tests were changed first and failed first; one real session on rung 2 showed the changed mod loading and adding its lines.
+
+**What this does not show.** Whether a session then costs less. In the pass above the 14 pairs that were handed a file of the answer came out at 0.984 of the tokens, which with 14 pairs and differences of 20 to 40% between two runs of one task is a lean and not a finding. A better list is a condition for rung 2 to help, not evidence that it does, and the pass above is not read again for it.
+
+**Three things the look afterwards raises, none decided.**
+- *The standing instruction is not followed.* Rung 2 includes rung 1 (a section in the system prompt, and a pointer in the descriptions of Grep and Glob, both saying to call `search` first). The agent's first search was the engine's in 2 of 30 sessions; in the pilot it was 2 of 4. Rungs 0 and 1 rest on that instruction alone.
+- *Rung 2 asks with a whole prompt, and on whole issue texts vectors pass their gate for Python* (+11.0 points on the 400, ADR-002), while the verdict that switched them off was read on first lines as "the closest to what an agent types". What an agent types was hardly seen (two queries in sixty sessions). Whether rung 2's own question should use vectors where the worker is installed is a question for the owner: it costs the embedding of every repository.
+- *The tasks leave little room.* Without the plugin the agent named the right file in 30 of 30 tasks, in four tool calls at the median. A fifth fewer is one call of four, or two turns of five. Whether the gate or the tasks should change is the owner's to decide; both readings are in the deferred list.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

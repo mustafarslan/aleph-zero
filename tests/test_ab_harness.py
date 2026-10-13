@@ -268,3 +268,14 @@ def test_the_pairs_of_a_run_are_read_by_what_rung_2_gave_them():
     assert groups["locations added, no file of the answer among them"] == {
         "tasks": 1, "tokens_ratio": 2.0, "tool_calls_ratio": 1.0, "file_hits": [0, 1]}
     assert groups["nothing added"] == {"tasks": 1, "tokens_ratio": 1.0, "tool_calls_ratio": 1.0, "file_hits": [0, 0]}
+
+
+def test_locations_can_be_read_one_line_a_file_with_the_further_places_of_a_file_on_its_line():
+    import injected
+
+    hit = lambda path, start, sources=("lexical", "symbol"): {"path": path, "start_line": start, "end_line": start + 9, "sources": list(sources)}  # noqa: E731
+    hits = [hit("src/a.py", 1), hit("src/a.py", 40), hit("src/b.py", 5), hit("src/a.py", 80), hit("src/a.py", 120), hit("src/c.py", 7)]
+    assert injected.added(hits, gold=["src/c.py"], files=2, per_file=True) == {
+        "added": True, "locations": ["src/a.py:1-10, 40-49, 80-89", "src/b.py:5-14"], "files": ["src/a.py", "src/b.py"], "answer_named": False}
+    assert injected.added(hits, gold=["src/c.py"], files=5, per_file=True)["answer_named"] is True
+    assert injected.added(hits, gold=["src/c.py"])["files"] == ["src/a.py", "src/b.py"]          # as the mod has it: five places, three of them in one file

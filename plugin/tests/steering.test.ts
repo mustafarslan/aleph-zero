@@ -102,7 +102,11 @@ test('an engine that fails or never answers leaves the command result as it was'
 test('L2: the first prompt of a session carries locations when two generators agree; later prompts do not', rung('2'), async ($, on) => {
   mock.clock(on)
   connected(on)
-  on('mcp.call', () => engine([hit('src/auth/token_store.py', ['lexical', 'symbol']), hit('docs/guide.md', ['lexical'])]))
+  const asked: any[] = []
+  on('mcp.call', ($, e) => {
+    asked.push(e)
+    return engine([hit('src/auth/token_store.py', ['lexical', 'symbol']), hit('src/auth/sessions.py', ['lexical'])])
+  })
   const sent: any[] = []
   on('prompt.submit', ($, e) => {
     sent.push(e)
@@ -110,6 +114,10 @@ test('L2: the first prompt of a session carries locations when two generators ag
   })
   await $.prompt.submit({ text: 'where are refresh tokens rotated in this service?' })
   await $.prompt.submit({ text: 'and where are invoices rendered every night?' })
+  // Code only, and enough hits to fill five files: an issue's words match the issue template it was written on,
+  // and of five results several lie in one file (measured on 400 questions, ADR-011).
+  expect(JSON.stringify(asked[0])).toContain('"kind":"code"')
+  expect(JSON.stringify(asked[0])).toContain('"k":15')
   expect(sent[0].context.length).toBe(1)
   expect(sent[0].context[0]).toContain('src/auth/token_store.py:4-6  function  refresh_token')
   expect(sent[0].context[0]).toContain('starting point')

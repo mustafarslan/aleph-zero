@@ -74,9 +74,13 @@ test('an engine answer is read in whatever shape it arrives, and anything else i
   expect(resultText({ content: [] })).toBe('')
 })
 
-test('locations are path, lines, kind and name, each place once, never code', async () => {
-  const lines = locations([hit('a.py', ['x'], 'alpha'), hit('a.py', ['x'], 'alpha'), hit('b.py', ['x'], '')], 5)
-  expect(lines).toBe('a.py:3-9  function  alpha\nb.py:3-9  function')
+test('locations are one line a file: its path, its places, kind and name of the first, never code', async () => {
+  const at = (path: string, start: number, symbol = 'f') =>
+    ({ path, start_line: start, end_line: start + 6, kind: 'function', symbol, sources: ['x'], score: 0.03 })
+  // Five results of which four lie in one file named two files; now the lines go to files and a file's further places ride on its line.
+  const hits = [at('a.py', 3, 'alpha'), at('a.py', 3, 'alpha'), at('b.py', 3, ''), at('a.py', 40, 'beta'), at('a.py', 80), at('a.py', 120), at('c.py', 3)]
+  expect(locations(hits, 2)).toBe('a.py:3-9, 40-46, 80-86  function  alpha\nb.py:3-9  function')        // three places of a file at most; c.py is a third file
+  expect(locations(hits, 5).split('\n')).toEqual(['a.py:3-9, 40-46, 80-86  function  alpha', 'b.py:3-9  function', 'c.py:3-9  function  f'])
   expect(locations([hit('a.py', ['x']), hit('b.py', ['x']), hit('c.py', ['x'])], 2).split('\n').length).toBe(2)
 })
 

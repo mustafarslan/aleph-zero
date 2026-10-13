@@ -64,18 +64,24 @@ export function hitsOf(answer) {
   }
 }
 
-// Hits as a few lines an agent can act on: path:lines, kind, name. Never code.
+// Hits as a few lines an agent can act on: path:lines, kind, name. Never code. A file gets one line: of five results
+// several lie in one file, and a line a result named few files. The further places of a listed file ride on its
+// line (three at most), with the kind and name of its best.
+const PLACES_A_FILE = 3
+
 export function locations(hits, limit) {
-  const lines = []
-  const seen = new Set()
+  const files = new Map()
   for (const hit of hits) {
-    const where = hit.path + ':' + hit.start_line + '-' + hit.end_line
-    if (seen.has(where)) continue
-    seen.add(where)
-    lines.push(where + '  ' + hit.kind + (hit.symbol ? '  ' + hit.symbol : ''))
-    if (lines.length >= limit) break
+    let file = files.get(hit.path)
+    if (!file) {
+      if (files.size >= limit) continue  // a later file: the lines are full, but a listed file may still gain a place
+      file = { places: [], what: '  ' + hit.kind + (hit.symbol ? '  ' + hit.symbol : '') }
+      files.set(hit.path, file)
+    }
+    const place = hit.start_line + '-' + hit.end_line
+    if (!file.places.includes(place) && file.places.length < PLACES_A_FILE) file.places.push(place)
   }
-  return lines.join('\n')
+  return [...files].map(([path, file]) => path + ':' + file.places.join(', ') + file.what).join('\n')
 }
 
 // ---- L2: the first prompt of a session ------------------------------------------------------

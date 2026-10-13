@@ -430,7 +430,9 @@ export function register(on, options) {
     // The one chance goes to the first prompt that is a question: "hi" does not use it up.
     if (rung < 2 || prompts > 0 || !worthAsking(e.text)) return next(e)
     prompts += 1
-    const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 5 }))
+    // Code only, and enough hits to fill five files: a bug report's words match the issue template it was written on,
+    // and documentation took two places of five (ADR-011, the reading after the run of 2026-10-13).
+    const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' }))
     if (!confident(hits)) return next(e)
     meter.added.prompt += 1
     return next({ ...e, context: [...(e.context ?? []), promptContext(hits)] })
