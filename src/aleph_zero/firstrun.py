@@ -6,7 +6,12 @@ anything; the commands that do are named in each step.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import shutil
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from . import dense_policy, gitio, settings, sources
 
 CHUNKS_A_SECOND = 100          # what the worker embeds on this kind of machine (ADR-005): for the estimate only
 WORKER_COST = "310 MB download and a build of a few minutes; uses the network"
@@ -89,3 +94,104 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
 
 def open_steps(steps: list[Step]) -> list[str]:
     return [step.key for step in steps if step.state == "open"]
+
+
+# ---- what is found, and the menu a person answers ------------------------------------------------
+
+
+def on_terminal() -> bool:
+    """A person can be asked: both ends are a terminal. An agent or a script gets the list and the flags."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _plugin_dir() -> str | None:
+    """The plugin of the checkout this engine runs from; None for an installed package, which has none."""
+    found = Path(__file__).resolve().parents[2] / "plugin"
+    return str(found) if (found / ".claude-plugin" / "plugin.json").exists() else None
+
+
+def look(status: dict) -> Found:
+    """What is found, from the engine's status of the worktree (after it was indexed) and the machine."""
+    from .embed import setup as embed_setup
+
+    verdict, why = dense_policy.decide(None, status.get("main_language"))
+    vectors = status.get("vectors") or {}
+    return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
+                 language=status.get("main_language"), verdict=verdict, verdict_why=why,
+                 chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
+                 sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
+                 repository=bool(status.get("repository", True)))
+
+
+def answers_file(status: dict, step: Step) -> Path:
+    """Where the answer to a step is kept: for the machine, or beside this repository's index."""
+    return settings.machine_file() if step.scope == "machine" else Path(status["index"]).parent / "settings.json"
+
+
+def text(steps: list[Step]) -> str:
+    """The checklist as a person reads it."""
+    lines = []
+    for step in steps:
+        lines.append(f"  {step.state:9} {step.title}" + ("  (this machine)" if step.scope == "machine" else ""))
+        lines.append(f"            {step.detail}")
+        if step.state != "done":
+            if step.cost:
+                lines.append(f"            costs: {step.cost}")
+            lines.append(f"            by hand: {step.command}")
+    return "\n".join(lines)
+
+
+def as_json(steps: list[Step]) -> dict:
+    return {"steps": [asdict(step) for step in steps], "open": open_steps(steps)}
+
+
+class Menu:
+    """The questions of `aleph setup`, one step at a time. What a yes does is given from outside (`act`), so that
+    this asks and keeps answers and nothing else."""
+
+    def __init__(self, status: dict, say, ask, act) -> None:
+        self.status, self.say, self.ask, self.act = status, say, ask, act
+        self.repo_file = Path(status["index"]).parent / "settings.json"
+
+    def _yes(self, question: str, suggested: bool) -> bool:
+        reply = self.ask(f"{question} {'[Y/n]' if suggested else '[y/N]'} ").strip().lower()
+        return suggested if not reply else reply.startswith("y")
+
+    def step(self, step: Step, found: Found) -> None:
+        kept = answers_file(self.status, step)
+        self.say(f"\n{step.title}\n  {step.detail}" + (f"\n  costs: {step.cost}" if step.cost else ""))
+        if step.key == "claude":
+            self.say(f"  run {step.command}\n  (Aleph does not change Claude Code's settings itself)")
+            settings.answer(kept, "claude", "done" if self._yes("Is Claude Code connected, or will you run that now?", step.suggested) else "declined")
+        elif step.key == "worker":
+            if self._yes("Install the embedding worker and its model?", step.suggested):
+                self.act("worker")                     # what was declined before is installed now: the answer is what is found
+                settings.answer(kept, "worker", None)
+            else:
+                settings.answer(kept, "worker", "declined")
+        elif step.key == "sources":
+            added = 0
+            while True:
+                location = self.ask("A path or a URL to link (an empty line for none, or no more): ").strip()
+                if not location:
+                    break
+                try:
+                    self.say(f"  {self.act('source', location)}")
+                    added += 1
+                except sources.SourceError as problem:
+                    self.say(f"  not linked: {problem}")
+            settings.answer(kept, "sources", None if added else "declined")
+        elif step.key == "vectors":
+            if self._yes("Search by meaning in this repository (makes its vectors now)?", step.suggested):
+                settings.change(kept, dense=True)      # kept for the repository: the vectors made are then used
+                settings.answer(kept, "vectors", None)
+                self.say(f"  {self.act('embed')}")
+            else:
+                settings.change(kept, dense=False)
+        elif step.key == "untracked_cache":
+            if self._yes("Switch git's untracked cache on for this repository (in its index; no configuration is changed)?", step.suggested):
+                self.act("untracked_cache")
+                settings.answer(kept, "untracked_cache", None)
+            else:
+                self.say("  by hand, for every repository of yours: git config --global core.untrackedCache true")
+                settings.answer(kept, "untracked_cache", "declined")

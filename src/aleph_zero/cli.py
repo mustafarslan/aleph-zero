@@ -217,6 +217,83 @@ def _embed(args) -> int:
     return 0
 
 
+def _setup(args) -> int:
+    """The checklist of ADR-013: shown to anyone, asked on a terminal, done one flag at a time otherwise."""
+    from . import firstrun, settings
+    from .embed import setup as embed_setup
+
+    say = lambda text: print(text, flush=True)  # noqa: E731
+    index, view = _open(args.cwd)
+    while index.sync(view, budget_seconds=30.0).pending:       # the list needs the counts; indexing costs seconds and nothing else
+        fresh = build_view(args.cwd)
+        if fresh.fingerprint == view.fingerprint:
+            break
+        view = fresh
+    index.conn.close()
+
+    def now():
+        status = Engine(args.cwd).status()
+        found = firstrun.look(status)
+        kept = settings.read(Path(status["index"]).parent / "settings.json")
+        return status, found, firstrun.plan(found, kept, settings.read(settings.machine_file()))
+
+    def act(what: str, *given: str) -> str:
+        if what == "worker":
+            return f"installed {embed_setup.install_binary(None, say)} and {embed_setup.install_model(None, say)}"
+        if what == "source":
+            added = sources.add(args.cwd, given[0])
+            return f"linked {added.name} ({added.kind}): {added.location}"
+        if what == "untracked_cache":
+            gitio.git(gitio.repo_info(args.cwd).root, "update-index", "--untracked-cache")
+            return "git's untracked cache is on for this repository"
+        try:                                                    # 'embed': in the foreground, and it can be left
+            report = Engine(args.cwd, dense=True).embed(progress=lambda done, left: print(f"  {done} embedded", end="\r", flush=True))
+        except KeyboardInterrupt:
+            return "interrupted; `aleph embed run` continues where this stopped"
+        return (f"embedded {report.embedded} chunks in {report.seconds:.0f} s; {report.remaining} left"
+                + (f" ({report.reason}); `aleph embed run` continues" if report.reason else ""))
+
+    status, found, steps = now()
+    repo_file = Path(status["index"]).parent / "settings.json"
+    flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
+    if args.worker:
+        say(act("worker"))
+        settings.answer(settings.machine_file(), "worker", None)
+    for location in args.source or ():
+        say(act("source", location))
+        settings.answer(repo_file, "sources", None)
+    if args.dense or args.no_dense or args.embed:
+        settings.change(repo_file, dense=not args.no_dense)     # kept for the repository: vectors made are then used
+    if args.embed:
+        say(act("embed"))
+    if args.untracked_cache:
+        say(act("untracked_cache"))
+        settings.answer(repo_file, "untracked_cache", None)
+    if not flagged and not args.json and firstrun.on_terminal():
+        say(f"Setting up Aleph Zero for {status['root']}\n\n{firstrun.text(steps)}")
+        menu = firstrun.Menu(status, say, input, act)
+        try:
+            for key in [step.key for step in steps]:
+                status, found, steps = now()                    # an answer changes what the next question is
+                step = next(step for step in steps if step.key == key)
+                asked = step.state == "open" or (args.again and step.state == "declined")
+                if asked and not (key == "vectors" and not found.worker):
+                    menu.step(step, found)
+        except (KeyboardInterrupt, EOFError):
+            say("\nleft as it is: `aleph setup` asks about the rest")
+        settings.change(repo_file, hint_shown=True)
+        say("")
+    status, found, steps = now()
+    if args.json:
+        print(json.dumps(firstrun.as_json(steps), indent=2))
+        return 0
+    say(firstrun.text(steps))
+    if firstrun.open_steps(steps) and not firstrun.on_terminal():
+        say("\nAnswer these on a terminal with `aleph setup`, or one at a time: --worker, --source LOCATION, --embed, "
+            "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
+    return 0
+
+
 def _memory(args) -> int:
     engine = Engine(args.cwd, dense=False)
     if args.action == "list":
@@ -348,6 +425,18 @@ def main(argv: list[str] | None = None) -> int:
     actions.add_parser("remove").add_argument("name")
     actions.add_parser("refresh", help="fetch URL sources now").add_argument("name", nargs="?")
     source.set_defaults(run=_source)
+
+    first = commands.add_parser("setup", help="what can be set up here, asked once on a terminal (search works without any of it)")
+    first.add_argument("--again", action="store_true", help="ask again about what was declined")
+    first.add_argument("--json", action="store_true", help="the checklist as JSON; nothing is asked")
+    first.add_argument("--worker", action="store_true", help="install the embedding worker and its model (310 MB; uses the network)")
+    first.add_argument("--source", action="append", metavar="LOCATION", help="link a repository by path or URL (a URL uses the network)")
+    first.add_argument("--embed", action="store_true", help="make this repository's vectors now and use them here")
+    chosen = first.add_mutually_exclusive_group()
+    chosen.add_argument("--dense", action="store_true", help="use search by meaning in this repository, whatever its language's verdict")
+    chosen.add_argument("--no-dense", action="store_true", help="do not use search by meaning in this repository")
+    first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this repository's index (no configuration is changed)")
+    first.set_defaults(run=_setup)
 
     health = commands.add_parser("doctor", help="check that everything Aleph needs is in place")
     health.add_argument("--fetch-grammars", action="store_true", help="download missing grammars (uses the network)")
