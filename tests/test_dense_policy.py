@@ -137,3 +137,24 @@ def test_cpp_has_a_verdict_in_favour_and_says_on_what():
     assert on is True and "vectors help" in why
     assert dense_policy.decide(None, "c")[0] is False and "no benchmark has been run for c " in dense_policy.decide(None, "c")[1]      # C was not run: its own questions, its own verdict
     assert dense_policy.decide(False, "cpp") == (False, "switched off by hand")
+
+
+def test_a_repository_s_own_choice_decides_where_no_flag_does_and_is_read_again_when_it_changes(repo, monkeypatch):
+    """ADR-013: search by meaning can be chosen for one repository and kept, beside its index."""
+    from aleph_zero import gitio, settings
+
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    chosen = settings.repo_file(gitio.common_dir(repo.root))
+    engine = Engine(repo.root)                                   # Python: the verdict is against
+    assert engine.status()["vectors"]["enabled"] is False
+    settings.change(chosen, dense=True)
+    status = engine.status()["vectors"]                          # the same engine: a server that is running sees the choice
+    assert status["enabled"] is True and "this repository" in status["why"] and "aleph setup" in status["why"]
+    assert engine.search("render_invoice").dense != ""           # decided on: the answer says why no vector was used yet
+    assert Engine(repo.root, dense=False).status()["vectors"]["enabled"] is False        # a flag for one process still wins
+    settings.change(chosen, dense=False)
+    monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
+    off = Engine(repo.root).status()["vectors"]                  # the verdict is for, the repository said no
+    assert off["enabled"] is False and "this repository" in off["why"]
+    settings.change(chosen, dense=None)
+    assert engine.status()["vectors"]["enabled"] is True         # no choice any more: the verdict again

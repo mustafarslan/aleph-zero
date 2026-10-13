@@ -20,7 +20,7 @@ from pathlib import Path
 
 import apsw
 
-from . import archfacts, architecture, callgraph, decisions, plain, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, sources, symbols
+from . import archfacts, architecture, callgraph, decisions, plain, dense_policy, gitio, indexers, lang, memory, memstat, render, scipstore, settings, sources, symbols
 from . import view as views
 from . import outline as outlines
 from .chunking import CHUNKER_VERSION
@@ -697,17 +697,29 @@ class Engine:
                 **store.rows()}
 
     def _dense_decision(self, index: Index) -> tuple[bool, str]:
-        """Whether vectors take part for the worktree this index is synced to, and why."""
+        """Whether vectors take part for the worktree this index is synced to, and why. A flag or ALEPH_DENSE
+        decides for this process; without them the repository's own choice (`aleph setup`, kept beside its
+        index); without that, the benchmark's verdict for its main language."""
         if self.dense is not None:
             return dense_policy.decide(self.dense, None)
-        key = index._view_epoch
+        chosen = Path(index.conn.filename).parent / "settings.json" if index.conn.filename else None
+        try:
+            stamp = chosen.stat().st_mtime_ns if chosen is not None else None
+        except OSError:
+            stamp = None                                   # no file: nobody chose
+        key = (index._view_epoch, stamp)                   # a choice made while a server runs is seen at the next question
         cached = self._decisions.get(id(index))
         if cached is None or cached[0] != key:
-            enabled, why = dense_policy.decide(None, next(iter(index.languages()), None))
+            asked_for = settings.read(chosen).get("dense") if stamp is not None else None
+            if isinstance(asked_for, bool):
+                enabled = asked_for
+                why = f"search by meaning is {'on' if asked_for else 'off'} for this repository (chosen in `aleph setup`)"
+            else:
+                enabled, why = dense_policy.decide(None, next(iter(index.languages()), None))
             if enabled:
                 from .embed import setup
 
-                if not setup.installed():  # the verdict is in favour, but there is nothing to make vectors with
+                if not setup.installed():  # vectors are wanted, but there is nothing to make them with
                     enabled, why = False, why + "; the embedding worker is not installed (`aleph embed setup`)"
             cached = (key, (enabled, why))
             self._decisions[id(index)] = cached

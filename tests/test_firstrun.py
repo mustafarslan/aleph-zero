@@ -1,0 +1,96 @@
+"""Setting Aleph up the first time (ADR-013): the checklist is a function of what is found and what was answered."""
+from dataclasses import replace
+
+from aleph_zero import firstrun, settings
+
+PYTHON = firstrun.Found(claude=True, plugin_dir="/src/aleph/plugin", worker=False, language="python", verdict=False,
+                        verdict_why="the benchmark for python says vectors do not help enough", chunks=1200, with_vector=0,
+                        sources=0, untracked_cache=False, repository=True)
+CPP = replace(PYTHON, language="cpp", verdict=True, verdict_why="the benchmark for cpp says vectors help")
+
+
+def _by_key(steps):
+    return {step.key: step for step in steps}
+
+
+def test_a_fresh_python_repository_has_five_open_steps_and_none_that_costs_is_suggested():
+    steps = firstrun.plan(PYTHON, repo={}, machine={})
+    # Sources before vectors: what is linked is embedded with the rest, so it is asked for first.
+    assert [step.key for step in steps] == ["claude", "worker", "sources", "vectors", "untracked_cache"]
+    assert {step.state for step in steps} == {"open"}
+    by = _by_key(steps)
+    assert by["claude"].suggested and "claude --plugin-dir /src/aleph/plugin" in by["claude"].command
+    assert not by["worker"].suggested and "310 MB" in by["worker"].cost and by["worker"].scope == "machine"
+    assert not by["vectors"].suggested and "do not help enough" in by["vectors"].detail and by["vectors"].scope == "repository"
+    assert not by["sources"].suggested and not by["untracked_cache"].suggested
+    assert by["untracked_cache"].command == "git update-index --untracked-cache"       # never `git config`: that is the person's to run
+
+
+def test_where_the_verdict_is_for_vectors_the_worker_and_the_vectors_are_suggested_with_what_they_cost():
+    by = _by_key(firstrun.plan(CPP, repo={}, machine={}))
+    assert by["worker"].suggested and by["vectors"].suggested
+    assert "1,200 chunks" in by["vectors"].cost and "interrupted" in by["vectors"].cost
+
+
+def test_a_person_who_asked_for_search_by_meaning_in_a_python_repository_is_offered_what_it_needs():
+    by = _by_key(firstrun.plan(PYTHON, repo={"dense": True}, machine={}))
+    assert by["worker"].suggested and by["vectors"].suggested and by["vectors"].state == "open"
+    done = _by_key(firstrun.plan(replace(PYTHON, worker=True, with_vector=1200), repo={"dense": True}, machine={}))
+    assert done["worker"].state == "done" and done["vectors"].state == "done"
+
+
+def test_what_is_found_done_is_done_and_what_was_declined_is_not_open_again():
+    found = replace(CPP, worker=True, with_vector=1200, sources=2, untracked_cache=True)
+    by = _by_key(firstrun.plan(found, repo={}, machine={"setup": {"claude": "done"}}))
+    assert {step.state for step in by.values()} == {"done"} and "2 linked" in by["sources"].detail
+    declined = _by_key(firstrun.plan(CPP, repo={"setup": {"sources": "declined", "untracked_cache": "declined"}, "dense": False},
+                                     machine={"setup": {"worker": "declined", "claude": "declined"}}))
+    assert {step.state for step in declined.values()} == {"declined"}
+    assert firstrun.open_steps(firstrun.plan(CPP, repo={}, machine={})) == ["claude", "worker", "sources", "vectors", "untracked_cache"]
+    assert firstrun.open_steps(list(declined.values())) == []
+
+
+def test_vectors_made_for_a_verdict_against_are_not_called_done_until_the_repository_says_to_use_them():
+    made = replace(PYTHON, worker=True, with_vector=1200)
+    assert _by_key(firstrun.plan(made, repo={}, machine={}))["vectors"].state == "open"       # made but not used: still a question
+    assert _by_key(firstrun.plan(made, repo={"dense": True}, machine={}))["vectors"].state == "done"
+
+
+def test_without_the_worker_and_with_a_no_to_it_vectors_are_not_a_question_any_more():
+    by = _by_key(firstrun.plan(CPP, repo={}, machine={"setup": {"worker": "declined"}}))
+    assert by["worker"].state == "declined" and by["vectors"].state == "declined" and "worker" in by["vectors"].detail
+    installed = _by_key(firstrun.plan(replace(CPP, worker=True), repo={}, machine={"setup": {"worker": "declined"}}))
+    assert installed["vectors"].state == "open"            # the worker is there after all: the question stands
+
+
+def test_a_directory_that_is_not_a_repository_is_not_offered_what_needs_one():
+    steps = firstrun.plan(replace(PYTHON, repository=False), repo={}, machine={})
+    assert [step.key for step in steps] == ["claude", "worker", "vectors"]
+
+
+def test_answers_are_kept_in_a_file_and_a_damaged_file_is_no_answers(tmp_path):
+    path = tmp_path / "state" / "settings.json"
+    assert settings.read(path) == {}
+    settings.answer(path, "worker", "declined")
+    settings.change(path, dense=True)
+    assert settings.read(path) == {"setup": {"worker": "declined"}, "dense": True}
+    settings.answer(path, "worker", None)                 # asked again and left open
+    settings.change(path, dense=None)
+    assert settings.read(path) == {"setup": {}}
+    path.write_text("{ not json")
+    assert settings.read(path) == {}
+    settings.answer(path, "claude", "done")               # and it can be written again
+    assert settings.read(path) == {"setup": {"claude": "done"}}
+
+
+def test_the_machine_s_answers_live_in_the_cache_directory_beside_the_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert settings.machine_file() == tmp_path / "aleph-zero" / "settings.json"
+
+
+def test_a_repository_s_answers_live_beside_its_index(repo):
+    from aleph_zero import gitio
+    from aleph_zero.store import index_file
+
+    common = gitio.common_dir(repo.root)
+    assert settings.repo_file(common) == index_file(common).parent / "settings.json"
