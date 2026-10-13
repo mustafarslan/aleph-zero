@@ -301,7 +301,8 @@ def _setup(args) -> int:
             for key in [step.key for step in steps]:
                 status, found, steps = now()                    # an answer changes what the next question is
                 step = next(step for step in steps if step.key == key)
-                asked = step.state == "open" or (args.again and step.state == "declined")
+                # Asked again: what was declined, and the one line that is done only on the person's word.
+                asked = step.state == "open" or (args.again and (step.state == "declined" or (key == "claude" and step.state == "done")))
                 if asked and not (key == "vectors" and not found.worker):
                     menu.step(step, found)
         except (KeyboardInterrupt, EOFError):

@@ -204,3 +204,92 @@ def gitio_common(repo):
     from aleph_zero import gitio
 
     return gitio.common_dir(repo.root)
+
+
+# ---- from the second review of `aleph update` (agy with boost, 2026-10-13), each checked first ----
+
+
+def test_a_source_added_while_a_refresh_is_fetching_is_not_lost(repo, docs_repo, tmp_path, make_repo, monkeypatch):
+    from aleph_zero import gitio
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(docs_repo.root), str(remote)], check=True)
+    sources.add(repo.root, remote.as_uri(), name="handbook")
+    other = make_repo(tmp_path / "other-docs")
+    other.write("notes.md", "# Notes\n\nThe numbat_queue drains at night.\n")
+    other.commit("notes")
+    real = gitio.git
+
+    def fetch_and_meanwhile(cwd, *args):
+        if "fetch" in args:                                        # a fetch takes up to a minute: someone links a source meanwhile
+            sources.add(repo.root, str(other.root), name="notes")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(gitio, "git", fetch_and_meanwhile)
+    assert sources.refresh(repo.root) == {"handbook": "unchanged"}
+    monkeypatch.setattr(gitio, "git", real)
+    assert sorted(source.name for source in sources.load(repo.root)) == ["handbook", "notes"]
+
+
+def test_many_writers_of_the_list_of_sources_leave_a_list(repo, tmp_path, make_repo):
+    import threading
+
+    from aleph_zero import gitio
+
+    made = []
+    for n in range(8):
+        other = make_repo(tmp_path / f"docs-{n}")
+        other.write("a.md", f"# {n}\n")
+        other.commit("a")
+        made.append(other)
+    failures = []
+
+    def link(other, n):
+        try:
+            sources.add(repo.root, str(other.root), name=f"docs-{n}")
+        except Exception as exc:  # noqa: BLE001 - the test is that none happens
+            failures.append(repr(exc))
+
+    writers = [threading.Thread(target=link, args=(other, n)) for n, other in enumerate(made)]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join()
+    assert failures == []
+    assert sorted(source.name for source in sources.load(repo.root)) == sorted(f"docs-{n}" for n in range(8))
+    assert not list((gitio.common_dir(repo.root) / "aleph-zero").glob("sources.json*tmp*"))       # no scratch file left behind
+
+
+def test_a_git_command_that_runs_out_of_time_leaves_no_helper_behind(tmp_path):
+    import socket
+    import threading
+    import time
+
+    from aleph_zero import gitio
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    port = server.getsockname()[1]
+    held = []
+
+    def accept_and_say_nothing():
+        try:
+            while True:
+                held.append(server.accept())
+        except OSError:
+            pass                                                   # the test closed the socket
+
+    threading.Thread(target=accept_and_say_nothing, daemon=True).start()
+    subprocess.run(["git", "init", "-q", str(tmp_path / "r")], check=True)
+    started = time.monotonic()
+    with pytest.raises(gitio.GitTimeout):
+        with gitio.until(time.monotonic() + 2):
+            gitio.git(tmp_path / "r", "ls-remote", f"http://127.0.0.1:{port}/nothing.git")   # a server that accepts and says nothing
+    assert time.monotonic() - started < 6
+    time.sleep(0.5)
+    left = subprocess.run(["pgrep", "-f", f"127.0.0.1:{port}"], capture_output=True, text=True).stdout.split()
+    subprocess.run(["pkill", "-f", f"127.0.0.1:{port}"])
+    server.close()
+    assert left == []                                              # git's own helper went with it

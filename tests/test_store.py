@@ -74,3 +74,33 @@ def test_an_index_of_schema_9_gains_the_table_of_record_vectors_and_keeps_what_i
     assert conn.pragma("user_version") == SCHEMA_VERSION == 10
     assert conn.execute("SELECT count(*) FROM record_vectors").fetchall() == [(0,)]
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == [(1,)]
+
+
+def test_threads_that_first_ask_where_a_repository_s_state_lives_all_get_the_same_answer(repo):
+    """Found by a test of something else (2026-10-13): the probe that says whether the directory beside git's data can
+    be written had one name for the whole process. Two threads probing at once removed each other's file, the
+    second took that for "cannot be written" and put its state in the cache directory: one session, two indexes.
+    A server has two threads that ask this first: the one that answers calls and the one that embeds."""
+    import threading
+
+    from aleph_zero import gitio
+    from aleph_zero.store import db
+
+    common = gitio.common_dir(repo.root)
+    beside = common / "aleph-zero"
+    for _ in range(40):
+        db.forget_state_dirs()
+        start = threading.Barrier(8)
+        answers = []
+
+        def ask():
+            start.wait()
+            answers.append((db.state_dir(common), db.state_reason(common)))
+
+        threads = [threading.Thread(target=ask) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert set(answers) == {(beside, "")}
+    db.forget_state_dirs()

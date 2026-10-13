@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import signal
 import subprocess
 import time
 from contextlib import contextmanager, nullcontext
@@ -105,12 +106,45 @@ def _run(command: list[str]) -> subprocess.CompletedProcess:
     deadline = _DEADLINE.get()
     timeout = None if deadline is None else max(deadline - time.monotonic(), 0.001)
     try:
-        return subprocess.run(command, capture_output=True, env=_env(), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise GitTimeout("git timed out before the time limit") from None
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_env())
     except FileNotFoundError:
         raise GitError("git is not installed, or not on the PATH: Aleph asks git what a repository holds, and whether "
                        "a directory is in one. Install git and try again") from None
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, proc.returncode, out, err)
+    except subprocess.TimeoutExpired:
+        # git starts helpers for the network (git-remote-https, ssh). Killing git alone left them running, holding
+        # a connection to a server that never answers: one pair for every fetch that ran out of time.
+        _stop_with_children(proc)
+        raise GitTimeout("git timed out before the time limit") from None
+    except BaseException:
+        _stop_with_children(proc)       # interrupted: nothing of it is left behind either
+        raise
+
+
+def _children(pid: int) -> list[int]:
+    """The processes a process started, and theirs. Asked of the system while they still run."""
+    try:
+        found = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    direct = [int(child) for child in found if child.isdigit()]
+    return direct + [below for child in direct for below in _children(child)]
+
+
+def _stop_with_children(proc: subprocess.Popen) -> None:
+    # Not a process group of git's own: it would take git out of the terminal's foreground, and a person
+    # adding a source is then never asked for the password git wants to ask for.
+    for pid in [*_children(proc.pid), proc.pid]:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        proc.communicate(timeout=5)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
 
 
 def check_deadline() -> None:

@@ -10,13 +10,15 @@ every worktree of a repository sees the same sources.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
+import threading
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -63,9 +65,22 @@ def _load(common_dir: Path) -> list[Source]:
 def _save(common_dir: Path, found: list[Source]) -> None:
     target = _file(common_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    scratch = target.with_suffix(".json.tmp")
+    # A scratch file of this writer's own: two writers sharing one name replace each other's half-written file.
+    scratch = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     scratch.write_text(json.dumps([asdict(source) for source in found], indent=2) + "\n")
     os.replace(scratch, target)  # other sessions read either the old list or the new one
+
+
+@contextmanager
+def _one_writer(common_dir: Path):
+    """Read the list, change it and write it as one step. Every worktree of a repository shares the list, and a
+    fetch takes up to a minute: without this, the later of two writers puts back the list as it read it and the
+    other's change (a source added meanwhile, another worktree's refresh) is gone. Never held across the network."""
+    directory = state_dir(common_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / "sources.json.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def load(cwd: Path) -> list[Source]:
@@ -88,8 +103,7 @@ def add(cwd: Path, location: str, name: str | None = None, ref: str | None = Non
         name = Path(location.rstrip("/")).name.removesuffix(".git")
     if not _NAME.match(name):
         raise SourceError(f"a source name is letters, digits, dot, dash and underscore, not {name!r}")
-    found = _load(common_dir)
-    if any(source.name == name for source in found):
+    if any(source.name == name for source in _load(common_dir)):
         raise SourceError(f"there is already a source named {name}")
     if is_url:
         source = Source(name, "url", location, ref)
@@ -104,17 +118,22 @@ def add(cwd: Path, location: str, name: str | None = None, ref: str | None = Non
         if linked.common_dir == common_dir:
             raise SourceError(f"{location} is this repository; its files are searched already")
         source = Source(name, "path", str(linked.root))  # the whole repository that contains the path
-    _save(common_dir, [*found, source])
+    with _one_writer(common_dir):
+        found = _load(common_dir)                        # as it is now: the clone above may have taken minutes
+        if any(other.name == name for other in found):
+            raise SourceError(f"there is already a source named {name}")
+        _save(common_dir, [*found, source])
     return source
 
 
 def remove(cwd: Path, name: str) -> None:
     common_dir = gitio.common_dir(cwd)
-    found = _load(common_dir)
-    kept = [source for source in found if source.name != name]
-    if len(kept) == len(found):
-        raise SourceError(f"no source named {name}")
-    _save(common_dir, kept)
+    with _one_writer(common_dir):
+        found = _load(common_dir)
+        kept = [source for source in found if source.name != name]
+        if len(kept) == len(found):
+            raise SourceError(f"no source named {name}")
+        _save(common_dir, kept)
     gone = next(source for source in found if source.name == name)
     if gone.kind == "url":
         shutil.rmtree(clone_dir(common_dir, gone.location), ignore_errors=True)
@@ -141,14 +160,22 @@ def refresh(cwd: Path, name: str | None = None, unattended: bool = False) -> dic
             with gitio.until(time.monotonic() + FETCH_SECONDS), gitio.elsewhere(), (gitio.unattended() if unattended else nullcontext()):
                 gitio.git(clone_dir(common_dir, source.location), "fetch", "--quiet", "--prune", "origin",
                           "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
-            _resolve(common_dir, source)
+                _resolve(common_dir, source)             # under the same time limit, and as unattended as the fetch
             source.last_error = ""
             report[source.name] = "unchanged" if source.tree == before else "updated"
         except gitio.GitError as exc:
             source.last_error = f"fetch failed: {str(exc)[:200]}"
             report[source.name] = f"failed: {str(exc)[:200]}" + (
                 f"; what is searched was fetched {_ago(time.time() - source.fetched_at)} ago" if unattended and source.fetched_at else "")
-    _save(common_dir, found)
+        # What this fetch learned goes into the list as it is NOW, one source at a time: a source added or
+        # removed during the fetch stays as it is, and a refresh that is stopped half way keeps what it did.
+        with _one_writer(common_dir):
+            now = _load(common_dir)
+            for other in now:
+                if other.name == source.name and other.location == source.location:
+                    other.tree, other.object_format = source.tree, source.object_format
+                    other.fetched_at, other.last_error = source.fetched_at, source.last_error
+            _save(common_dir, now)
     return report
 
 

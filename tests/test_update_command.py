@@ -149,7 +149,7 @@ def test_the_hook_lines_are_printed_and_nothing_is_installed(repo, capsys):
     out = capsys.readouterr().out
     engine = Path(sys.executable).with_name("aleph")
     assert f"{engine} update --quiet" in out and "--minutes" in out and "post-merge" in out and "post-checkout" in out
-    assert '[ "$3" = "1" ]' in out and "& )" in out and "--no-fetch" in out      # a change of branch only, detached, and no network from a hook
+    assert '[ "$3" = "1" ] || exit 0' in out and "& )" in out and "--no-fetch" in out   # a change of branch only, detached, and no network from a hook
     hooks = Path(gitio.git(repo.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks").decode().strip())
     assert not (hooks / "post-merge").exists() and not (hooks / "post-checkout").exists()
     assert Engine(repo.root).status()["pending"] > 0               # and nothing was updated: it only prints
@@ -201,11 +201,14 @@ def test_the_printed_hooks_run_under_sh_and_never_fail_git(tmp_path):
     assert switched.exists()
 
 
-def test_the_engine_s_path_is_quoted_in_the_printed_lines(monkeypatch):
+def test_the_engine_s_path_is_quoted_in_the_printed_lines(tmp_path, monkeypatch):
     import sys
 
-    monkeypatch.setattr(sys, "executable", "/Users/some one/tools/venv/bin/python")
-    assert "'/Users/some one/tools/venv/bin/aleph' update" in update.hook_lines()
+    tools = tmp_path / "some one" / "venv" / "bin"
+    tools.mkdir(parents=True)
+    (tools / "aleph").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "executable", str(tools / "python"))
+    assert f"'{tools / 'aleph'}' update" in update.hook_lines()
 
 
 def test_a_fetch_nobody_watches_does_not_ask_and_does_not_carry_the_caller_s_options(monkeypatch):
@@ -305,3 +308,127 @@ def test_minutes_bound_the_embedding_and_what_is_left_is_said(repo, with_worker,
     code, report = _report(repo, capsys, "--minutes", "0")
     assert code == 0 and report["vectors"]["made"] + report["vectors"]["left"] > 0     # at least a batch, and the rest is named
     assert "vector" in "\n".join(update.text(report))
+
+
+# ---- from the second review (agy with boost, 2026-10-13): each was checked before it was believed ----
+
+
+def _run_hook(tmp_path, repo, name, *args):
+    script, mark = _hook(tmp_path, name)
+    done = subprocess.run(["sh", str(script), *args], cwd=repo.root)
+    import time
+
+    time.sleep(0.4)
+    ran = mark.exists()
+    mark.unlink(missing_ok=True)
+    return done.returncode, ran
+
+
+def test_the_printed_hook_stays_out_of_a_rebase_and_a_bisect(tmp_path, repo):
+    assert _run_hook(tmp_path, repo, "post-checkout", "a", "b", "1") == (0, True)
+    (repo.root / ".git" / "rebase-merge").mkdir()                  # git is in the middle of a rebase
+    assert _run_hook(tmp_path, repo, "post-checkout", "a", "b", "1") == (0, False)
+    (repo.root / ".git" / "rebase-merge").rmdir()
+    (repo.root / ".git" / "BISECT_LOG").write_text("git bisect start\n")       # a bisect checks out a commit a step
+    assert _run_hook(tmp_path, repo, "post-checkout", "a", "b", "1") == (0, False)
+    assert _run_hook(tmp_path, repo, "post-merge", "0") == (0, False)
+    (repo.root / ".git" / "BISECT_LOG").unlink()
+    assert _run_hook(tmp_path, repo, "post-merge", "0") == (0, True)
+    printed = update.hook_lines()
+    assert "</dev/null" in printed and "git rev-parse --git-path hooks" in printed      # nothing read from the terminal; where hooks live in a linked worktree
+
+
+def test_the_engine_is_named_by_where_it_is_or_by_where_the_shell_finds_it(tmp_path, monkeypatch):
+    import sys
+
+    assert firstrun.engine_path().endswith("/aleph")               # here: beside the Python this runs under
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "Python.app" / "Contents" / "MacOS" / "Python"))      # a Python that is an application
+    monkeypatch.setattr("shutil.which", lambda name: f"/opt/tools/bin/{name}")
+    assert firstrun.engine_path() == "/opt/tools/bin/aleph"        # nothing beside that Python: what the shell would run
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert firstrun.engine_path() == "aleph"                       # and failing that, its name, which at least says what is missing
+
+
+def test_an_update_also_does_the_daily_collection_a_query_would_have_done(repo, capsys):
+    import time
+
+    from aleph_zero.store import index_path, open_db
+
+    assert _update(repo) == 0
+    (repo.root / "src" / "billing" / "invoice.py").unlink()
+    repo.commit("the invoice is gone")
+    conn = open_db(index_path(repo.root))
+    long_ago = int(time.time()) - 40 * 86400
+    conn.execute("UPDATE blobs SET last_seen_at = ?", (long_ago,))
+    conn.execute("INSERT INTO meta(key, value) VALUES ('collected_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (long_ago,))
+    before = conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0]
+    conn.close()
+    repo.write("src/billing/tax.py", "def vat_rate(country):\n    return 0.2\n")
+    repo.commit("a merged pull request")
+    assert _update(repo) == 0                                      # with hooks, this is the only thing that ever indexes
+    conn = open_db(index_path(repo.root))
+    after = conn.execute("SELECT count(*) FROM blobs").fetchall()[0][0]
+    conn.close()
+    assert after == before                                         # one file came, and the one gone forty days ago was collected
+
+
+def test_nothing_to_embed_means_the_worker_is_not_started(repo, with_worker, capsys, monkeypatch):
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
+    assert _report(repo, capsys)[1]["vectors"]["left"] == 0
+
+    def never(*args, **kwargs):
+        raise AssertionError("the worker was started although every chunk has its vector")
+
+    monkeypatch.setattr(worker, "ensure", never)                   # a hook after every pull must not load a model for nothing
+    code, report = _report(repo, capsys)
+    assert code == 0 and report["vectors"] == {"made": 0, "left": 0, "why": ""} and report["failed"] == []
+
+
+def test_the_bound_on_minutes_really_bounds(repo, with_worker, capsys):
+    repo.write("src/many.py", "".join(f"def handler_{n}(request):\n    return request.value + {n}\n\n\n" for n in range(400)))
+    repo.commit("four hundred functions")
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
+    code, report = _report(repo, capsys, "--minutes", "0")
+    assert code == 0 and report["vectors"]["made"] > 0 and report["vectors"]["left"] > 0       # one batch, and the rest is named
+    assert "still without one" in "\n".join(update.text(report))
+    code, report = _report(repo, capsys)
+    assert report["vectors"]["left"] == 0 and report["vectors"]["made"] > 0                    # and the next run makes the rest
+
+
+def test_the_architecture_s_facts_are_read_where_they_were_in_use(repo, capsys):
+    from aleph_zero.store import index_path, open_db
+
+    def rows():
+        conn = open_db(index_path(repo.root))
+        try:
+            return conn.execute("SELECT count(*) FROM arch_facts").fetchall()[0][0]
+        finally:
+            conn.close()
+
+    code, report = _report(repo, capsys)
+    assert rows() == 0 and "never asked" in report["architecture"]["why"]
+    assert cli.main(["--cwd", str(repo.root), "facts"]) == 0       # someone asks for the facts once
+    before = rows()
+    assert before > 0
+    repo.write("src/api.py", "import os\n\nDATABASE_URL = os.environ['DATABASE_URL']\n")
+    repo.commit("a merged pull request")
+    code, report = _report(repo, capsys)
+    assert code == 0 and report["architecture"] == {"read": 1, "left": 0, "why": ""} and rows() == before + 1
+
+
+def test_compiler_indexes_that_are_out_of_date_are_counted_and_never_run(repo, capsys, monkeypatch):
+    from aleph_zero import scipstore
+
+    class Stale:
+        any = True
+
+        def __init__(self, conn, files):
+            self.files = files
+
+        def status(self, path):
+            return "the file changed since the index was made" if path.endswith("invoice.py") else ("" if path.endswith(".py") else None)
+
+    monkeypatch.setattr(scipstore, "Compiled", Stale)
+    code, report = _report(repo, capsys)
+    assert code == 0 and report["compiler_indexes"]["out_of_date"] == 1 and "aleph scip run" in report["compiler_indexes"]["how"]
+    assert any("aleph scip run" in line for line in update.text(report))

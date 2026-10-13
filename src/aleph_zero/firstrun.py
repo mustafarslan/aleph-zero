@@ -86,6 +86,10 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
         "vectors", "repository", "Search by meaning in this repository", vectors,
         ("needs the embedding worker, which was declined; " if no_worker else "")
         + f"{found.verdict_why}; {found.with_vector:,} of {count(found.chunks)} with a vector"
+        # The default is read on an issue's first line, as nearest what an agent types. A whole question is another
+        # matter, and the plugin's second rung asks with the whole prompt: said here so that a yes or a no is informed.
+        + ("" if found.verdict else "; on whole questions (a pasted issue, or the plugin's second rung, which asks with the "
+           "whole prompt) vectors gained in every language measured, 5 to 18 points")
         + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors")
         + ("; `aleph embed run` makes the rest, and so does a running server" if vectors == "done" and missing else ""),
         "" if not missing else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",
@@ -117,6 +121,17 @@ def _plugin_dir() -> str | None:
     return str(found) if (found / ".claude-plugin" / "plugin.json").exists() else None
 
 
+def engine_path() -> str:
+    """How this engine is started from somewhere that does not have this shell's PATH (Claude Code, a git hook):
+    the `aleph` beside the Python it runs under. Under `uv run` the name alone is on PATH and elsewhere it is
+    not. A Python that is an application bundle has nothing beside it: then what the shell finds, and failing
+    that the name, which at least says what is missing."""
+    beside = Path(sys.executable).with_name("aleph")
+    if beside.exists():
+        return str(beside)
+    return shutil.which("aleph") or "aleph"
+
+
 def look(status: dict) -> Found:
     """What is found, from the engine's status of the worktree (after it was indexed) and the machine."""
     from .embed import setup as embed_setup
@@ -128,9 +143,7 @@ def look(status: dict) -> Found:
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
                  repository=bool(status.get("repository", True)),
-                 # Where this engine is, not its name: under `uv run` the name is on PATH, in Claude Code's own
-                 # environment it is not, and a command that only names it would not start there.
-                 aleph=str(Path(sys.executable).with_name("aleph")))
+                 aleph=engine_path())
 
 
 def of(status: dict) -> list[Step]:

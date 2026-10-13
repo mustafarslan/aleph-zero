@@ -13,7 +13,7 @@ The owner asked how the embeddings, the knowledge graph and the rest stay curren
 1. **Sources linked by URL are fetched** (`--no-fetch` leaves the network alone). A fetch that fails keeps the last good state and says how old it is; it is a line of the report, not a failure of the command.
 2. **The worktree is indexed**, everything pending.
 3. **The code graph's and the architecture's facts are read for what changed, but only where they were ever asked for.** An index that is only searched pays nothing for them (the schema's own rule), and a hook does not quietly change that.
-4. **Vectors are made for chunks without one, but only where search by meaning is on already**: the language's verdict or the choice kept by `aleph setup`. The command never switches it on; where it is off, the line says why. Bounded by `--minutes` (10 unless given): what is left is said and is made next time. `aleph embed run` stays the unbounded one.
+4. **Vectors are made for chunks without one, but only where search by meaning is on already**: the language's verdict or the choice kept by `aleph setup`. The command never switches it on; where it is off, nothing is said of it in the text (a line on every pull would be noise) and `--json` gives the reason. Where every chunk has its vector the worker is not started. Bounded by `--minutes` (10 unless given): what is left is said and is made next time. `aleph embed run` stays the unbounded one.
 5. **Compiler indexes that are out of date are counted and named, never run**: they are external tools over a whole project, with their own memory limits, and stay on request (ADR-004).
 
 Garbage is collected on the engine's own daily schedule and is not part of this.
@@ -53,3 +53,23 @@ Graded important, fixed in the same pass with a test that failed first: an index
 Smaller, fixed: the engine's path was not quoted; the report's keys differed on the busy path; `ALEPH_DENSE` was not honoured. Left as they are, with their cost: where vectors are off the text says nothing of it (the reason is in `--json`: a line on every pull would be noise); the facts count as "in use" when any are stored, so after an index is rebuilt they are read again only once someone asks; a failed fetch is silent under `--quiet`.
 
 Tests the reviewer found would pass with the behaviour broken were replaced or sharpened: the hook lines are run, a failed fetch must say "failed", the worker's every entrance is closed where vectors are off, and a failing part, the bound on minutes, a second worktree and a change during the update each have a test.
+
+## A second review, by agy with boost (2026-10-13), each finding checked before it was believed
+
+The first finding was the loss of data told above. The rest, as they turned out when looked at:
+
+| Reported | Looked at | What was done |
+|---|---|---|
+| The list of sources is written without a lock, under one scratch name | True: a source linked while a refresh was fetching (up to a minute) was dropped when the refresh wrote the list back as it had read it | One writer at a time (`sources._one_writer`), a scratch file of the writer's own, and a refresh that puts what it learned into the list as it is then, a source at a time. Never held across the network |
+| A fetch that runs out of time waits for ever on a helper | Half true: the command did end at its limit, but git's helpers (`git-remote-http`) were left running, a pair for every fetch that timed out | A command out of time takes its children with it (`gitio._stop_with_children`). Not by a process group of its own: that would take git out of the terminal's foreground, and a person linking a source would never be asked for the password git wants |
+| An update never runs the daily collection | True, and worse than it sounds: a query collects only after it stored new content, and where a hook runs `aleph update` after every pull a query never does. Nothing would ever have been collected | The update does it after indexing, as a query does |
+| The update starts the worker although nothing needs a vector | True: a hook after every pull would have loaded a 300 MB model to be told there is nothing to do | Not started when every chunk has its vector |
+| `git rebase` fires the hook for every commit | False for rebase as measured (git 2.56): once, at its start. True for `git bisect`: every step | The printed hooks stay out of both |
+| The engine's path comes from the Python it runs under | True for a Python that is an application bundle: nothing is beside it | `firstrun.engine_path`: beside the Python if it is there, else what the shell finds, else the name |
+| The hook's command can read the terminal | True | `</dev/null` |
+| The source's tree is looked up outside the time limit | True | Inside it, and as unattended as the fetch |
+| The test of `--minutes` passes with the bound broken; the architecture's facts and the compiler indexes have no test | True; the three behaviours were right | Tests that bite: 400 functions and a budget of nothing leave chunks without a vector; the facts are read where in use; out-of-date compiler indexes are counted |
+| `import fcntl` does not exist on Windows | True and not a finding: the worker, the vector file and the settings are for macOS and Linux already | Nothing |
+
+**And one thing no review reported, found by a test that failed one run in six:** where a repository's state lives is decided by trying to write a probe file beside git's data, and the probe had one name for the whole process. Two threads asking first at the same moment removed each other's file; the second took that for "cannot be written" and put its state into the cache directory. A server has two threads that ask first: the one that answers and the one that embeds. One session could so have had two indexes. The probe is the thread's own now and the decision is made once (`store/db.py`).
+

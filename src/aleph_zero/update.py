@@ -17,8 +17,8 @@ from pathlib import Path
 
 import apsw
 
-from . import archfacts, callgraph, gitio, scipstore, sources
-from .indexer import Index
+from . import archfacts, callgraph, gitio, scipstore, sources, vectorfile
+from .indexer import Index, collect_if_due
 from .store import StoreError, index_file, open_db, state_dir
 from .view import build_view
 
@@ -124,6 +124,15 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
             if done.indexed + done.skipped == 0 and fresh.fingerprint == seen.fingerprint:
                 break                               # nothing more can be done right now
             seen = fresh
+        if report["indexed"] or report["skipped"]:
+            # What a query does after it stored new content: old content may be due to go. Where a hook runs this
+            # after every pull, a query never finds anything new to store, and nothing else would ever collect.
+            try:
+                collected = collect_if_due(index.conn)
+                if collected and collected.get("chunks_removed"):
+                    vectorfile.give_back(index.conn, index_file(view.common_dir).parent)
+            except (apsw.BusyError, OSError):
+                pass                                # another session has the turn, or the disk says no: next time
 
     def facts(name: str, table: str, module) -> None:
         # An index that is only searched pays nothing for these (the schema's rule): they are read for what
@@ -149,6 +158,11 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
             made = report["vectors"]["made"]
             if not status["enabled"]:
                 report["vectors"] = {"made": made, "left": 0, "why": status["why"]}
+                return
+            if status["with_vector"] >= status["chunks"]:
+                # Nothing to make: the worker is not started for it. After most pulls this is the case, and
+                # starting it loads a model of 300 MB to be told so.
+                report["vectors"] = {"made": made, "left": 0, "why": ""}
                 return
             done = engine.embed(cwd, budget_seconds=max(deadline - time.monotonic(), 0.0), sync_seconds=0.0)
             report["vectors"] = {"made": made + done.embedded, "left": done.remaining, "why": done.reason}
@@ -192,24 +206,34 @@ def text(report: dict) -> list[str]:
 
 def hook_lines() -> str:
     """What to put into git's hooks, printed and never installed. The engine by the place it is in, quoted (a
-    hook's PATH is not a shell's, and a path may hold a space); detached and silent, so that `git pull` and
-    `git checkout` return at once; without the network, which a hook has no business using on every change of
-    branch; the embedding bounded; and for post-checkout only on a change of branch, written so that the hook
-    ends well when it is not one: git calls it for one restored file too, and a hook that fails fails the command."""
-    engine = shlex.quote(str(Path(sys.executable).with_name("aleph")))
-    command = f"( {engine} update --quiet --no-fetch --minutes {HOOK_MINUTES} >/dev/null 2>&1 & )"
+    hook's PATH is not a shell's, and a path may hold a space); detached, silent and reading nothing, so that
+    `git pull` and `git checkout` return at once; without the network, which a hook has no business using on
+    every change of branch; the embedding bounded; not in the middle of a rebase or a bisect, where git checks
+    out commit after commit that nobody will ask about; and for post-checkout only on a change of branch, written
+    so that the hook ends well when it is not one: git calls it for one restored file too, and a hook that fails
+    fails the command."""
+    from .firstrun import engine_path
+
+    engine = shlex.quote(engine_path())
+    command = f"( {engine} update --quiet --no-fetch --minutes {HOOK_MINUTES} </dev/null >/dev/null 2>&1 & )"
+    not_now = ['d=$(git rev-parse --git-dir 2>/dev/null) || exit 0',
+               'if [ -d "$d/rebase-merge" ] || [ -d "$d/rebase-apply" ] || [ -f "$d/BISECT_LOG" ]; then exit 0; fi']
     return "\n".join([
         "# Aleph does not install hooks or change git's configuration. To have a repository brought up to date",
-        "# after every pull and every change of branch, put these lines into its hooks yourself (and make the",
-        "# files executable: chmod +x .git/hooks/post-merge .git/hooks/post-checkout).",
+        "# after every pull and every change of branch, put these lines into its hooks yourself and make the two",
+        "# files executable. Where the hooks are: `git rev-parse --git-path hooks` (in a linked worktree `.git`",
+        "# is a file, and the hooks are the main repository's).",
         "",
         "# .git/hooks/post-merge",
         "#!/bin/sh",
+        *not_now,
         command,
         "",
         "# .git/hooks/post-checkout",
         "#!/bin/sh",
-        f'if [ "$3" = "1" ]; then {command}; fi',
+        '[ "$3" = "1" ] || exit 0',
+        *not_now,
+        command,
         "",
         "# Or nightly, from cron or launchd, with the network (linked sources are fetched) and more time:",
         f"#   {engine} --cwd /path/to/repository update --quiet --minutes 60",

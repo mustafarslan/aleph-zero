@@ -5,6 +5,7 @@ import ctypes
 import fcntl
 import hashlib
 import os
+import threading
 import sys
 import time
 from contextlib import contextmanager
@@ -30,6 +31,7 @@ DAMAGED = (apsw.CorruptError, apsw.NotADBError)
 _NETWORK_FILESYSTEMS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "afs", "ceph", "glusterfs", "lustre",
                         "ncpfs", "fuse.sshfs"}
 _decided: dict[Path, tuple[Path, str]] = {}
+_deciding = threading.Lock()
 _notes: dict[Path, str] = {}
 
 
@@ -71,11 +73,13 @@ def is_local(path: Path) -> bool:
 
 def _writable(directory: Path) -> bool:
     """Whether files can be created in `directory`, creating it if its parent allows."""
-    probe = directory / f".probe-{os.getpid()}"
+    # A name of this thread's own: with one name a process, two threads probing at once removed each other's file,
+    # and the second took the missing file for a directory that cannot be written.
+    probe = directory / f".probe-{os.getpid()}-{threading.get_ident()}"
     try:
         directory.mkdir(exist_ok=True)
         probe.write_bytes(b"")
-        probe.unlink()
+        probe.unlink(missing_ok=True)
         return True
     except OSError:
         return False
@@ -126,7 +130,10 @@ def state_dir(common_dir: Path) -> Path:
     only on the repository's directory."""
     found = _decided.get(common_dir)
     if found is None:
-        found = _decided[common_dir] = _decide(common_dir)
+        with _deciding:     # once, also when two threads of a session ask first at the same moment
+            found = _decided.get(common_dir)
+            if found is None:
+                found = _decided[common_dir] = _decide(common_dir)
     return found[0]
 
 

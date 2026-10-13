@@ -71,9 +71,9 @@ def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, m
     assert _states(repo, capsys) == {"claude": "done", "worker": "declined", "sources": "done", "vectors": "declined", "untracked_cache": "done"}
     _terminal(monkeypatch)                                         # again: nothing is open, so nothing is asked
     assert _setup(repo) == 0
-    asked, left = _terminal(monkeypatch, "n")                      # asked for again: what was declined is a question again
+    asked, left = _terminal(monkeypatch, "y", "n")                 # asked for again: the line done on their word, and what was declined
     assert _setup(repo, "--again") == 0
-    assert len(asked) == 1 and "worker" in asked[0] and left == []
+    assert len(asked) == 2 and "Claude Code" in asked[0] and "worker" in asked[1] and left == []
 
 
 def test_a_no_is_kept_and_an_interrupted_menu_leaves_the_rest_open(repo, capsys, monkeypatch):
@@ -288,3 +288,18 @@ def test_the_owner_s_example_a_documentation_repository_is_linked_embedded_and_f
     assert len(status["sources"]) == 1 and status["vectors"]["chunks"] == status["chunks_in_view"]      # the linked chunks are among them
     answer = engine.search("the procedure for mooring a zeppelin")
     assert answer.dense == "used" and "handbook:guides/mooring.md" in [hit.path for hit in answer.hits]
+
+
+def test_again_also_asks_about_a_line_that_is_done_only_on_the_person_s_word(repo, capsys, monkeypatch):
+    _terminal(monkeypatch, "y", "n", "", "n")                      # Claude Code: connected, they said
+    assert _setup(repo) == 0
+    asked, left = _terminal(monkeypatch, "n", "n", "", "n")        # asked again: that line too, since nothing checks it
+    assert _setup(repo, "--again") == 0
+    assert left == [] and "Claude Code" in asked[0]
+    assert _states(repo, capsys)["claude"] == "declined"
+
+
+def test_the_vectors_line_says_what_is_known_of_whole_questions_where_the_verdict_is_against(repo, capsys):
+    assert _setup(repo) == 0
+    out = capsys.readouterr().out
+    assert "whole" in out and "every language measured" in out     # the default reads first lines; a whole question is another matter
