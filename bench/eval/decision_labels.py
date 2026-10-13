@@ -56,7 +56,8 @@ TEMPLATE = re.compile(r"template", re.I)
 
 
 def git(root: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True).stdout
+    # Old histories hold bytes that are not UTF-8 (a name, a message in Latin-1): read with replacement, as the engine reads.
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True).stdout.decode("utf-8", "replace")
 
 
 def words(text: str) -> set[str]:

@@ -78,3 +78,16 @@ def test_the_reference_ranker_reads_a_record_with_a_header_as_oxn_does():
     assert harness.reference_order(texts, numbers, "typing react") == [6]                        # and so are the tags
     assert harness.reference_order(texts, numbers, "background queue") == [7]
     assert harness.reference_order(texts, numbers, "nothing understands heading") == []                     # as oxn: skipped, not fatal
+
+
+def test_a_history_with_bytes_that_are_not_utf8_is_read_all_the_same(history):
+    """Old commits carry Latin-1 names and messages. One such byte made the whole mining fail."""
+    (history / "src" / "e.py").write_text("v = 1\n")
+    subprocess.run(["git", "-C", str(history), "add", "-A"], check=True)
+    message = history.parent / "message.txt"
+    message.write_bytes(b"feat: route the nightly jobs through the queue as ADR-0001 says, f\xfcr die Gr\xf6\xdfe\n")
+    subprocess.run(["git", "-C", str(history), "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "i18n.commitEncoding=latin1",
+                    "commit", "-q", "-F", str(message)], check=True)
+    head = subprocess.run(["git", "-C", str(history), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    pairs, _ = labels.pairs_in(history, head, "docs/adr")
+    assert [pair["gold"] for pair in pairs] == [[1]]

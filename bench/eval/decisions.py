@@ -46,7 +46,7 @@ K = 60      # chunks asked for: enough for every decision of a corpus to appear
 
 
 def git(root: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=True).stdout.decode("utf-8", "replace")
 
 
 def task_text(root: Path, sha: str) -> str:

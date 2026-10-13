@@ -51,6 +51,24 @@ further, and before any vector was made for these pairs):
   anything of Aleph's (ordinary search by words, and with vectors).
 - if not: this effort ends here. By words the two rankers are one function, and no reranking model
   goes into the engine.
+
+Second round (`--dense --weights low`; written down on 2026-10-13, after eleven more public repositories
+were mined with the frozen rule and gave 38 pairs, and before any ranker was scored on them):
+
+- first, untouched: the ranker as it ships (`record`, a = 0.5) and the word ranker are scored on the 38
+  new pairs with `decisions.py`. That is a fifth set the ranker was never chosen on, and is reported
+  whatever it shows.
+- then a tuning round on all development pairs (the 89 and the 38), each corpus with ten pairs or more
+  left out in turn, the others always among those chosen on. The grid is the `record` variant with
+  a from 0.9 down to 0.1 in steps of 0.1: the first round's best was at the edge of its grid.
+- what replaces a = 0.5: the setting chosen on all pairs, only if on the pooled held-out folds its
+  precision at 3 is not below that of a = 0.5, its precision at 1 is not below the word ranker's and is
+  above that of a = 0.5, its MRR is above that of a = 0.5, and at least two folds choose an a within 0.1
+  of it. The condition on precision at 1 is new: on oxn's 100 pairs the shipped ranker is three pairs
+  below words at 1, and an adversarial reader would not have shipped it without that holding.
+- a setting that replaces it is run once on oxn's 100 pairs through the engine: the fourth run of
+  `aleph decisions` there. It becomes the default only if there its precision at 3 is not below 0.840
+  and its precision at 1 not below 0.580, the shipped ranker's figures. Otherwise a = 0.5 stays.
 """
 from __future__ import annotations
 
@@ -254,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--labels", default="labels-pub.json")
     parser.add_argument("--dense", action="store_true", help="the ten settings with vectors instead of the 48 by words (needs the embed worker)")
+    parser.add_argument("--weights", choices=("first", "low"), default="first",
+                        help="with --dense: the first round's ten settings, or the second round's: one vector a record, a from 0.9 to 0.1")
     parser.add_argument("--check-engine", action="store_true",
                         help="whether the engine, with the fusion switched on, gives this script's order on every pair (needs the embed worker)")
     parser.add_argument("--out", type=Path)
@@ -269,9 +289,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.dense:
         vectors = Vectors(args.workdir)
         near = {name: nearness(corpus, vectors) for name, corpus in corpora.items()}
-        SETTINGS = [MEASURED, *DENSE]
+        dense = DENSE if args.weights == "first" else [{"variant": "record", "a": round(a / 10, 1)} for a in range(9, 0, -1)]
+        SETTINGS = [MEASURED, *dense]
         table = {0: {name: rows_of(corpus, orders(corpus, MEASURED)) for name, corpus in corpora.items()}}
-        for at, setting in enumerate(DENSE, 1):
+        for at, setting in enumerate(dense, 1):
             table[at] = {name: rows_of(corpus, fused_orders(corpus, near[name][setting["variant"]], setting["a"])) for name, corpus in corpora.items()}
     else:
         table = {at: {name: rows_of(corpus, orders(corpus, setting)) for name, corpus in corpora.items()} for at, setting in enumerate(SETTINGS)}
