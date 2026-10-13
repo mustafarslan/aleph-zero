@@ -108,23 +108,47 @@ def test_left_to_decide_and_with_no_worker_installed_nothing_is_said_about_vecto
     assert asked.dense != ""
 
 
-def test_a_worker_that_is_waking_does_not_hold_a_query_up(repo, fake_worker, monkeypatch):
+def test_a_question_waits_for_a_waking_worker_only_where_nobody_set_it_a_time_limit(repo, fake_worker, monkeypatch):
+    # A worker that slept (ten idle minutes) takes half a second to wake, and a question used to wait 0.3 s for its
+    # vector whoever asked: the first question after every pause was answered by words alone, which is most of what
+    # an agent asks. An agent's own call sets no limit and can take the half second; the plugin's question, with its
+    # 400 ms, cannot. A worker that does not answer at all costs that wait once, not at every question.
     import time
 
+    from aleph_zero import engine as engine_module
     from aleph_zero.embed.client import EmbedClient
 
     monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    assert engine_module.QUERY_EMBED_SECONDS == 0.3 and engine_module.WAKING_EMBED_SECONDS == 1.0
     engine = Engine(repo.root, dense=True)
     engine.search("render_invoice")
     engine.embed()
     real = EmbedClient.embed
+
+    def waking(seconds):
+        def embed(self, texts, kind):
+            time.sleep(seconds)                     # as a worker loading its model answers: late, and then rightly
+            return real(self, texts, kind)
+        return embed
+
+    def asked(**options):
+        started = time.monotonic()
+        answer = engine.search("render_invoice", **options)
+        return answer, time.monotonic() - started
+
+    monkeypatch.setattr(EmbedClient, "embed", waking(0.5))
+    answer, took = asked()
+    assert answer.dense == "used" and 0.5 <= took < 1.0                    # nobody set a limit: the half second is waited for
+    answer, took = asked(timeout_ms=400)
+    assert "did not answer" in answer.dense and took < 0.45 and answer.hits[0].path == "src/billing/invoice.py"
+
     monkeypatch.setattr(EmbedClient, "embed", lambda self, texts, kind: real(self, ["HANG " + text for text in texts], kind))
-    started = time.monotonic()
-    answer = engine.search("render_invoice")
-    assert time.monotonic() - started < 1.0
-    assert answer.hits[0].path == "src/billing/invoice.py" and "did not answer" in answer.dense
+    answer, took = asked()
+    assert "did not answer" in answer.dense and took < 1.5 and answer.hits[0].path == "src/billing/invoice.py"
+    answer, took = asked()
+    assert "did not answer" in answer.dense and took < 0.6                 # it did not answer just now: no second long wait
 
 
 def test_cpp_has_a_verdict_in_favour_and_says_on_what():

@@ -40,6 +40,12 @@ GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for readi
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
+# Where the caller set no time limit (an agent's own call, a person at a terminal), the half second a sleeping
+# worker takes to wake is waited for: the first question after every pause is most of what an agent asks, and
+# without its vector it loses what vectors were measured to give. Not again within MISSED_SECONDS of a question
+# whose vector did not come: a worker that does not answer at all costs the long wait once.
+WAKING_EMBED_SECONDS = 1.0
+MISSED_SECONDS = 30.0
 WARM_SECONDS = 5.0              # for the server's warming at its start: what a first question may take to index
 WAKE_SECONDS = 10.0             # for the one vector that wakes the worker at a session's start, on a thread of its own
 RECORD_EMBED_SECONDS = 5.0      # in all, for the vectors of a view's decision records at one question; made once and kept
@@ -102,16 +108,18 @@ class _EarlyVector:
     two took 17 to 45 ms and 40 to 100 ms one after the other. A connection of its own, so that nothing else reads
     it; asked once, whatever the question does afterwards (it may look at the index up to three times)."""
 
-    def __init__(self, sock: Path, capacity: int, query: str) -> None:
+    def __init__(self, sock: Path, capacity: int, query: str, seconds: float = QUERY_EMBED_SECONDS) -> None:
         self._vector = None
         self._failed: Exception | None = None
+        self._seconds = seconds
+        self._asked = time.monotonic()
         self._thread = threading.Thread(target=self._ask, args=(sock, capacity, query), name="aleph-query-vector", daemon=True)
         self._thread.start()
 
     def _ask(self, sock: Path, capacity: int, query: str) -> None:
         from .embed.client import EmbedClient
 
-        client = EmbedClient(sock, capacity=capacity, timeout=QUERY_EMBED_SECONDS)
+        client = EmbedClient(sock, capacity=capacity, timeout=self._seconds)
         try:
             self._vector = client.embed([query], kind="query")[0]
         except Exception as exc:  # noqa: BLE001 - whatever it is, the question is answered without its vector and says why
@@ -120,12 +128,12 @@ class _EarlyVector:
             client.close()
 
     def result(self):
-        """The vector. Raises Unavailable as the client does; waits no longer than the client itself would."""
+        """The vector. Raises Unavailable as the client does. Its time is counted from when it was asked for."""
         from .embed.client import Unavailable
 
-        self._thread.join(QUERY_EMBED_SECONDS * 2 + 1.0)   # the client gives up by itself: twice its limit at the very most
+        self._thread.join(max(0.0, self._asked + self._seconds + 0.02 - time.monotonic()))
         if self._thread.is_alive():
-            raise Unavailable(f"the worker did not answer within {QUERY_EMBED_SECONDS} s")
+            raise Unavailable(f"the worker did not answer within {self._seconds} s")
         if self._failed is not None:
             raise self._failed if isinstance(self._failed, Unavailable) else Unavailable(str(self._failed))
         return self._vector
@@ -141,6 +149,7 @@ class Engine:
         self._decisions: dict[int, tuple] = {}
         self._embedder = None  # the connection to the worker used for queries
         self._with_vectors: dict[str, bool] = {}   # per directory asked from: whether its last question used vectors
+        self._vector_missed = float("-inf")        # when a question's vector last did not come in time
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
         self._graphs: dict[Path, tuple[tuple, object]] = {}  # per worktree: the code graph of the view last asked about
@@ -252,10 +261,12 @@ class Engine:
         families = _families(lang)
         started, until = _limits(timeout_ms)
         asked_from = str(self.default_cwd if cwd is None else cwd)
-        early = self._early_vector(asked_from, query)
+        unhurried = until is None and time.monotonic() - self._vector_missed > MISSED_SECONDS
+        wait = WAKING_EMBED_SECONDS if unhurried else QUERY_EMBED_SECONDS
+        early = self._early_vector(asked_from, query, wait)
 
         def read(index: Index, view: View):
-            note, covered, chunks, nearest = self._dense(index, view, query, early)
+            note, covered, chunks, nearest = self._dense(index, view, query, early, wait)
             return note, covered, chunks, lambda: run_search(
                 index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest) or []
 
@@ -264,9 +275,11 @@ class Engine:
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
         self._with_vectors[asked_from] = note == "used"
+        if note.startswith("the worker did not answer"):
+            self._vector_missed = time.monotonic()
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
 
-    def _early_vector(self, asked_from: str, query: str) -> _EarlyVector | None:
+    def _early_vector(self, asked_from: str, query: str, wait: float = QUERY_EMBED_SECONDS) -> _EarlyVector | None:
         """The question's vector asked for now, before the worktree is known, where the last question from the same
         directory used vectors. Whether they take part is decided afterwards as ever; where they do not, the
         vector is not used."""
@@ -277,7 +290,7 @@ class Engine:
         sock = worker.socket_path()
         if not sock.exists():
             return None
-        return _EarlyVector(sock, worker.capacity_tokens(), query)
+        return _EarlyVector(sock, worker.capacity_tokens(), query, wait)
 
     @_rebuilding
     def embed(self, cwd: Path | str | None = None, budget_seconds: float = float("inf"), batch: int | None = None,
@@ -835,7 +848,8 @@ class Engine:
         index, _, _, _ = self._ready(cwd, time.monotonic(), None, sync_seconds=0.0)
         return self._dense_decision(index)[0]
 
-    def _dense(self, index: Index, view: View, query: str, early: _EarlyVector | None = None):
+    def _dense(self, index: Index, view: View, query: str, early: _EarlyVector | None = None,
+               wait: float = QUERY_EMBED_SECONDS):
         """How vectors take part in this query: (note, chunks covered, chunks, the function
         that ranks by vector or None). Nothing here may fail or delay the query."""
         if not self._dense_decision(index)[0]:
@@ -851,12 +865,8 @@ class Engine:
         if not sock.exists():  # no probe here: a hung worker would hold the query for the probe's timeout
             return "the embedding worker is not running", covered, chunks, None
         try:
-            if early is not None:
-                vector = early.result()
-            else:
-                if self._embedder is None or self._embedder.socket_path != sock:
-                    self._embedder = EmbedClient(sock, capacity=worker.capacity_tokens(), timeout=QUERY_EMBED_SECONDS)
-                vector = self._embedder.embed([query], kind="query")[0]
+            # Always a connection of the question's own: its time limit is this question's, not the last one's.
+            vector = (early or _EarlyVector(sock, worker.capacity_tokens(), query, wait)).result()
         except Unavailable as exc:
             return str(exc), covered, chunks, None
         return "used", covered, chunks, lambda limit, scoped: [chunk_id for chunk_id, _ in
