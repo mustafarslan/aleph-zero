@@ -131,10 +131,12 @@ The 165 Loc-Bench questions of the 18 large repositories that the first run left
 | Query form | Questions | Words and names | With vectors | Gain from vectors (95% interval) | Better / worse |
 |---|---|---|---|---|---|
 | **Issue title** (the gate form), held out | 165 | 0.514 | 0.530 | **+1.6 points (−3.4 to +6.9)** | 11 / 8 |
-| Issue title, the first 235 (as measured then) | 235 | 0.598 | 0.653 | +5.5 (+1.3 to +10.0) | 21 / 8 |
+| Issue title, the first 235 (as measured then, the figures of the section above) | 235 | 0.598 | 0.653 | +5.5 (+1.3 to +9.8) | 21 / 8 |
 | Issue title, all 400 | 400 | | | **+3.9 (+0.6 to +7.2)** | |
 | Whole issue text, held out | 165 | 0.486 | 0.569 | +8.3 (+3.4 to +13.3) | 18 / 3 |
 | Whole issue text, all 400 | 400 | | | +11.0 (+7.5 to +14.6) | |
+
+The rows for all 400 are worked out here from the two result files, with the same resampling (10,000 paired resamples, seed 20261012).
 
 **By the rule fixed beforehand the gate is not met.** It asks for 5 points on titles with an interval that excludes zero. Held out: +1.6, and the interval holds zero. All 400 together: +3.9, clear of zero and under the bar. Vectors help search on Python, by about four points on a title-length query and eleven on a whole issue; that is less than what was asked of them before they cost a model, a GPU and minutes of embedding per repository by default.
 
