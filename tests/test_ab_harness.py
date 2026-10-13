@@ -236,3 +236,35 @@ def test_what_the_agent_asked_the_engine_is_kept_word_for_word():
     assert ab.read_stream(_stream(RESULT), [])["aleph_queries"] == []
     summary = ab.query_lengths([record, {"aleph_query_words": [4]}, {"ok": False}])
     assert summary == {"queries": 3, "median_words": 4, "up_to_8_words": 2, "over_20_words": 0}
+
+
+def test_what_rung_2_put_before_the_agent_is_worked_out_as_the_mod_does_it():
+    import injected
+
+    hit = lambda path, start, sources: {"path": path, "start_line": start, "end_line": start + 9, "sources": sources}  # noqa: E731
+    hits = [hit("src/a.py", 1, ["lexical", "symbol"]), hit("src/a.py", 1, ["lexical"]), hit("src/b.py", 40, ["lexical"])]
+    assert injected.added(hits, gold=["src/b.py"]) == {"added": True, "locations": ["src/a.py:1-10", "src/b.py:40-49"],
+                                                        "files": ["src/a.py", "src/b.py"], "answer_named": True}
+    # The first hit was proposed by one generator only: the mod stays silent, whatever is further down.
+    assert injected.added([hits[2], hits[0]], gold=["src/b.py"])["added"] is False
+    assert injected.added([], gold=["src/b.py"]) == {"added": False, "locations": [], "files": [], "answer_named": False}
+
+
+def test_the_pairs_of_a_run_are_read_by_what_rung_2_gave_them():
+    import injected
+
+    def session(task, arm, tokens, calls, hit):
+        return {"task": task, "arm": arm, "ok": True, "tokens": tokens, "tool_calls": calls, "file_hit": hit, "model": "m"}
+
+    records = [session("t1", "none", 1000, 10, True), session("t1", "L2", 500, 5, True),
+               session("t2", "none", 1000, 10, True), session("t2", "L2", 2000, 10, False),
+               session("t3", "none", 1000, 4, False), session("t3", "L2", 1000, 4, False),
+               session("t4", "none", 1000, 4, True)]                                         # no partner: not in any group
+    given = {"t1": {"added": True, "answer_named": True}, "t2": {"added": True, "answer_named": False},
+             "t3": {"added": False, "answer_named": False}, "t4": {"added": True, "answer_named": True}}
+    groups = injected.groups(records, given, baseline="none", arm="L2")
+    assert groups["locations added, a file of the answer among them"] == {
+        "tasks": 1, "tokens_ratio": 0.5, "tool_calls_ratio": 0.5, "file_hits": [1, 1]}
+    assert groups["locations added, no file of the answer among them"] == {
+        "tasks": 1, "tokens_ratio": 2.0, "tool_calls_ratio": 1.0, "file_hits": [0, 1]}
+    assert groups["nothing added"] == {"tasks": 1, "tokens_ratio": 1.0, "tool_calls_ratio": 1.0, "file_hits": [0, 0]}
