@@ -193,8 +193,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{task['id']:44} {'added' if entry['added'] else 'silent':6} "
                   f"{'answer among them' if entry['answer_named'] else '':18} {', '.join(entry['files'])}", file=sys.stderr, flush=True)
     if args.out:
-        args.out.write_text(json.dumps(given, indent=2) + "\n")
-    print(json.dumps({"tasks": len(given), "locations_added": sum(entry["added"] for entry in given.values()),
+        args.out.write_text(json.dumps({"variant": args.variant, "tasks": given}, indent=2) + "\n")   # what it was read with stays with it
+    print(json.dumps({"variant": args.variant, "tasks": len(given), "locations_added": sum(entry["added"] for entry in given.values()),
                       "answer_among_them": sum(entry["answer_named"] for entry in given.values()),
                       "with_vectors": sum(entry["vectors"] == "used" for entry in given.values()),
                       "groups": groups(records, given, args.baseline, args.arm)}, indent=2))
