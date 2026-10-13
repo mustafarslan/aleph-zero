@@ -30,7 +30,8 @@ def check(cwd: Path) -> list[Row]:
     try:
         info = gitio.repo_info(cwd)
     except gitio.NoRepository:
-        return rows + _plain_directory(cwd)
+        found = _plain_directory(cwd)
+        return rows + found + ([_setup(cwd)] if len(found) > 1 else [])    # a directory that is searched can be set up too
     except gitio.GitError:
         rows.append(Row("note", "repository", "not inside a git repository: nothing to check for this directory"))
         return rows

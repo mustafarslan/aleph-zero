@@ -98,6 +98,55 @@ def test_a_repository_s_answers_live_beside_its_index(repo):
 
 def test_the_cost_of_vectors_is_said_in_plain_numbers_and_the_reason_for_a_no_comes_first():
     one = _by_key(firstrun.plan(replace(CPP, chunks=1), repo={}, machine={}))["vectors"]
-    assert "for 1 chunk;" in one.cost and "1 chunks" not in one.cost and "0 of 1 chunk have" not in one.detail
+    assert "for 1 chunk;" in one.cost and "1 chunks" not in one.cost and "0 of 1 chunk with a vector" in one.detail
     declined = _by_key(firstrun.plan(CPP, repo={}, machine={"setup": {"worker": "declined"}}))["vectors"]
     assert declined.detail.startswith("needs the embedding worker, which was declined")      # the first thing read, not the last
+
+
+# ---- from the review of the branch (2026-10-13) ---------------------------------------------------
+
+
+def test_a_choice_that_is_not_yes_or_no_is_no_choice():
+    assert firstrun.plan(PYTHON, repo={"dense": "no"}, machine={}) == firstrun.plan(PYTHON, repo={}, machine={})
+    assert firstrun.plan(CPP, repo={"dense": 1}, machine={}) == firstrun.plan(CPP, repo={}, machine={})
+
+
+def test_vectors_are_done_once_chosen_and_begun_and_an_edit_does_not_make_them_a_question_again():
+    edited = replace(CPP, worker=True, chunks=1210, with_vector=1200)          # ten chunks written since
+    step = _by_key(firstrun.plan(edited, repo={}, machine={}))["vectors"]
+    assert step.state == "done" and "1,200 of 1,210" in step.detail and "aleph embed run" in step.detail
+    nothing_yet = _by_key(firstrun.plan(replace(CPP, worker=True, chunks=0), repo={}, machine={}))["vectors"]
+    assert nothing_yet.state == "done" and nothing_yet.cost == ""            # an empty repository: nothing to make, nothing to ask
+    never_made = _by_key(firstrun.plan(replace(CPP, worker=True), repo={}, machine={}))["vectors"]
+    assert never_made.state == "open"
+
+
+def test_what_the_list_says_is_true_of_the_case():
+    wanted = _by_key(firstrun.plan(CPP, repo={}, machine={}))
+    assert "search by meaning needs it" in wanted["worker"].detail             # not "nothing needs it"
+    assert "nothing needs it" in _by_key(firstrun.plan(PYTHON, repo={}, machine={}))["worker"].detail
+    assert "worktree" in wanted["untracked_cache"].title                       # git's index, and so its cache, is a worktree's
+    claude = wanted["claude"]
+    assert "claude mcp add --scope user aleph-zero -- aleph serve" in claude.command      # for every project: the answer is the machine's
+    assert "one session" in claude.command
+
+
+def test_two_writers_of_one_file_both_keep_their_answer(tmp_path):
+    import threading
+
+    path = tmp_path / "settings.json"
+    writers = [threading.Thread(target=settings.answer, args=(path, f"step{n}", "done")) for n in range(24)]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join()
+    assert len(settings.read(path)["setup"]) == 24
+
+
+def test_no_hint_once_anything_was_answered_however_it_was_answered(repo):
+    from aleph_zero import gitio
+
+    kept = settings.repo_file(gitio.common_dir(repo.root))
+    settings.answer(kept, "sources", None)                 # answered by a flag: the file holds an empty list of answers
+    assert settings.read(kept) == {"setup": {}}
+    assert firstrun.hint(repo.root) is None

@@ -124,4 +124,6 @@ def _run(command: list[str]) -> None:
 
 
 def installed() -> bool:
-    return worker.binary().exists() and worker.model().exists()
+    """Whether the worker and its model are there. Only looks: asking does not create the worker's directory."""
+    root = worker.where()
+    return (root / "bin" / "llama-server").exists() and (root / "models" / worker.MODEL_FILE).exists()

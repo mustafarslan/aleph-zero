@@ -158,3 +158,5 @@ def test_a_repository_s_own_choice_decides_where_no_flag_does_and_is_read_again_
     assert off["enabled"] is False and "this repository" in off["why"]
     settings.change(chosen, dense=None)
     assert engine.status()["vectors"]["enabled"] is True         # no choice any more: the verdict again
+    settings.change(chosen, dense=False)
+    assert engine.status()["vectors"]["enabled"] is False        # and the same engine sees each change, not what it kept

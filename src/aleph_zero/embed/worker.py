@@ -32,9 +32,14 @@ def _seconds(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
 
 
+def where() -> Path:
+    """Where the worker's directory is or would be. Nothing is created: for those who only look."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "aleph-zero" / "worker"
+
+
 def home() -> Path:
     """The worker's directory: binary, model, state, lock, log. Only the user may enter it."""
-    root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "aleph-zero" / "worker"
+    root = where()
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)  # the server creates its socket 0755; the directory is what keeps it private
     return root

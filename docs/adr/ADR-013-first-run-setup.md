@@ -50,3 +50,27 @@ A fresh repository of Python files, no worker installed: `aleph setup` without a
 - Differences from the decision: linked sources are asked for before vectors (the decision listed them after), so that what is linked is embedded with the rest. There is no `--yes`: every thing has its own flag.
 - Not covered by a test that uses the network: `--worker` and a URL source go through the same code as `aleph embed setup` and `aleph source add`, which have their own tests.
 
+## The review of the branch (a fresh reviewer, 2026-10-13), and what was changed for it
+
+Nothing critical. Four findings graded important, all fixed with a test that failed first:
+
+- **The status could fail where a search works.** Making the list asked whether the worker is installed, and asking created the worker's directory; with a cache directory that cannot be written, `status` raised. Asking now only looks (`worker.where`), and the list's part of the status never raises: it says that the list could not be made.
+- **One failing step ended the menu.** A worker that does not build, or a git index that is locked, reached the top of the command; the questions after it and the closing list were lost. A yes that fails is now said and left open, and the menu goes on. A flag that fails does not stop the flags after it; the command then ends with 2.
+- **The hint came after a setup made by flag.** Whoever sets anything up, by menu or by flag, is not told of the command afterwards.
+- **`--json` with a flag printed a sentence before the data.** What was done is now said on standard error.
+
+Graded minor by the reviewer and fixed in the same pass, because each says or does something untrue to a person:
+
+- Claude Code's own default connects one project, while the answer is kept for the machine: the command printed is now the one for every project (`--scope user`), and the plugin directory is named as what it is, for one session.
+- `--embed` without the worker kept a choice and promised that `aleph embed run` would continue: it now does nothing, says to install the worker first, and ends with 2. `--embed` with `--no-dense` is refused.
+- A no to vectors where the verdict is already against is kept as an answer, not as the repository's choice: a later verdict in favour is not outranked by a bare return. A no against a verdict in favour is the repository's choice, as before.
+- Vectors are done once chosen and begun: an edit, which adds chunks without vectors, no longer makes them a question again; an empty repository has nothing to ask.
+- A value for the choice that is neither true nor false is no choice, for the list as for the engine.
+- Git's cache is a worktree's, and is called so. The worker's line no longer says "nothing needs it" where vectors are wanted.
+- In a directory that is not a repository, the two flags that need one say so in a sentence, and the doctor shows the list there too.
+- Two writers of one file (a menu being answered, a first search in another terminal) take turns.
+
+Five tests the reviewer found would pass with the behaviour broken were made to bite. What it checked and found sound: the engine sees a choice made, changed or removed while it runs; a damaged file or one of the wrong shape is no answers; the list costs 0.07 ms of a status; `aleph serve` never reaches the hint; git's configuration is untouched.
+
+Left as it is: whether Claude Code is connected is not detected (it would mean reading its configuration or starting every server it knows); the person says so.
+

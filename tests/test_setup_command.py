@@ -87,6 +87,7 @@ def test_a_no_is_kept_and_an_interrupted_menu_leaves_the_rest_open(repo, capsys,
     asked, left = _terminal(monkeypatch, "n", "n", "", "n")        # no to everything: an empty line for sources is a no
     assert _setup(repo) == 0
     assert left == [] and set(_states(repo, capsys).values()) == {"declined"}
+    assert "dense" not in settings.read(settings.repo_file(gitio.common_dir(repo.root)))      # nothing chosen against a later verdict
 
 
 def test_a_yes_to_search_by_meaning_makes_the_vectors_and_keeps_the_choice_for_the_repository(repo, fake_worker, capsys, monkeypatch):
@@ -116,6 +117,7 @@ def test_where_the_verdict_is_for_vectors_yes_is_the_default_and_a_no_is_the_rep
 
 def test_each_thing_has_a_flag_of_its_own_for_a_script_or_an_agent(repo, docs_repo, capsys, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("asked although flags were given"))
+    monkeypatch.setattr(firstrun, "on_terminal", lambda: True)     # even on a terminal: a flag is an answer, not a question
     built = []
     monkeypatch.setattr(embed_setup, "install_binary", lambda source=None, report=None: built.append("binary") or "worker")
     monkeypatch.setattr(embed_setup, "install_model", lambda local=None, report=None: built.append("model") or "model")
@@ -163,3 +165,93 @@ def test_no_hint_where_setup_was_already_answered(repo, capsys, monkeypatch):
     monkeypatch.setattr(firstrun, "hint_wanted", lambda: True)
     assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
     assert capsys.readouterr().err == ""
+
+
+# ---- from the review of the branch (2026-10-13) ---------------------------------------------------
+
+
+def test_the_status_answers_whatever_the_setup_list_runs_into_and_leaves_nothing_behind(repo, tmp_path, monkeypatch):
+    cache = tmp_path / "fresh-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    assert Engine(repo.root).status()["setup"]["open"]
+    assert not (cache / "aleph-zero" / "worker").exists()          # looking does not make the worker's directory
+
+    def unreadable():
+        raise PermissionError("the cache directory cannot be written")
+
+    monkeypatch.setattr(embed_setup, "installed", unreadable)
+    status = Engine(repo.root).status()                            # a search works there; so must this
+    assert status["setup"]["open"] == [] and "cannot be written" in status["setup"]["unknown"]
+
+
+def test_a_step_that_fails_says_so_and_the_menu_goes_on(repo, capsys, monkeypatch):
+    def no_compiler(source=None, report=None):
+        raise embed_setup.SetupError("cmake is not installed")
+
+    monkeypatch.setattr(embed_setup, "install_binary", no_compiler)
+    asked, left = _terminal(monkeypatch, "n", "y", "", "y")        # the worker fails to build; the questions after it are still asked
+    assert _setup(repo) == 0
+    out = capsys.readouterr().out
+    assert left == [] and "cmake is not installed" in out and "not done" in out
+    states = _states(repo, capsys)
+    assert states["worker"] == "open" and states["untracked_cache"] == "done"       # asked again next time; what worked is kept
+
+
+def test_a_flag_that_fails_does_not_stop_the_others_and_the_command_says_it_failed(repo, capsys, monkeypatch):
+    def no_compiler(source=None, report=None):
+        raise embed_setup.SetupError("cmake is not installed")
+
+    monkeypatch.setattr(embed_setup, "install_binary", no_compiler)
+    assert _setup(repo, "--worker", "--untracked-cache") == 2
+    assert "cmake is not installed" in capsys.readouterr().err
+    assert _states(repo, capsys)["untracked_cache"] == "done"
+
+
+def test_json_is_json_also_when_a_flag_did_something_and_no_hint_follows_a_setup_by_flag(repo, capsys, monkeypatch):
+    assert _setup(repo, "--json", "--untracked-cache") == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["steps"] and "untracked cache" in captured.err      # what was done is said beside the data
+    monkeypatch.setattr(firstrun, "hint_wanted", lambda: True)
+    assert cli.main(["--cwd", str(repo.root), "search", "render_invoice"]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_embed_without_the_worker_does_nothing_and_says_what_to_do_first(repo, capsys):
+    assert _setup(repo, "--embed") == 2
+    assert "aleph setup --worker" in capsys.readouterr().err
+    assert "dense" not in settings.read(settings.repo_file(gitio.common_dir(repo.root)))
+    with pytest.raises(SystemExit):
+        _setup(repo, "--embed", "--no-dense")                      # make the vectors and do not use them: not a thing to ask for
+
+
+def test_embed_makes_the_vectors_and_keeps_the_choice(repo, fake_worker, capsys, monkeypatch):
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    assert _setup(repo, "--embed") == 0
+    assert settings.read(settings.repo_file(gitio.common_dir(repo.root)))["dense"] is True
+    assert _states(repo, capsys)["vectors"] == "done"
+
+
+def test_a_directory_that_is_not_a_repository_is_told_what_cannot_be_done_there(tmp_path, capsys):
+    from aleph_zero import doctor
+
+    plain = tmp_path / "notes"
+    plain.mkdir()
+    (plain / "todo.py").write_text("def later():\n    return 1\n")
+    assert cli.main(["--cwd", str(plain), "setup"]) == 0
+    assert "another repository" not in capsys.readouterr().out     # not offered: sources are linked to a repository
+    assert cli.main(["--cwd", str(plain), "setup", "--source", str(tmp_path), "--untracked-cache"]) == 2
+    err = capsys.readouterr().err
+    assert "not a git repository" in err and "rev-parse" not in err and err.count("\n") <= 3
+    assert any(row.name == "setup" for row in doctor.check(plain))
+
+
+def test_a_no_to_vectors_where_the_verdict_is_against_is_an_answer_and_not_a_choice(repo, capsys, monkeypatch):
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)    # Python: the verdict is against, the worker is there
+    _terminal(monkeypatch, "n", "", "", "n")                       # a bare return at the vectors question
+    assert _setup(repo) == 0
+    kept = settings.read(settings.repo_file(gitio.common_dir(repo.root)))
+    assert "dense" not in kept and kept["setup"]["vectors"] == "declined"       # a later verdict in favour is not outranked
+    assert _states(repo, capsys)["vectors"] == "declined"

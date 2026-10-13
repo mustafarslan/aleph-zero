@@ -7,8 +7,10 @@ and gets rebuilt. A file that cannot be read is no answers, never an error: noth
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 from .store import state_dir
@@ -41,26 +43,38 @@ def _write(path: Path, content: dict) -> dict:
     return content
 
 
+@contextmanager
+def _one_writer(path: Path):
+    """Read, change and write as one step: a menu being answered and a first search in another terminal (the hint)
+    write the same file, and the later of two unguarded writers would drop the other's answer."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def change(path: Path, **values) -> dict:
     """Set the given settings; one given as None is removed."""
-    content = read(path)
-    for name, value in values.items():
-        if value is None:
-            content.pop(name, None)
-        else:
-            content[name] = value
-    return _write(path, content)
+    with _one_writer(path):
+        content = read(path)
+        for name, value in values.items():
+            if value is None:
+                content.pop(name, None)
+            else:
+                content[name] = value
+        return _write(path, content)
 
 
 def answer(path: Path, step: str, state: str | None) -> dict:
     """Keep what was answered for one step of the setup: 'done', 'declined', or None for open again."""
     if state is not None and state not in ANSWERS:
         raise ValueError(f"an answer is one of {', '.join(ANSWERS)} or None, not {state!r}")
-    content = read(path)
-    answers = content.get("setup") if isinstance(content.get("setup"), dict) else {}
-    if state is None:
-        answers.pop(step, None)
-    else:
-        answers[step] = state
-    content["setup"] = answers
-    return _write(path, content)
+    with _one_writer(path):
+        content = read(path)
+        answers = content.get("setup") if isinstance(content.get("setup"), dict) else {}
+        if state is None:
+            answers.pop(step, None)
+        else:
+            answers[step] = state
+        content["setup"] = answers
+        return _write(path, content)

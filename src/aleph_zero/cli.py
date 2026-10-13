@@ -222,7 +222,11 @@ def _setup(args) -> int:
     from . import firstrun, settings
     from .embed import setup as embed_setup
 
-    say = lambda text: print(text, flush=True)  # noqa: E731
+    if args.embed and args.no_dense:
+        raise SystemExit("aleph setup: --embed makes this repository's vectors in order to use them; it does not go with --no-dense")
+    # With --json standard output is the list and nothing else: what was done is said beside it.
+    say = lambda text: print(text, file=sys.stderr if args.json else sys.stdout, flush=True)  # noqa: E731
+    failed: list[str] = []
 
     def now():
         index, view = _open(args.cwd)                           # the list needs the counts, also of what was just linked;
@@ -245,7 +249,7 @@ def _setup(args) -> int:
             return f"linked {added.name} ({added.kind}): {added.location}"
         if what == "untracked_cache":
             gitio.git(gitio.repo_info(args.cwd).root, "update-index", "--untracked-cache")
-            return "git's untracked cache is on for this repository"
+            return "git's untracked cache is on for this worktree (in its index; no configuration was changed)"
         try:                                                    # 'embed': in the foreground, and it can be left
             report = Engine(args.cwd, dense=True).embed(progress=lambda done, left: print(f"  {done} embedded", end="\r", flush=True))
         except KeyboardInterrupt:
@@ -256,19 +260,40 @@ def _setup(args) -> int:
     status, found, steps = now()
     repo_file = Path(status["index"]).parent / "settings.json"
     flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
+
+    def flag(name: str, do) -> None:
+        """One flag's work. What fails is said and counted; the flags after it are still done."""
+        try:
+            do()
+        except firstrun.FAILURES as problem:
+            failed.append(name)
+            print(f"aleph setup {name}: not done: {problem}", file=sys.stderr)
+
+    def needs_repository(name: str, what: str) -> bool:
+        if status.get("repository", True):
+            return True
+        failed.append(name)
+        print(f"aleph setup {name}: {status['root']} is not a git repository: {what}. `git init` there makes it one",
+              file=sys.stderr)
+        return False
+
     if args.worker:
-        say(act("worker"))
-        settings.answer(settings.machine_file(), "worker", None)
+        flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
     for location in args.source or ():
-        say(act("source", location))
-        settings.answer(repo_file, "sources", None)
-    if args.dense or args.no_dense or args.embed:
+        if needs_repository("--source", "other repositories are linked to a repository, not to a directory"):
+            flag("--source", lambda location=location: (say(act("source", location)), settings.answer(repo_file, "sources", None)))
+    if args.embed and not firstrun.look(Engine(args.cwd).status()).worker:
+        failed.append("--embed")
+        print("aleph setup --embed: the embedding worker is not installed, so no vectors can be made: "
+              "`aleph setup --worker` first (310 MB; uses the network)", file=sys.stderr)
+    elif args.dense or args.no_dense or args.embed:
         settings.change(repo_file, dense=not args.no_dense)     # kept for the repository: vectors made are then used
-    if args.embed:
-        say(act("embed"))
-    if args.untracked_cache:
-        say(act("untracked_cache"))
-        settings.answer(repo_file, "untracked_cache", None)
+        if args.embed:
+            flag("--embed", lambda: say(act("embed")))
+    if args.untracked_cache and needs_repository("--untracked-cache", "git's untracked cache is a repository's"):
+        flag("--untracked-cache", lambda: (say(act("untracked_cache")), settings.answer(repo_file, "untracked_cache", None)))
+    if flagged:
+        settings.change(repo_file, hint_shown=True)             # whoever set something up here knows the command
     if not flagged and not args.json and firstrun.on_terminal():
         say(f"Setting up Aleph Zero for {status['root']}\n\n{firstrun.text(steps)}")
         menu = firstrun.Menu(status, say, input, act)
@@ -286,12 +311,12 @@ def _setup(args) -> int:
     status, found, steps = now()
     if args.json:
         print(json.dumps(firstrun.as_json(steps), indent=2))
-        return 0
+        return 2 if failed else 0
     say(firstrun.text(steps))
     if firstrun.open_steps(steps) and not firstrun.on_terminal():
         say("\nAnswer these on a terminal with `aleph setup`, or one at a time: --worker, --source LOCATION, --embed, "
             "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
-    return 0
+    return 2 if failed else 0
 
 
 def _memory(args) -> int:
@@ -438,9 +463,10 @@ def main(argv: list[str] | None = None) -> int:
     first.add_argument("--source", action="append", metavar="LOCATION", help="link a repository by path or URL (a URL uses the network)")
     first.add_argument("--embed", action="store_true", help="make this repository's vectors now and use them here")
     chosen = first.add_mutually_exclusive_group()
-    chosen.add_argument("--dense", action="store_true", help="use search by meaning in this repository, whatever its language's verdict")
+    chosen.add_argument("--dense", action="store_true", help="use search by meaning in this repository, whatever its language's verdict "
+                                                             "(a running server then makes the vectors in the background; --embed makes them now)")
     chosen.add_argument("--no-dense", action="store_true", help="do not use search by meaning in this repository")
-    first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this repository's index (no configuration is changed)")
+    first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this worktree's index (no configuration is changed)")
     first.set_defaults(run=_setup)
 
     health = commands.add_parser("doctor", help="check that everything Aleph needs is in place")

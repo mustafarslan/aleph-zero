@@ -52,16 +52,18 @@ def _state(done: bool, answers: dict, key: str) -> str:
 
 def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
     """The checklist, in the order it is asked. `repo` and `machine` are the kept answers (settings.read)."""
-    asked_for = repo.get("dense")                      # the person's own choice for this repository, if they made one
-    wanted = found.verdict if asked_for is None else bool(asked_for)
-    connect = " or ".join(filter(None, [f"`claude --plugin-dir {found.plugin_dir}`" if found.plugin_dir else "",
-                                        "`claude mcp add aleph-zero -- aleph serve`"]))
+    asked_for = repo.get("dense") if isinstance(repo.get("dense"), bool) else None   # the person's own choice, if they made one
+    wanted = found.verdict if asked_for is None else asked_for
+    # `--scope user`: for every project, as the answer is kept for the machine. Claude Code's own default is one project.
+    connect = "`claude mcp add --scope user aleph-zero -- aleph serve`" + (
+        f" (or, for one session and with the steering: `claude --plugin-dir {found.plugin_dir}`)" if found.plugin_dir else "")
     steps = [
         Step("claude", "machine", "Connect Claude Code", _state(False, machine, "claude"),
              "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
         Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker"),
-             "installed" if found.worker else "not installed; nothing needs it while search is by words and names",
+             "installed" if found.worker else "not installed; search by meaning needs it" if wanted
+             else "not installed; nothing needs it while search is by words and names",
              "" if found.worker else WORKER_COST, "aleph embed setup", wanted),
     ]
     if found.repository:
@@ -72,21 +74,24 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
             "a path is read where it is; a URL is cloned into the cache directory (uses the network)",
             "aleph source add <path or URL>", False))
     missing = max(found.chunks - found.with_vector, 0)
-    made = found.chunks > 0 and missing == 0
+    # Chosen and begun is done: chunks written since get their vectors from a running server or the next
+    # `aleph embed run`, and an edit must not make this a question again. An empty repository has nothing to make.
+    begun = found.with_vector > 0 or found.chunks == 0
     minutes = max(1, round(missing / CHUNKS_A_SECOND / 60))
     no_worker = not found.worker and steps[1].state == "declined"      # nothing to make vectors with, and none wanted
-    vectors = "declined" if asked_for is False or no_worker else _state(made and wanted and found.worker, repo, "vectors")
+    vectors = "declined" if asked_for is False or no_worker else _state(begun and wanted and found.worker, repo, "vectors")
     count = lambda number: f"{number:,} chunk" + ("" if number == 1 else "s")  # noqa: E731
     steps.append(Step(
         "vectors", "repository", "Search by meaning in this repository", vectors,
         ("needs the embedding worker, which was declined; " if no_worker else "")
         + f"{found.verdict_why}; {found.with_vector:,} of {count(found.chunks)} with a vector"
-        + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors"),
-        "" if made else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",
+        + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors")
+        + ("; `aleph embed run` makes the rest, and so does a running server" if vectors == "done" and missing else ""),
+        "" if not missing else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",
         "aleph embed run", wanted))
     if found.repository:
         steps.append(Step(
-            "untracked_cache", "repository", "Git's untracked cache (a faster look at the worktree on every query)",
+            "untracked_cache", "repository", "Git's untracked cache for this worktree (a faster look at it on every query)",
             _state(found.untracked_cache, repo, "untracked_cache"),
             "on" if found.untracked_cache else "off",
             "", "git update-index --untracked-cache", False))
@@ -131,9 +136,13 @@ def of(status: dict) -> list[Step]:
 
 
 def summary(status: dict) -> dict:
-    """What the agent's status tool says of it: information for a person, nothing an agent should act on."""
-    return {"open": open_steps(of(status)),
-            "how": "a person answers these in a terminal with `aleph setup`; search needs none of them"}
+    """What the agent's status tool says of it: information for a person, nothing an agent should act on.
+    Never raises: a status that a search could answer is not lost to a list that could not be made."""
+    how = "a person answers these in a terminal with `aleph setup`; search needs none of them"
+    try:
+        return {"open": open_steps(of(status)), "how": how}
+    except Exception as exc:  # noqa: BLE001 - an unreadable cache directory, a file of the wrong shape: whatever it is
+        return {"open": [], "how": how, "unknown": f"the setup list could not be made: {exc}"}
 
 
 HINT = "aleph: `aleph setup` shows what else can be set up here (search by meaning, documentation from another repository). This line is shown once."
@@ -150,7 +159,7 @@ def hint(cwd: Path) -> str | None:
     try:
         kept_in = settings.repo_file(gitio.common_dir(cwd))
         kept = settings.read(kept_in)
-        if kept.get("hint_shown") or kept.get("setup") or "dense" in kept:
+        if kept.get("hint_shown") or "setup" in kept or "dense" in kept:     # shown, or setup was answered in any way
             return None
         settings.change(kept_in, hint_shown=True)
         return HINT
@@ -180,6 +189,15 @@ def as_json(steps: list[Step]) -> dict:
     return {"steps": [asdict(step) for step in steps], "open": open_steps(steps)}
 
 
+def _failures() -> tuple:
+    from .embed.setup import SetupError
+
+    return (SetupError, sources.SourceError, gitio.GitError, OSError)
+
+
+FAILURES = _failures()     # what a step may run into without the rest of the setup being lost to it
+
+
 class Menu:
     """The questions of `aleph setup`, one step at a time. What a yes does is given from outside (`act`), so that
     this asks and keeps answers and nothing else."""
@@ -193,15 +211,23 @@ class Menu:
         return suggested if not reply else reply.startswith("y")
 
     def step(self, step: Step, found: Found) -> None:
+        """Ask about one step and keep the answer. A yes that fails is said and left open: the questions after it
+        are still asked, and this one again next time."""
         kept = answers_file(self.status, step)
         self.say(f"\n{step.title}\n  {step.detail}" + (f"\n  costs: {step.cost}" if step.cost else ""))
+        try:
+            self._ask(step, found, kept)
+        except FAILURES as problem:
+            self.say(f"  not done: {problem}\n  left open; by hand: {step.command}")
+
+    def _ask(self, step: Step, found: Found, kept: Path) -> None:
         if step.key == "claude":
             self.say(f"  run {step.command}\n  (Aleph does not change Claude Code's settings itself)")
             settings.answer(kept, "claude", "done" if self._yes("Is Claude Code connected, or will you run that now?", step.suggested) else "declined")
         elif step.key == "worker":
             if self._yes("Install the embedding worker and its model?", step.suggested):
-                self.act("worker")                     # what was declined before is installed now: the answer is what is found
-                settings.answer(kept, "worker", None)
+                settings.answer(kept, "worker", None)  # what was declined before is wanted now; done is what is then found
+                self.act("worker")
             else:
                 settings.answer(kept, "worker", "declined")
         elif step.key == "sources":
@@ -213,7 +239,7 @@ class Menu:
                 try:
                     self.say(f"  {self.act('source', location)}")
                     added += 1
-                except sources.SourceError as problem:
+                except FAILURES as problem:
                     self.say(f"  not linked: {problem}")
             settings.answer(kept, "sources", None if added else "declined")
         elif step.key == "vectors":
@@ -221,12 +247,14 @@ class Menu:
                 settings.change(kept, dense=True)      # kept for the repository: the vectors made are then used
                 settings.answer(kept, "vectors", None)
                 self.say(f"  {self.act('embed')}")
+            elif found.verdict:
+                settings.change(kept, dense=False)     # against the verdict: the repository's own choice
             else:
-                settings.change(kept, dense=False)
+                settings.answer(kept, "vectors", "declined")   # the verdict already says no: an answer, not a choice
         elif step.key == "untracked_cache":
-            if self._yes("Switch git's untracked cache on for this repository (in its index; no configuration is changed)?", step.suggested):
-                self.act("untracked_cache")
+            if self._yes("Switch git's untracked cache on for this worktree (in its index; no configuration is changed)?", step.suggested):
                 settings.answer(kept, "untracked_cache", None)
+                self.act("untracked_cache")
             else:
                 self.say("  by hand, for every repository of yours: git config --global core.untrackedCache true")
                 settings.answer(kept, "untracked_cache", "declined")
