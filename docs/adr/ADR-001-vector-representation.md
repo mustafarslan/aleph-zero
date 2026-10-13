@@ -1,6 +1,6 @@
 # ADR-001: Embedding model, runtime and vector representation
 
-- **Status:** Accepted 2026-10-11, after M0 spikes A and E. The chunk split threshold is set by the cap-quality benchmark recorded at the end.
+- **Status:** Accepted 2026-10-11, after M0 spikes A and E. The chunk split threshold is set by the cap-quality benchmark recorded at the end and was confirmed on issue text on 2026-10-13.
 - **Date opened:** 2026-10-11
 
 ## Question
@@ -70,7 +70,7 @@ Q8 and Q4 cannot be told apart on quality here: at the operating point (256-d fl
 
 **Install:** `uv sync` from an empty environment took 32.6 s, including compiling `llama-cpp-python` from source (which turned out to be unusable and has since been removed from the dependency list). Building the patched llama.cpp worker takes 13 s (Metal) to 33 s (CPU) and needs git, CMake and Ninja; prebuilt binaries are required before public release.
 
-## Split threshold: 256 tokens, provisional, chosen by retrieval quality
+## Split threshold: 256 tokens (provisional until 2026-10-13, final since: see the sweep on issue text below)
 
 `bench/spikes/cap_quality.py`, run on 2026-10-11. Corpus: every Python function in Flask, FastAPI and Django (35,851), with its docstring removed. Queries: the first sentence of the docstring for 1,500 functions: all 292 over 512 tokens that have one, plus a random sample of shorter ones (134 between 256 and 512 tokens, 1,074 at or under 256). A function over the threshold is split at statement boundaries into pieces under it, each carrying the file path, scope and signature as a header. A function is found when any piece is retrieved. 256-d vectors, Q8 weights on Metal.
 
@@ -113,7 +113,27 @@ Gain over keeping functions whole, paired on the same queries, with 95% interval
 
 **What the benchmark does and does not show.** It shows that, for docstring-style queries, taking the best of several statement-boundary pieces with a repeated header beats one vector for the whole function, and that truncation is clearly worst. The gain is significant for functions over 256 tokens (+5.9 points [+3.1, +8.7]) and not significant over all queries at 256 (+0.9 [−0.1, +1.9]). It does not show that a piece is a better unit than a function in itself. Three explanations are mixed together: more pieces give a long function more chances under best-piece ranking; small pieces are dominated by the signature, which docstrings tend to paraphrase; and pieces genuinely cover the body better. Against the second being the whole story: truncating at 512 keeps the signature and still loses about 15 points on 512–1,024-token functions, so body content matters. Two limits of the measurement itself: thresholds are nominal, because pieces are sized by an average tokens-per-character ratio and the header is not counted when deciding whether a function fits; and at the 4,096 threshold a few pieces may have exceeded the worker's capacity and been truncated.
 
-**Before it is final.** M2's Benchmark C repeats the sweep at 96, 128, 192, 256 and 384 on issue text with gold edit locations (Loc-Bench), adds a control that indexes a signature-only chunk beside the whole function, and records which piece won for each query.
+**Before it was final.** M2's Benchmark C was to repeat the sweep at 96, 128, 192, 256 and 384 on issue text with gold edit locations, add a control that indexes a signature-only chunk beside the whole function, and record which piece won for each query. The sweep was made on 2026-10-13 and is the next section; the control was not, and is still open.
+
+### The sweep on issue text (2026-10-13): no setting is better than 256, and 256 is final
+
+`bench/eval/split_sweep.py` chunks every question's commit again at each setting, into scratch indexes and scratch vector files of its own; the prepared indexes that the recorded verdicts rest on are not opened. At 256 it gives the benchmark's own figures to the digit on first lines, with words and names (Python 0.563, C++ 0.389) and with vectors (C++ 0.456 in the first ten, 0.257 in first place), so the new path measures what the benchmark measures. The rules were written before each part was run (the deferred list, entry 1c).
+
+*With words and names* (no GPU; all 400 Python questions and the 108 C++ ones): file recall@10 on first lines is 0.556, 0.562, 0.570, 0.563, 0.558 for Python and 0.380, 0.380, 0.398, 0.389, 0.371 for C++ at 96, 128, 192, 256, 384. No difference against 256 has an interval clear of zero. That was expected and decides nothing by itself: with words alone the pieces of a definition are merged back into one result. It was run as a guard on what Python ships with, and nothing was dropped.
+
+*With vectors*, on C++, the language that ships with them (108 questions, five repositories; each setting embedded again, 15 to 20 minutes each, the chip at 66 °C at most):
+
+| Threshold | Chunks against 256 | First line: first ten | against 256 (95% interval) | First place | Whole text: first ten | against 256 |
+|---|---|---|---|---|---|---|
+| 96 | 1.51× | 0.461 | +0.5 points (−3.7 to +4.4) | 0.264 | 0.478 | −3.7 (−7.5 to −0.6) |
+| 128 | 1.30× | 0.471 | +1.5 (−0.4 to +3.6) | 0.244 | 0.510 | −0.5 (−2.4 to +1.2) |
+| 192 | 1.10× | 0.459 | +0.3 (−2.5 to +2.6) | 0.253 | 0.513 | −0.2 (−2.0 to +1.3) |
+| **256** | 1.00× | 0.456 | | 0.257 | 0.515 | |
+| 384 | 0.91× | 0.450 | −0.6 (−4.1 to +2.3) | 0.250 | 0.512 | −0.3 (−2.2 to +1.5) |
+
+**By the rule, 256 stays and is no longer provisional.** A setting was to replace it only with 5 points or more on first lines and an interval clear of zero; a gain clear of zero under 5 points was to be recorded as real and under the bar. Neither occurred: the largest gain is 1.5 points at 128 and its interval holds zero. The only interval clear of zero is a loss: 96 on whole issue text, 3.7 points lower, for half as many chunks again.
+
+**What this does and does not show.** The spike above found quality rising steadily as the threshold fell, on docstring-style questions asked of vectors alone. On issue text, with vectors fused with words and names and results cut to ten, there is no such slope in either direction between 96 and 384. Three things are different here and are not told apart: the questions (an issue names behaviour, not one function's purpose), the fusion (the generators vote for pieces, not for definitions, so more pieces split the votes: the deferred list, entry 1c), and the measure (files, not functions). 108 questions see about 4 points to either side, so a difference of a point or two between settings would not have shown; what is excluded is that a smaller threshold is worth 30% to 50% more chunks, or a larger one a loss. Python was not run with vectors: over a day of GPU for a language whose vectors are off by default. The three voices on whether to run this at all are in the deferred list: agy was against (too little power to clear the bar), the advisor and I for (the measurement this section promised).
 
 **History.** The first value, 512, was set as a defence against memory growth that the llama.cpp patch then removed. A review note asked whether it should be raised. It should not: the measurement shows a smaller threshold is better, for a reason unrelated to memory.
 

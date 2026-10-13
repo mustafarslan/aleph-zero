@@ -16,7 +16,7 @@ from ..lang.imports import RawImport, extract_imports
 from .fallback import window_chunks
 from .model import TOKENS_PER_CHAR, Chunk
 
-SPLIT_TOKENS = 256  # ADR-001: provisional until the M2 sweep
+SPLIT_TOKENS = 256  # ADR-001: swept from 96 to 384 on issue text (2026-10-13); no setting was better
 _CALLABLE = frozenset({"function", "method"})
 _CONTAINER = frozenset({"class", "interface", "enum", "type", "namespace"})
 _MODULE = -1
