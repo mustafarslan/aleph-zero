@@ -602,3 +602,22 @@ def test_a_directory_and_a_file_name_are_read_into_words_once_however_many_files
     anywhere, in_name = indexer._path_words(paths, None)
     assert len(anywhere["fixtures"]) == 200 and len(in_name["input"]) == 100 and anywhere["case7"] == [paths[14], paths[15]]
     assert len(read) <= 110, len(read)          # a hundred directories and two names, not four hundred readings
+
+
+def test_reading_paths_into_words_takes_little_more_memory_than_the_maps_it_leaves():
+    # A process keeps the memory it once took. Remembering every file name with its sets cost 55 MB more than the
+    # maps hold on a repository of 42,000 files whose names all differ, and put the session over its share.
+    import tracemalloc
+
+    from aleph_zero import indexer
+
+    paths = [f"packages/icons/src/{chr(65 + n % 26)}{n}Outlined{n * 7}Icon.tsx" for n in range(20000)]
+    indexer._path_words(paths[:50], None)            # whatever is made once (the remembered forms of words) is not counted
+    tracemalloc.start()
+    try:
+        maps = indexer._path_words(paths, None)
+        held, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(maps[1]["outlined"]) == 20000
+    assert peak < held * 1.5, (held, peak)

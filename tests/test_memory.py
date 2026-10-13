@@ -92,3 +92,44 @@ def test_the_background_embedding_thread_lets_go_of_its_connections_when_it_has_
         assert background.rounds >= 1 and background._engine._indexes == {}
     finally:
         background.stop()
+
+
+def test_what_gave_nothing_back_is_not_let_go_of_again_after_every_answer(repo, tmp_path, monkeypatch):
+    # On a repository of 42,000 files a session holds over 200 MB, and letting go of the caches of the worktree in use
+    # gave back nothing the system counts: measured, each answer was followed by a release and each search took 600 ms
+    # for 200. What does not serve the worktree in use is still let go of every time.
+    from aleph_zero import memstat
+
+    other = tmp_path / "second-worktree"
+    repo.git("worktree", "add", "-q", str(other))
+    engine = Engine(repo.root)
+    monkeypatch.setenv("ALEPH_SESSION_MEMORY_MB", "100")
+    said = iter(())
+    monkeypatch.setattr(memstat, "private_bytes", lambda *_: next(said) * 1e6)
+
+    def held() -> bool:
+        return engine._indexes[engine._last]._path_words is not None
+
+    def asked() -> None:
+        assert engine.search("refresh token", cwd=other).hits and engine.warm() and held() and len(engine._indexes) == 2
+
+    asked()
+    said = iter((200, 195))                     # over the limit; after letting go, still over it
+    assert engine.relieve()["after_mb"] == 195 and not held() and len(engine._indexes) == 1
+
+    asked()
+    said = iter((200, 200))                     # as large as it was left: the same caches again would give the same nothing
+    report = engine.relieve()
+    assert held() and len(engine._indexes) == 1 and report["kept"] == "the caches of the worktree in use: letting go of them gave nothing back"
+
+    asked()
+    said = iter((260, 190))                     # it has grown by more than a quarter since: tried again
+    assert "kept" not in engine.relieve() and not held()
+
+    asked()
+    said = iter((250, 80))                      # grown again, and this time it helped: under the limit
+    assert engine.relieve()["after_mb"] == 80 and not held()
+    asked()
+    said = iter((150, 140))                     # so the next time over the limit everything is let go of, as at first
+    assert "kept" not in engine.relieve() and not held()
+    assert engine.memory_releases == 5

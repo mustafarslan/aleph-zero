@@ -473,6 +473,9 @@ def newer_build(index_file: str, theirs: int) -> str:
             f"{Path(index_file).parent} (it is a cache: nothing but time is lost)")
 
 
+_NAMES_REMEMBERED = 4096
+
+
 def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """(word -> paths it occurs in anywhere, word -> paths whose own name has it), for all words or the wanted ones.
 
@@ -485,16 +488,19 @@ def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], d
     anywhere: dict[str, list[str]] = {}
     in_name: dict[str, list[str]] = {}
     keep = (lambda words: words) if wanted is None else (lambda words: words & wanted)
+    stop = lexical.STOPWORDS
     short = lexical.MAX_TERMS // 2          # under this in the directory and in the name, no limit is reached
     by_directory: dict[str, list[str]] = {}
     for path in paths:
         by_directory.setdefault(path.rpartition("/")[0], []).append(path)
-    names: dict[str, tuple[frozenset[str], frozenset[str]]] = {}      # a name's words: all of them, and without stop words
-    by_name: dict[str, list[str]] = {}
+    # Names are remembered for the directories that share them (`input.js`, `index.ts`), and only so many: a
+    # repository of 42,000 files whose names all differ (material-ui's icons) would remember them all for nothing,
+    # and a process keeps the memory it once took (55 MB there, when every name was kept with its sets).
+    names: dict[str, tuple[tuple[str, ...], tuple[str, ...], frozenset[str] | None, bool]] = {}
     endings: dict[str, frozenset[str]] = {}                           # the words of `.js`, `.test.ts`: a handful in a repository
     for directory, held in by_directory.items():
         forms = lexical.all_forms(directory)
-        shared = forms - lexical.STOPWORDS if len(forms) < short else frozenset()
+        shared = forms - stop if len(forms) < short else frozenset()
         for word in keep(shared):
             anywhere.setdefault(word, []).extend(held)
         start = len(directory) + 1 if directory else 0
@@ -502,28 +508,28 @@ def _path_words(paths, wanted: set[str] | None) -> tuple[dict[str, list[str]], d
             name = path[start:]
             known = names.get(name)
             if known is None:
-                # The name is read once, as its stem and its ending: the stem's words are wanted by themselves below.
+                # The name is read once, as its stem and its ending: the stem's words are wanted by themselves too.
                 stem = stem_of(name)
                 of_stem = lexical.all_forms(stem)
                 ending = endings.get(name[len(stem):])
                 if ending is None:
                     ending = endings[name[len(stem):]] = lexical.all_forms(name[len(stem):])
                 every = of_stem | ending if ending else of_stem
-                known = names[name] = (every, every - lexical.STOPWORDS)
-                in_stem = (of_stem - lexical.STOPWORDS or of_stem) if len(of_stem) < short else frozenset(lexical.query_terms(stem))
-                by_name[name] = [in_stem]
-            by_name[name].append(path)
-            if len(forms) >= short or len(known[0]) >= short:
-                own = frozenset(lexical.query_terms(path)) - shared
-            elif shared:
-                own = known[1] - shared
-            else:                               # nothing but stop words above it, or nothing at all
-                own = known[1] or (forms | known[0])
-            for word in keep(own):
-                anywhere.setdefault(word, []).append(path)
-    for in_stem, *held in by_name.values():
-        for word in keep(in_stem):
-            in_name.setdefault(word, []).extend(held)
+                kept = every - stop
+                in_stem = (of_stem - stop or of_stem) if len(of_stem) < short else frozenset(lexical.query_terms(stem))
+                known = (tuple(keep(kept)), tuple(keep(in_stem)), None if kept else every, len(every) >= short)
+                if len(names) < _NAMES_REMEMBERED:
+                    names[name] = known
+            own, in_stem, all_stop_words, long = known
+            if long or len(forms) >= short:
+                own = keep(frozenset(lexical.query_terms(path)) - shared)
+            elif not shared and all_stop_words is not None:     # nothing but stop words in the whole path: they are its words
+                own = keep(forms | all_stop_words)
+            for word in own:
+                if word not in shared:
+                    anywhere.setdefault(word, []).append(path)
+            for word in in_stem:
+                in_name.setdefault(word, []).append(path)
     return anywhere, in_name
 
 

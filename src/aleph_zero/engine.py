@@ -48,6 +48,7 @@ RECORD_RETRY_SECONDS = 30.0     # after the worker failed to make them, before i
 RECORD_WRITE_MS = 200           # how long keeping them waits for another session's write
 # A session's share of the machine-wide budget (ADR-005): four sessions and the worker's
 # 490 MB worst case inside 1,024 MB. A session usually holds 40 to 60 MB.
+REGROWN = 1.25                  # a session left over its limit lets go of its worktree's caches again once it is this much larger
 SESSION_MEMORY_MB = 130
 _LANGUAGES = {
     "py": ("python",), "ts": ("typescript", "tsx"), "typescript": ("typescript", "tsx"), "js": ("javascript",),
@@ -112,6 +113,7 @@ class Engine:
         self._records_failed: dict[Path, tuple[float, str]] = {}   # per worktree: when the records' vectors could not be made, and why
         self._last: Path | None = None          # the worktree the running operation uses
         self.memory_releases = 0
+        self._left_over: float | None = None    # private bytes after a release that still left the session over its limit
         self._catalogues: dict[Path, apsw.Connection] = {}   # one per repository, opened when first needed
         self._shown: set[tuple] = set()
         self._stop = threading.Event()
@@ -148,21 +150,32 @@ class Engine:
             return None
         if before <= limit * 1e6:
             return None
+        # What does not serve the worktree in use goes every time.
         for root in [root for root in self._indexes if root != self._last]:
             self._forget(root)
-        for index in self._indexes.values():
-            index.release_memory()
-        for store in self._stores.values():
-            store.release_memory()
         self._graphs.clear()
         self._records.clear()
-        views.forget_trees()
         forget_parsers()
         self._shown.clear()
+        # The caches of the worktree in use (its paths' words, SQLite's pages, the mapped vectors, git's trees) are
+        # what the next question builds again. On a very large repository letting go of them gave back nothing the
+        # system counts, and the session, still over its share, did it after every answer: 600 ms a search for 200
+        # (material-ui, 42,000 files). So where that left the session over its limit, they are kept until it has
+        # grown by a quarter since.
+        again = self._left_over is None or before > self._left_over * REGROWN
+        if again:
+            for index in self._indexes.values():
+                index.release_memory()
+            for store in self._stores.values():
+                store.release_memory()
+            views.forget_trees()
         gc.collect()
         self.memory_releases += 1
-        return {"before_mb": round(before / 1e6, 1), "after_mb": round(memstat.private_bytes() / 1e6, 1),
-                "limit_mb": limit}
+        after = memstat.private_bytes()
+        if again:
+            self._left_over = after if after > limit * 1e6 else None
+        return {"before_mb": round(before / 1e6, 1), "after_mb": round(after / 1e6, 1), "limit_mb": limit,
+                **({} if again else {"kept": "the caches of the worktree in use: letting go of them gave nothing back"})}
 
     def _memory(self) -> dict:
         try:
