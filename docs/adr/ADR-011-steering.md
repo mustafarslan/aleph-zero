@@ -176,7 +176,7 @@ The owner's instruction for the questions the pass left open: "for open question
 
 Up by 17.0 points for the mod as it is now: by the rule, a reason to put vectors on in a next measured arm. Two things the table also says. The gain is in how often rung 2 speaks, not in how often it is right when it does: a third generator makes "two agree on the first hit" easier to meet, so locations are added for 375 questions instead of 258, and a file of the answer is among them in 57% of those either way. And so the sessions that are handed locations without the answer rise too, from 112 to 161; in the pass those were the pairs that cost more (1.18, 8 pairs, a lean). Whether the bar for speaking should rise when vectors take part is part of designing that arm.
 
-**Result of 5 (at most one result a file among the ten; both benchmarks run again with the two arms beside the engine's own; no session).** The harness's own cut of the deeper list is what the engine returns for ten in every question (0 differences in 1,016 comparisons), and the engine's arms reproduce the recorded verdicts to the digit (Python +3.9, C++ +6.7).
+**Result of 5 (at most one result a file among the ten; both benchmarks run again with the two arms beside the engine's own; no session).** The harness's own cut of the deeper list is what the engine returns for ten in every question (0 differences in 3,048 comparisons: 508 questions, three forms of each, two arms), and the engine's arms reproduce the recorded verdicts to the digit (Python +3.9, C++ +6.7).
 
 | First lines, file recall@10 | As it is (files named) | One result a file (files named) | Gain (95% interval) | First place |
 |---|---|---|---|---|
