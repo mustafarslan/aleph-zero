@@ -175,6 +175,25 @@ The column weights of the text index, the number of candidates the path and name
 
 **Nothing reaches 1.5 points, so nothing goes forward, and the 165 questions were not read for this.** The whole table lies within 1.1 points of what ships, which is two or three questions of 235 either way: the ranking is flat in these values over the ranges tried, including with every column weighted alike. They are no longer called starting values. What this does not cover: combinations (by design), the fusion's constant (left at 60), a weight for the path generator (its vote is written without one), and other languages than Python.
 
+## Fusing by definition instead of by piece (2026-10-13): measured, not adopted
+
+The fusion adds up the generators' votes per chunk, and the pieces of one long definition are merged into one result only afterwards (found by agy while reviewing the chunk-size sweep, and so in the code). When the words rank one piece of a function and the vectors or the name lookup another, neither piece has two votes; and of the 300 candidates the words propose for a first line, about 85 are second or later pieces of a definition already among them.
+
+`bench/eval/fusion.py` replaces the fusion for a run, on the prepared indexes, without changing the engine. Two arms beside the fusion as it is: **merged** (the pieces of a definition are one candidate in each generator, at the rank of its best piece, and the generators' votes for it are added) and **closed up** (the same, and each list is numbered by definitions). A definition is exactly what the engine merges after fusing. The rule was written first (the deferred list, entry 1c): read on first lines in the arm each language ships with; adopted only if not lower in either with an interval clear of zero, higher in at least one with an interval clear of zero, and first place not lower. The fusion as it is reproduces every recorded figure to the digit, which is the check on the harness.
+
+| First lines, file recall@10 | As it is | Merged | Closed up |
+|---|---|---|---|
+| **Python, words and names** (ships), 400 questions | 0.563 | 0.566: +0.3 points (0.0 to +0.8) | 0.566: +0.3 (−0.5 to +1.3) |
+| **C++, with vectors** (ships), 108 questions | 0.456 | 0.461: +0.5 (0.0 to +1.4) | 0.460: +0.3 (−0.3 to +1.4) |
+| Python, with vectors | 0.603 | 0.618: +1.6 (+0.5 to +2.8) | 0.613: +1.1 (−0.5 to +2.7) |
+| C++, words and names | 0.389 | 0.389: no question changes | 0.389 |
+
+**By the rule it is not adopted, and the fusion stays.** In each shipped arm merging changes the files among the ten for exactly one question, for the better; an interval whose lower end is zero is not clear of zero (3,714 and 3,772 of the 10,000 resampled means are zero). Closing up fails more plainly. The rule did not foresee a bound landing on zero; the count of resamples decided it, and it decides against.
+
+**Why so little, and where it is not little.** With words and names there is in effect one list: merging the pieces inside one list without renumbering changes nothing, and the name lookup adds a vote to few candidates. The change acts where two generators both rank pieces, which is where vectors take part: Python with vectors gains 1.6 points on first lines (+0.5 to +2.8) and 2.3 on whole issue text (+0.8 to +4.0), with first place up by 2.9 and 3.6; Python with words gains on whole text too (+1.0, +0.3 to +2.0; first place +2.9, +1.3 to +4.8). On C++ with vectors, whole text: +0.5 in the ten (0.0 to +1.3), mean reciprocal rank +2.0 (+0.3 to +4.0). No cell anywhere is lower with an interval clear of zero. So this is a change that would matter for a Python repository with vectors switched on and for questions asked as whole texts (rung 2 asks so), and that does next to nothing for what ships; those were not what the rule read. If either comes to ship, it is read again there, by a rule written then.
+
+**What it would do to the vector verdicts, for the record.** Under merged fusion Python's gate reads +5.2 points on all 400 first lines (+2.0 to +8.7), over the bar. That is not a pass. The verdict was decided by the 165 questions held out, and there merging moves no first-line score at all in either arm: +1.6 (−3.4 to +6.7), as before. The whole movement is on the 235 questions everything was first looked at on, which is what a held-out set is for. C++ would read +7.2 (+1.9 to +13.0) and stay on.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.
