@@ -74,3 +74,4 @@ Five tests the reviewer found would pass with the behaviour broken were made to 
 
 Left as it is: whether Claude Code is connected is not detected (it would mean reading its configuration or starting every server it knows); the person says so.
 
+Two things added after the review, before the owner tries it (the advisor's): the command printed for Claude Code names the place this engine is in, since from a checkout `aleph` is on the path only under `uv run` and Claude Code would not find it by name; and the owner's own example is a test from end to end: a documentation repository linked in the menu, a yes to search by meaning, every chunk of the view with a vector, the linked ones among them, and a question in plain words answered with vectors and the documentation among the hits.

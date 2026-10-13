@@ -33,6 +33,12 @@ Things that are not being done now on purpose. Each entry says what it is, why i
   - *agy:* do not commit to 120 sessions up front. Run 2 arms × 30 tasks once, look first at whether the agent called Aleph at all in the plugin arm (at half compliance a 20% effect reads as 10%), and only then pay for the second run of each task.
   - *Mine:* agy's order with the advisor's size: one pass of 60 sessions, a look at compliance, then the second pass. The harness now supports that: `bench/ab/run.py pause|resume|stop|status <results directory>` from any shell, and `--take-up FILE` runs only the sessions an interrupted run is missing (it refuses a file of another seed or count, counts only the missing sessions against `--max-sessions`, and does not ask a session a third time after two failures). A mistyped `--take-up` file is refused (it would have run, and spent, everything again), and so is a start over a pause left in the results directory. The directory is the one the results file is in, not the Benchmark C work directory: a `pause` there is refused, because it would hold the GPU job.
 
+## 0a. Two minutes with `aleph setup` (built 2026-10-13 on your asking; you have not tried it)
+
+- **What:** the checklist you asked for (ADR-013). `uv run aleph setup` in any repository, on a terminal: five questions, each with what a yes costs; answers are kept, so a second run asks nothing; `--again` asks about what was declined.
+- **What I could try and what I could not:** the menu was driven through a pseudo-terminal on a scratch repository with a cache directory of its own (a documentation repository linked, then found by search; git configuration untouched). Not tried: your machine's own answers (I did not write your cache directory's settings), the 310 MB download through the menu, and a URL source through the menu; both go through the code `aleph embed setup` and `aleph source add` already use.
+- **Two things to know:** in a Python repository search by meaning is not offered by default (the verdict is against); say yes there if you link documentation and want it found by meaning, which is not measured. And "Claude Code is connected" is what you say, not something Aleph checks.
+
 ## 0b. Two minutes with the side chat (it has never been seen)
 
 - **What:** the side chat (ADR-012) was built and tested without an interactive session; nobody has looked at its pane.

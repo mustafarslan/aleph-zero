@@ -46,8 +46,9 @@ Search by words and names needs no setup. Everything else is one checklist:
     uv run aleph setup                        # on a terminal: shows the list and asks about what is open
 
 It asks five things, each with what a yes costs, and keeps the answers so that nothing is asked twice:
-whether Claude Code is connected (it prints the command, `claude mcp add --scope user aleph-zero -- aleph serve`
-for every project, and never changes Claude Code's settings itself);
+whether Claude Code is connected (it prints the command with the place this engine is in,
+`claude mcp add --scope user aleph-zero -- /path/to/aleph serve`, for every project, and never changes
+Claude Code's settings itself);
 the embedding worker and its model (310 MB; offered where it will be used); documentation or code in
 another repository to search beside this one (a path or a URL); search by meaning in this repository
 (makes its vectors, what you linked included; can be interrupted and continued); and git's untracked

@@ -31,6 +31,7 @@ class Found:
     sources: int               # linked sources
     untracked_cache: bool      # git keeps its untracked cache for this repository
     repository: bool           # a git repository: sources are linked to one, and git's cache is its own
+    aleph: str = "aleph"       # how this engine is started: where it is, when that is known
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
     asked_for = repo.get("dense") if isinstance(repo.get("dense"), bool) else None   # the person's own choice, if they made one
     wanted = found.verdict if asked_for is None else asked_for
     # `--scope user`: for every project, as the answer is kept for the machine. Claude Code's own default is one project.
-    connect = "`claude mcp add --scope user aleph-zero -- aleph serve`" + (
+    connect = f"`claude mcp add --scope user aleph-zero -- {found.aleph} serve`" + (
         f" (or, for one session and with the steering: `claude --plugin-dir {found.plugin_dir}`)" if found.plugin_dir else "")
     steps = [
         Step("claude", "machine", "Connect Claude Code", _state(False, machine, "claude"),
@@ -126,7 +127,10 @@ def look(status: dict) -> Found:
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
-                 repository=bool(status.get("repository", True)))
+                 repository=bool(status.get("repository", True)),
+                 # Where this engine is, not its name: under `uv run` the name is on PATH, in Claude Code's own
+                 # environment it is not, and a command that only names it would not start there.
+                 aleph=str(Path(sys.executable).with_name("aleph")))
 
 
 def of(status: dict) -> list[Step]:

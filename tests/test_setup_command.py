@@ -255,3 +255,35 @@ def test_a_no_to_vectors_where_the_verdict_is_against_is_an_answer_and_not_a_cho
     kept = settings.read(settings.repo_file(gitio.common_dir(repo.root)))
     assert "dense" not in kept and kept["setup"]["vectors"] == "declined"       # a later verdict in favour is not outranked
     assert _states(repo, capsys)["vectors"] == "declined"
+
+
+# ---- before the owner tries it (2026-10-13) --------------------------------------------------------
+
+
+def test_the_command_for_claude_code_names_an_engine_that_can_be_started(repo, capsys, monkeypatch):
+    import sys
+    from pathlib import Path
+
+    # Under `uv run` the checkout's `aleph` is on PATH, and in Claude Code's own environment it is not: the name
+    # alone would not start there. Where this engine is, is always right.
+    here = Path(sys.executable).with_name("aleph")
+    for found in (lambda name: None, lambda name: f"/somewhere/else/{name}"):
+        monkeypatch.setattr("shutil.which", found)
+        assert _setup(repo) == 0
+        out = capsys.readouterr().out
+        assert f"claude mcp add --scope user aleph-zero -- {here} serve" in out and "-- aleph serve" not in out
+
+
+def test_the_owner_s_example_a_documentation_repository_is_linked_embedded_and_found_by_meaning(repo, docs_repo, fake_worker, capsys, monkeypatch):
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    _terminal(monkeypatch, "n", str(docs_repo.root), "", "y", "n")  # Claude Code, the source, no more, vectors, git's cache
+    assert _setup(repo) == 0
+    engine = Engine(repo.root)
+    status = engine.status()
+    assert status["vectors"]["enabled"] is True and status["vectors"]["with_vector"] == status["vectors"]["chunks"]
+    assert len(status["sources"]) == 1 and status["vectors"]["chunks"] == status["chunks_in_view"]      # the linked chunks are among them
+    answer = engine.search("the procedure for mooring a zeppelin")
+    assert answer.dense == "used" and "handbook:guides/mooring.md" in [hit.path for hit in answer.hits]
