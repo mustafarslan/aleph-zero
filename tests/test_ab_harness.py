@@ -371,3 +371,16 @@ def test_the_first_git_command_leaves_the_worktree_s_files_as_they_were(tmp_path
     ab.as_after_a_first_git_command(clone)
     assert subprocess.run(["git", "-C", str(clone), "status", "--porcelain"], capture_output=True, text=True).stdout == before
     assert (clone / "a.py").read_text().endswith("43\n") and (clone / "new.py").is_file()
+
+
+def test_the_first_git_command_comes_a_second_after_the_checkout_or_it_settles_nothing(tmp_path, monkeypatch):
+    # Git compares whole seconds: a file written in the second the index is written in stays "possibly changed", and an
+    # index rewritten in that same second keeps it so. Measured on django: a status at once leaves 180 ms a status,
+    # one a second later 66.
+    clone, _ = _a_repository(tmp_path)
+    order: list[str] = []
+    monkeypatch.setattr(ab.time, "sleep", lambda seconds: order.append(f"wait {seconds >= 1.0}"))
+    real = ab.subprocess.run
+    monkeypatch.setattr(ab.subprocess, "run", lambda args, *rest, **kwargs: order.append(args[3]) or real(args, *rest, **kwargs))
+    ab.as_after_a_first_git_command(clone)
+    assert order == ["wait True", "status"]

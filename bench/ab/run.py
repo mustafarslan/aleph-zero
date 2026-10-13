@@ -122,7 +122,12 @@ def as_after_a_first_git_command(tree: Path) -> None:
     status until some ordinary git command rewrites the index. A developer's shell prompt, their editor or the
     agent's first `git status` does that; the engine never does (ADR-008: it takes no lock on the index). Without
     this a scratch worktree stays in a state no worktree in use is in: 340 to 380 ms a status on vscode against 36.
-    The worktree is the harness's own, so no one's commit can meet the lock."""
+    The worktree is the harness's own, so no one's commit can meet the lock.
+
+    Not at once: git compares whole seconds, and an index rewritten in the second the last file was written in keeps
+    that file "possibly changed". A status right after a quick checkout settled nothing (django: 180 ms a status
+    afterwards; 66 when it came a second later)."""
+    time.sleep(1.1)
     subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, timeout=300)
 
 
