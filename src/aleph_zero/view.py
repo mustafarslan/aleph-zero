@@ -203,9 +203,19 @@ class Worktree:
 
 
 def read_worktree(cwd: Path) -> Worktree:
+    # Asked now, read below: git looks at the worktree while it is asked for the repository's facts.
+    changes = gitio.StatusAhead(Path(cwd))
+    try:
+        return _read_worktree(cwd, changes)
+    finally:
+        changes.forget()        # nothing, where it was read
+
+
+def _read_worktree(cwd: Path, changes: gitio.StatusAhead) -> Worktree:
     try:
         info = gitio.repo_info(cwd)
     except gitio.NoRepository:      # git's own word, and nothing less: a repository git cannot read is not walked
+        changes.forget()
         root, kept, files, inner, unread = plain.read(Path(cwd))
         return Worktree(gitio.RepoInfo(root, "sha1", kept, None, None, plain=True), files, frozenset(files),
                         inner_repositories=inner, left_unread=unread)
@@ -220,7 +230,7 @@ def read_worktree(cwd: Path) -> Worktree:
             files = dict(tracked)
     dirty: set[str] = set()
     listings: dict[Path, frozenset[str]] = {}
-    for number, path in enumerate(gitio.status(root)):
+    for number, path in enumerate(changes.paths(root)):
         if number % 64 == 0:
             gitio.check_deadline()  # thousands of changed files are hashed here, outside any git call
         oid = _dirty_blob(root, path, fmt, listings)

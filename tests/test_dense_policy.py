@@ -228,19 +228,19 @@ def test_the_query_s_vector_is_asked_for_while_git_is_asked_about_the_worktree(r
     expected = engine.search("how is an invoice rendered")
     assert expected.dense == "used"
     events: list[str] = []
-    real_embed, real_status = EmbedClient.embed, gitio.status
+    real_embed, real_paths = EmbedClient.embed, gitio.StatusAhead.paths
 
     def embed(self, texts, kind):
         events.append("the worker is asked")
         return real_embed(self, texts, kind)
 
-    def status(root):
-        found = list(real_status(root))
+    def paths(self, root):
+        found = real_paths(self, root)
         events.append("git has answered")
         return found
 
     monkeypatch.setattr(EmbedClient, "embed", embed)
-    monkeypatch.setattr(gitio, "status", status)
+    monkeypatch.setattr(gitio.StatusAhead, "paths", paths)
     answer = engine.search("how is an invoice rendered")
     assert events.index("the worker is asked") < events.index("git has answered") and events.count("the worker is asked") == 1
     assert answer.dense == "used" and [(hit.path, hit.start_line, hit.score) for hit in answer.hits] == [(hit.path, hit.start_line, hit.score) for hit in expected.hits]

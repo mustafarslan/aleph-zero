@@ -119,3 +119,57 @@ def test_a_case_only_rename_leaves_one_name_in_the_view(repo):
     repo.git("mv", "docs/guide.md", "docs/Guide.md")
     view = build_view(repo.root)
     assert "docs/Guide.md" in view.files and "docs/guide.md" not in view.files
+
+
+def test_git_is_asked_about_the_changes_while_it_is_asked_about_the_repository(repo, monkeypatch):
+    # Two git processes for every question, one after the other: the repository's facts took 9 to 11 ms of each
+    # (a quarter of a question on a small repository). The second is started before the first is waited for.
+    import subprocess
+
+    from aleph_zero import gitio
+
+    events: list[str] = []
+    real_popen = subprocess.Popen
+
+    class Watched(real_popen):
+        def __init__(self, command, *args, **kwargs):
+            self._what = next((word for word in command if word in ("status", "rev-parse")), None)
+            if self._what:
+                events.append(f"{self._what} starts")
+            super().__init__(command, *args, **kwargs)
+
+        def communicate(self, *args, **kwargs):
+            out = super().communicate(*args, **kwargs)
+            if self._what:
+                events.append(f"{self._what} ends")
+            return out
+
+    monkeypatch.setattr(gitio.subprocess, "Popen", Watched)
+    repo.write("src/billing/invoice.py", "def render_invoice(order):\n    return 'changed'\n")
+    view = build_view(repo.root)
+    assert events.index("status starts") < events.index("rev-parse ends"), events
+    assert view.dirty == frozenset({"src/billing/invoice.py"})
+
+
+def test_a_view_asked_for_from_a_sub_directory_holds_the_same_files_untracked_directories_too(repo):
+    # git answers `status` with paths from the repository's top wherever it is asked; what is listed afterwards
+    # (the files of a wholly untracked directory) must be asked for from the top too.
+    repo.write("fresh/deep/one.py", "def one():\n    return 1\n")
+    repo.write("fresh/two.py", "def two():\n    return 2\n")
+    repo.write("src/auth/edited_here.py", "def here():\n    return 0\n")
+    top = build_view(repo.root)
+    below = build_view(repo.root / "src" / "auth")
+    assert below.files == top.files and below.dirty == top.dirty
+    assert {"fresh/deep/one.py", "fresh/two.py", "src/auth/edited_here.py"} <= set(below.files)
+
+
+def test_a_directory_that_is_no_repository_leaves_no_git_process_behind_and_is_read_as_it_is(tmp_path):
+    import subprocess
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "notes.py").write_text("def note():\n    return 1\n")
+    view = build_view(plain)
+    assert "notes.py" in view.files and view.plain
+    running = subprocess.run(["pgrep", "-f", f"git -C {plain} status"], capture_output=True, text=True).stdout.split()
+    assert running == []

@@ -102,14 +102,22 @@ def until(deadline: float | None):
         _DEADLINE.reset(token)
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess:
-    deadline = _DEADLINE.get()
-    timeout = None if deadline is None else max(deadline - time.monotonic(), 0.001)
+def _start(command: list[str]) -> subprocess.Popen:
     try:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_env())
+        return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_env())
     except FileNotFoundError:
         raise GitError("git is not installed, or not on the PATH: Aleph asks git what a repository holds, and whether "
                        "a directory is in one. Install git and try again") from None
+
+
+def _run(command: list[str]) -> subprocess.CompletedProcess:
+    return _finish(_start(command), command)
+
+
+def _finish(proc: subprocess.Popen, command: list[str]) -> subprocess.CompletedProcess:
+    """Wait for a git process that was started, by the deadline in force now."""
+    deadline = _DEADLINE.get()
+    timeout = None if deadline is None else max(deadline - time.monotonic(), 0.001)
     try:
         out, err = proc.communicate(timeout=timeout)
         return subprocess.CompletedProcess(command, proc.returncode, out, err)
@@ -253,6 +261,41 @@ def skip_worktree(cwd: Path) -> tuple[frozenset[str], tuple[str, ...]]:
     return frozenset(files), tuple(directories)
 
 
+_STATUS = ("status", "--porcelain=v2", "-z", "--untracked-files=normal")
+
+
+class StatusAhead:
+    """`git status`, started and not yet waited for: so that it runs while git is asked for the repository's facts
+    (9 to 11 ms of every question, when the two came one after the other). It may be started anywhere in the
+    worktree: git gives its paths from the top. Whoever starts one ends it, with `paths` or with `forget`."""
+
+    def __init__(self, cwd: Path) -> None:
+        self._command = ["git", "-C", str(cwd), *_STATUS]
+        self._cwd = cwd
+        self._proc: subprocess.Popen | None = _start(self._command)
+
+    def paths(self, root: Path) -> list[str]:
+        """What `status(root)` gives. `root` is the top of the worktree: what git lists afterwards is asked for there."""
+        proc, self._proc = self._proc, None
+        if proc is None:
+            raise GitError("this status was read or given up already")
+        done = _finish(proc, self._command)
+        if done.returncode != 0:
+            detail = done.stderr.decode(errors="replace").strip()[:300]
+            raise GitError(f"git {' '.join(_STATUS)} failed in {self._cwd}: {detail}")
+        return _status_paths(root, done.stdout)
+
+    def forget(self) -> None:
+        """Not wanted after all (no repository there, or something else failed first): nothing of it is left running."""
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        if proc.poll() is None:
+            _stop_with_children(proc)
+        else:                           # it has ended by itself (no repository there): only its pipes are left to close
+            proc.communicate()
+
+
 def status(cwd: Path) -> list[str]:
     """Every path that differs from HEAD or is untracked. A rename reports both names.
 
@@ -261,7 +304,11 @@ def status(cwd: Path) -> list[str]:
     second call. The `all` form gives the same files in one call, but git's untracked
     cache cannot answer it: with `core.untrackedCache` on, this form took 20 ms on
     Django against 66 ms (ADR-008)."""
-    tokens = git(cwd, "status", "--porcelain=v2", "-z", "--untracked-files=normal").split(b"\0")
+    return _status_paths(cwd, git(cwd, *_STATUS))
+
+
+def _status_paths(cwd: Path, answer: bytes) -> list[str]:
+    tokens = answer.split(b"\0")
     paths: list[bytes] = []
     directories: list[bytes] = []
     index = 0
