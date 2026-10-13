@@ -1,0 +1,89 @@
+"""A language's benchmark result read by the gate of ADR-002, the same way for every language.
+
+  uv run --group bench python bench/eval/verdict.py bench/data/results/benchmark_c_go.json
+
+The gate: on the question's first line, vectors add 5 points or more of file recall@10 with a paired
+interval that excludes zero. Beside it and deciding nothing: the whole issue text, the interval when
+repositories are resampled instead of questions, and the same reading on the repositories whose commits
+stay at or under 50,000 chunks (the owner asked for mid-sized repositories; docs/DEFERRED.md, entry 1b).
+"""
+from __future__ import annotations
+
+import json
+import random
+import statistics
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import benchmark_c as bench  # noqa: E402
+
+BAR = 0.05
+REPOSITORIES = 4            # fewer after the size limit: no verdict
+MID = 50_000                # chunks of a commit: the reading beside the verdict
+FORMS = {"first line": "title", "whole text": "full"}
+
+
+def _by_repository(rows: list[dict], form: str, rounds: int = 10_000, seed: int = 20261012) -> list[float]:
+    """The interval of the gain when repositories are drawn again instead of questions."""
+    groups: dict[str, list[float]] = {}
+    for row in rows:
+        groups.setdefault(row["repo"], []).append(row["scores"][form]["hybrid"]["recall@10"] - row["scores"][form]["lexical"]["recall@10"])
+    names, rng, means = sorted(groups), random.Random(seed), []
+    for _ in range(rounds):
+        drawn = [value for name in (rng.choice(names) for _ in names) for value in groups[name]]
+        means.append(statistics.fmean(drawn))
+    means.sort()
+    return [round(means[int(0.025 * rounds)], 3), round(means[int(0.975 * rounds)], 3)]
+
+
+def _form(rows: list[dict], form: str) -> dict:
+    words = [row["scores"][form]["lexical"]["recall@10"] for row in rows]
+    vectors = [row["scores"][form]["hybrid"]["recall@10"] for row in rows]
+    gain, low, high = bench.paired_bootstrap(vectors, words)
+    return {"words": round(statistics.fmean(words), 3), "vectors": round(statistics.fmean(vectors), 3),
+            "gain": gain, "low": low, "high": high,
+            "better": sum(a > b for a, b in zip(vectors, words)), "worse": sum(a < b for a, b in zip(vectors, words)),
+            "first place": [round(statistics.fmean(row["scores"][form][mode]["recall@1"] for row in rows), 3) for mode in ("lexical", "hybrid")],
+            "by repository": _by_repository(rows, form)}
+
+
+def read(rows: list[dict]) -> dict:
+    """The verdict of a result's questions: `passes` is True, False, or None where there is none to give."""
+    repositories = sorted({row["repo"] for row in rows})
+    out: dict = {"questions": len(rows), "repositories": len(repositories),
+                 "questions a repository": {name: sum(row["repo"] == name for row in rows) for name in repositories}}
+    for label, form in FORMS.items():
+        out[label] = _form(rows, form)
+    first = out["first line"]
+    if len(repositories) < REPOSITORIES:
+        out["passes"], out["why"] = None, f"{len(repositories)} repositories: a language is read with four or more"
+    else:
+        out["passes"] = bool(first["gain"] >= BAR and first["low"] > 0)
+        out["why"] = ("5 points or more, and the interval excludes zero" if out["passes"]
+                      else "the interval holds zero" if first["low"] <= 0 else "the gain is real and under 5 points")
+    largest: dict[str, int] = {}
+    for row in rows:
+        largest[row["repo"]] = max(largest.get(row["repo"], 0), row["chunks"])
+    small = [row for row in rows if largest[row["repo"]] <= MID]
+    left = sorted(name for name, size in largest.items() if size > MID)
+    beside: dict = {"questions": len(small), "left out": left}
+    if small and left:
+        beside["first line"], beside["whole text"] = _form(small, "title"), _form(small, "full")
+    elif small:
+        beside["first line"] = first      # nothing is over it: the same questions
+    out[f"repositories at or under {MID:,} chunks"] = beside
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    path = Path((argv or sys.argv[1:])[0])
+    found = json.loads(path.read_text())
+    report = read(found["instances"])
+    report["left out of the run"] = found["summary"].get("left_out", {})
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
