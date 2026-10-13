@@ -183,7 +183,7 @@ The fusion adds up the generators' votes per chunk, and the pieces of one long d
 
 | First lines, file recall@10 | As it is | Merged | Closed up |
 |---|---|---|---|
-| **Python, words and names** (ships), 400 questions | 0.563 | 0.566: +0.3 points (0.0 to +0.8) | 0.566: +0.3 (−0.5 to +1.3) |
+| **Python, words and names** (ships), 400 questions | 0.563 | 0.566: +0.3 points (0.0 to +0.7) | 0.566: +0.3 (−0.5 to +1.3) |
 | **C++, with vectors** (ships), 108 questions | 0.456 | 0.461: +0.5 (0.0 to +1.4) | 0.460: +0.3 (−0.3 to +1.4) |
 | Python, with vectors | 0.603 | 0.618: +1.6 (+0.5 to +2.8) | 0.613: +1.1 (−0.5 to +2.7) |
 | C++, words and names | 0.389 | 0.389: no question changes | 0.389 |
