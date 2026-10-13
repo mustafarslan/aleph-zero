@@ -2,6 +2,8 @@
 
   uv run --group bench python bench/eval/trial.py score bench/data/benchc-go --set others --language go --only bench/data/results/benchmark_c_go.json --out bench/data/results/trial_go.json
   uv run --group bench python bench/eval/trial.py read bench/data/results/trial_*.json
+  uv run --group bench python bench/eval/trial.py fetch bench/data/benchc-python-unasked --not-asked-in bench/data/results/benchmark_c_400.json
+  uv run --group bench python bench/eval/trial.py score bench/data/benchc-python-unasked --words-only --not-asked-in ... --out ...
 
 A trial is a switch of the engine set for the run (`search.DOTTED_FALLBACK`, `search.PATH_VOTE`); `score` asks every
 question with words and names and with vectors, as it is and with each trial and all of them together; nothing is
@@ -43,39 +45,77 @@ def switched(switches: dict):
             setattr(ranker, name, value)
 
 
-def score_all(workdir: Path, rows: list[dict], say) -> tuple[dict, dict]:
-    from aleph_zero.embed import worker
-    from aleph_zero.embed.client import VECTOR_KIND, EmbedClient
-    from aleph_zero.vectors import VectorStore
+MOST_CHUNKS = 150_000       # of a commit: over it a question is left out, as in every language's benchmark
 
-    client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
+
+def fetch_all(workdir: Path, rows: list[dict], say) -> dict:
+    """Each question's commit fetched (one snapshot) and indexed; nothing embedded. Network. What is there already
+    is not fetched again."""
+    counts = {"indexed": 0, "not fetched": 0, "over the limit": 0}
+    for number, row in enumerate(rows, 1):
+        try:
+            clone = bench.fetch(workdir, row)
+            view = bench.view_at(clone, row["base_commit"])
+        except (OSError, gitio.GitError, bench.subprocess.CalledProcessError, bench.subprocess.TimeoutExpired) as wrong:
+            counts["not fetched"] += 1
+            say(f"{number:4}/{len(rows)} {row['instance_id']:44} not fetched: {str(wrong)[:70]}")
+            continue
+        index = Index(open_db(index_file(view.common_dir)))
+        try:
+            while index.sync(view, budget_seconds=600).pending:
+                pass
+            chunks = index.counts()["chunks_in_view"]
+        finally:
+            index.conn.close()
+        counts["over the limit" if chunks > MOST_CHUNKS else "indexed"] += 1
+        say(f"{number:4}/{len(rows)} {row['instance_id']:44} files {len(view.files):6} chunks {chunks:7}")
+    return counts
+
+
+def score_all(workdir: Path, rows: list[dict], say, words_only: bool = False) -> tuple[dict, dict]:
+    """Every question in every arm. With `words_only` nothing is asked of the worker: for a language that ships
+    with words and names, on questions whose repositories were never embedded."""
     out: dict[str, dict] = {}
     left = {"left_out": 0}
+    client = store = None
+    if not words_only:
+        from aleph_zero.embed import worker
+        from aleph_zero.embed.client import VECTOR_KIND, EmbedClient
+        from aleph_zero.vectors import VectorStore
+
+        client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
     for number, row in enumerate(rows, 1):
         try:
             view = bench.view_at(bench.clone_of(workdir, row["repo"]), row["base_commit"])
-        except gitio.GitError:
+        except (OSError, gitio.GitError):
             left["left_out"] += 1
             continue
         index = Index(open_db(index_file(view.common_dir)))
         try:
-            store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
-            have, total = store.coverage(index)
-            if index.sync(view, budget_seconds=0.0).pending or have < total:
+            if index.sync(view, budget_seconds=0.0).pending or index.counts()["chunks_in_view"] > MOST_CHUNKS:
                 left["left_out"] += 1
                 continue
+            if not words_only:
+                store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
+                have, total = store.coverage(index)
+                if have < total:
+                    left["left_out"] += 1
+                    continue
             forms = bench.question_forms(index, row["problem_statement"])
-            vectors = dict(zip(FORMS, client.embed([forms[form] for form in FORMS], kind="query")))
+            vectors = None if words_only else dict(zip(FORMS, client.embed([forms[form] for form in FORMS], kind="query")))
             entry: dict = {"repo": row["repo"], "arms": {}}
             for arm, switches in ARMS.items():
                 with switched(switches):
                     entry["arms"][arm] = {}
                     for form in FORMS:
-                        nearest = lambda limit, scoped, vector=vectors[form]: [  # noqa: E731
-                            chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
                         words = bench.first_files([hit.path for hit in ranker.search(index, view, forms[form], k=10)])
-                        both = bench.first_files([hit.path for hit in ranker.search(index, view, forms[form], k=10, dense=nearest)])
-                        entry["arms"][arm][form] = {"lexical": bench.score(row["gold"], words), "hybrid": bench.score(row["gold"], both)}
+                        scores = {"lexical": bench.score(row["gold"], words)}
+                        if vectors is not None:
+                            nearest = lambda limit, scoped, vector=vectors[form]: [  # noqa: E731
+                                chunk_id for chunk_id, _ in store.search(index, vector, limit, scoped)]
+                            both = bench.first_files([hit.path for hit in ranker.search(index, view, forms[form], k=10, dense=nearest)])
+                            scores["hybrid"] = bench.score(row["gold"], both)
+                        entry["arms"][arm][form] = scores
             out[row["instance_id"]] = entry
         finally:
             index.conn.close()
@@ -118,8 +158,9 @@ def read(scored: dict[str, dict]) -> dict:
             together += [(entry, mode) for entry in entries]
             block[language] = {"ships with": "vectors" if mode == "hybrid" else "words and names",
                                "first line": compare([(entry, mode) for entry in entries], arm),
-                               "whole text": compare([(entry, mode) for entry in entries], arm, "full"),
-                               "first line, the other arm": compare([(entry, other) for entry in entries], arm)}
+                               "whole text": compare([(entry, mode) for entry in entries], arm, "full")}
+            if all(other in entry["arms"][arm]["title"] for entry in entries):      # a words-only reading has no other arm
+                block[language]["first line, the other arm"] = compare([(entry, other) for entry in entries], arm)
         block["all, each in its shipped arm"] = {"first line": compare(together, arm), "whole text": compare(together, arm, "full")}
         report[arm] = block
     return report
@@ -128,12 +169,17 @@ def read(scored: dict[str, dict]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     actions = parser.add_subparsers(dest="action", required=True)
-    score = actions.add_parser("score")
-    score.add_argument("workdir", type=Path)
-    score.add_argument("--set", default="locbench")
-    score.add_argument("--language")
-    score.add_argument("--only", type=Path, required=True, help="a benchmark result: the questions it scored, with the main language it recorded")
-    score.add_argument("--out", type=Path, required=True)
+    for name in ("score", "fetch"):
+        action = actions.add_parser(name)
+        action.add_argument("workdir", type=Path)
+        action.add_argument("--set", default="locbench")
+        action.add_argument("--language")
+        action.add_argument("--only", type=Path, help="a benchmark result: the questions it scored, with the main language it recorded")
+        action.add_argument("--not-asked-in", type=Path, nargs="+", help="benchmark results: the questions none of them scored")
+        action.add_argument("--repos", help="comma-separated owner/name: only these repositories' questions")
+        if name == "score":
+            action.add_argument("--words-only", action="store_true", help="ask nothing of the worker: for a language that ships with words and names")
+            action.add_argument("--out", type=Path, required=True)
     reading = actions.add_parser("read")
     reading.add_argument("files", type=Path, nargs="+")
     args = parser.parse_args(argv)
@@ -146,11 +192,25 @@ def main(argv: list[str] | None = None) -> int:
                 scored[name] = entry
         print(json.dumps(read(scored), indent=1))
         return 0
-    kept = {entry["instance"]: entry for entry in json.loads(args.only.read_text())["instances"]}
-    rows = [row for row in bench.instances(None, args.set, args.language, None) if row["instance_id"] in kept]
-    scored, left = score_all(args.workdir, rows, lambda text: print(text, file=sys.stderr, flush=True))
+    if bool(args.only) == bool(args.not_asked_in):
+        parser.error("one of --only and --not-asked-in")
+    say = lambda text: print(text, file=sys.stderr, flush=True)  # noqa: E731
+    repos = set(args.repos.split(",")) if args.repos else None
+    every = bench.instances(repos, args.set, args.language, None)
+    if args.only:
+        kept = {entry["instance"]: entry for entry in json.loads(args.only.read_text())["instances"]}
+        rows = [row for row in every if row["instance_id"] in kept]
+    else:
+        kept = {}
+        rows = [row for row in every if row["instance_id"] not in bench.asked_in(args.not_asked_in)]
+    if args.action == "fetch":
+        print(json.dumps(fetch_all(args.workdir, rows, say)))
+        return 0
+    scored, left = score_all(args.workdir, rows, say, args.words_only)
     for name, entry in scored.items():
-        entry["main_language"] = kept[name].get("main_language") or ("python" if args.set == "locbench" else None)
+        # Never-asked questions of a set of one language (Loc-Bench: Python; `--language`) are that language's: their
+        # repositories were not embedded, so nothing but the set says what they are.
+        entry["main_language"] = kept.get(name, {}).get("main_language") or ("python" if args.set == "locbench" else args.language if not args.only else None)
         if not entry["main_language"]:
             raise SystemExit(f"no main language recorded for {name}: run population.py on {args.only} first")
     args.out.write_text(json.dumps({"left": left, "scores": scored}, indent=1) + "\n")
