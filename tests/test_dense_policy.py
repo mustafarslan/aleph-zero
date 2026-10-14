@@ -159,7 +159,7 @@ def test_cpp_has_a_verdict_in_favour_and_says_on_what():
     assert "+6.7 points" in verdict.evidence and "+1.4 to +12.3" in verdict.evidence and "8.1" not in verdict.evidence
     on, why = dense_policy.decide(None, "cpp")
     assert on is True and "vectors help" in why
-    assert dense_policy.decide(None, "c")[0] is False and "no benchmark has been run for c " in dense_policy.decide(None, "c")[1]      # C was not run: its own questions, its own verdict
+    assert "c" in dense_policy.VERDICTS and dense_policy.VERDICTS["c"].evidence != verdict.evidence   # C has its own questions and its own verdict (2026-10-14)
     assert dense_policy.decide(False, "cpp") == (False, "switched off by hand")
 
 
@@ -209,7 +209,7 @@ def test_a_verdict_is_read_from_the_repositories_the_product_calls_that_language
     assert "+9.8" in javascript.evidence and "448" in javascript.evidence                        # and all of them together
     assert "main language" in javascript.evidence and "main language" in dense_policy.VERDICTS["typescript"].evidence
     assert "main language" in dense_policy.VERDICTS["go"].evidence
-    for unmeasured in ("c", "rust"):
+    for unmeasured in [language for language in ("c", "rust") if language not in dense_policy.VERDICTS]:
         assert "no benchmark has been run" in dense_policy.decide(None, unmeasured)[1]
 
 
@@ -285,3 +285,11 @@ def test_a_warmed_session_s_first_question_has_its_vector_asked_for_early_too(re
     assert answer.dense == "used" and events.index("the worker is asked") < events.index("git has answered")
     cold = Engine(repo.root)                                      # Python, nobody's choice: warming asks for nothing early
     assert cold.warm() is True and cold._with_vectors == {str(repo.root): False}
+
+
+def test_c_has_its_verdict_from_its_own_questions_read_by_main_language():
+    # The owner's "check for each language" (2026-10-14): C was read as the other languages were, by main language.
+    verdict = dense_policy.VERDICTS["c"]
+    assert verdict.helps is True and dense_policy.decide(None, "c")[0] is True
+    assert "+12.3 points" in verdict.evidence and "88 questions" in verdict.evidence and "six repositories" in verdict.evidence
+    assert "no benchmark has been run" in dense_policy.decide(None, "rust")[1] or "rust" in dense_policy.VERDICTS

@@ -52,6 +52,10 @@ VERDICTS: dict[str, Verdict] = {
     "javascript": Verdict(True, "+16.2 points of file recall@10, interval +9.4 to +23.1, on 164 questions never asked before, from five "
                                 "repositories whose main language is JavaScript, asked by their first line; +9.8 (+6.0 to +13.6) on all "
                                 "448 from twelve repositories; ADR-002, 2026-10-13"),
+    # C, read on the owner's "check for each language" (2026-10-14), by main language from the start: half of ponyc's
+    # questions are in commits that are mostly C++ and count there (C++ with them: +6.6 on 128 questions, still on).
+    "c": Verdict(True, "+12.3 points of file recall@10, interval +3.7 to +21.3, on 88 questions from six repositories whose "
+                       "main language is C, asked by their first line; on whole issue text +19.8; ADR-002, 2026-10-14"),
     "java": Verdict(False, "+0.1 points of file recall@10 on 296 questions from eighteen repositories asked by their first line, "
                            "interval -3.2 to +3.4, which holds zero; on whole issue text +5.3; ADR-002, 2026-10-13"),
 }
