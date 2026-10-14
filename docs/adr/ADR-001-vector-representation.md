@@ -70,6 +70,21 @@ Q8 and Q4 cannot be told apart on quality here: at the operating point (256-d fl
 
 **Install:** `uv sync` from an empty environment took 32.6 s, including compiling `llama-cpp-python` from source (which turned out to be unusable and has since been removed from the dependency list). Building the patched llama.cpp worker takes 13 s (Metal) to 33 s (CPU) and needs git, CMake and Ninja; prebuilt binaries are required before public release.
 
+## The width read on localisation at last (2026-10-14): 256 stays
+
+The table above could not tell 256 from 512 (its set is too easy), and the choice was to be "revisited in M2 on localization tasks". It was not, until the owner asked for every capability to be checked against what could improve it; the model's card gives 512 and 768 as better on code retrieval (77.2 and 78.7 against 76.2 on MTEB Code). `bench/eval/widths.py` made vectors of a kind of their own beside the engine's, with all 768 numbers, for every language's kept questions in repositories at or under 20,000 chunks, and scored them as if 256, 512 or 768 had been kept. The rule was written first (the deferred list, entry 1d): on the languages that ship with vectors, all their questions together, first line, file recall@10, **a wider vector replaces 256 only with +2 points or more and an interval clear of zero** (512 doubles the vector file and adds a third to the scan, 768 triples them). The script's check: at 256 it gave the engine's own kept C++ results again (recall 0.4561 and 0.4561 on first lines, 0.5152 and 0.5152 on whole text; no question's recall moved).
+
+| Against 256 | Questions, repositories | First line, files among ten | First place | Whole text, files among ten |
+|---|---|---|---|---|
+| **512**, languages that ship with vectors (JavaScript, TypeScript, C++) | 549, 22 | +0.70 (−0.95 to +2.29), 22 better / 15 worse | +0.17 (−1.11 to +1.45) | −0.05 (−1.67 to +1.58) |
+| **768**, the same | 549, 22 | +0.33 (−1.50 to +2.06), 24 / 21 | −1.27 (−2.77 to +0.21) | **−1.74 (−3.46 to −0.09)** |
+| 512, all six languages | 973, 60 | +0.47 (−0.62 to +1.60) | +0.09 | +0.06 |
+| 768, all six languages | 973, 60 | +0.13 (−1.02 to +1.28) | −1.01 (−2.06 to +0.06) | −0.97 (−2.17 to +0.21) |
+
+Per language, 512 against 256 on first lines, deciding nothing by itself (72 to 369 questions): TypeScript +2.5 (−1.3 to +7.1), Go +2.0 (−0.9 to +5.4), JavaScript +1.4 (−0.5 to +3.4), Python 0.0 (−2.2 to +2.2), Java −1.0 (−3.4 to +1.5), C++ −3.0 (−7.1 to +0.5). No interval is clear of zero in either direction.
+
+**Not adopted: 256 stays.** Neither width gains two points, neither interval is clear of zero, and the full 768 is lower on whole issue text with an interval clear of zero. What the model's card shows on its benchmark does not show here, with the vectors fused with words and names and the question an issue's first line. The vectors were made in 2 hours 38 minutes (01:30 to 04:09 with the readings), the chip at 79 °C at most, no waits.
+
 ## Split threshold: 256 tokens (provisional until 2026-10-13, final since: see the sweep on issue text below)
 
 `bench/spikes/cap_quality.py`, run on 2026-10-11. Corpus: every Python function in Flask, FastAPI and Django (35,851), with its docstring removed. Queries: the first sentence of the docstring for 1,500 functions: all 292 over 512 tokens that have one, plus a random sample of shorter ones (134 between 256 and 512 tokens, 1,074 at or under 256). A function over the threshold is split at statement boundaries into pieces under it, each carrying the file path, scope and signature as a header. A function is found when any piece is retrieved. 256-d vectors, Q8 weights on Metal.
