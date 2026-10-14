@@ -427,3 +427,23 @@ def test_the_follow_rate_counts_only_sessions_the_mod_listed_files_for_and_is_pa
     assert paired["paired_tasks"] == 3 and paired["difference"] == 0.667
     low, high = paired["interval_95"]
     assert low <= 0.667 <= high
+
+
+def test_a_run_never_starts_a_session_that_could_take_its_spending_over_the_limit(tmp_path, monkeypatch, capsys):
+    chosen = [{"id": "c"}, {"id": "d"}]
+    monkeypatch.setattr(ab, "tasks", lambda *_, **__: chosen)
+    asked = []
+
+    def one(workdir, task, arm, *_, **_more):
+        asked.append((task["id"], arm))
+        return {**_row(task["id"], arm, 100, 3, True), "cost_usd": 0.9}
+
+    monkeypatch.setattr(ab, "run_one", one)
+    out = tmp_path / "ab" / "run.jsonl"
+    out.parent.mkdir()
+    out.write_text(json.dumps({**_row("c", "none", 100, 3, True), "cost_usd": 0.9}) + "\n")   # spent before, counted
+    # 0.9 spent; a session may cost up to 1.0: 1.9 and 2.8 fit under 3.0, a third would not.
+    assert ab.main(["run", str(tmp_path), "--arms", "none,L2", "--take-up", str(out), "--max-sessions", "3",
+                    "--budget-usd", "1.0", "--spend-usd", "3.0"]) == 4
+    assert len(asked) == 2 and "spending" in capsys.readouterr().out
+    assert len(out.read_text().splitlines()) == 3

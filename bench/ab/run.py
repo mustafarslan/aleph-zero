@@ -430,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--budget-usd", type=float, default=1.0, help="cost limit of one session")
     parser.add_argument("--seconds", type=int, default=900, help="wall-clock limit of one session")
     parser.add_argument("--max-sessions", type=int, default=8, help="refuse to start more sessions than this")
+    parser.add_argument("--spend-usd", type=float, help="run: never start a session that could take what the results file has "
+                        "spent, with that session's --budget-usd, over this")
     parser.add_argument("--baseline", default="none")
     parser.add_argument("--set", default="locbench", help="tasks/run: where the issues come from: locbench (Python), or others with --language")
     parser.add_argument("--language", help="tasks/run: with --set others: the language of the issues")
@@ -494,6 +496,14 @@ def main(argv: list[str] | None = None) -> int:
                 job.finish()
                 print(f"stopped on request. To go on: the same command with --take-up {out}", flush=True)
                 return 3
+            if args.spend_usd is not None:
+                spent = sum(float(record.get("cost_usd") or 0) for record in
+                            (json.loads(line) for line in (out.read_text().splitlines() if out.is_file() else []) if line.strip()))
+                if spent + args.budget_usd > args.spend_usd:
+                    job.finish()
+                    print(f"stopped before {task['id']} {arm}: {spent:.2f} USD spent, and a session may cost {args.budget_usd:.2f}: "
+                          f"the spending limit is {args.spend_usd:.2f}. To go on: a higher --spend-usd with --take-up {out}", flush=True)
+                    return 4
             job.unit(number, f"{task['id']} {arm}")
             record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds, warm=args.warm_worker)
             with out.open("a") as handle:
