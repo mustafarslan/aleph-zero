@@ -154,6 +154,8 @@ points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repo
 and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
 `aleph status` shows a project's main language and whether vectors are on, and why.
 Ten results name ten files: a file's further places among the results ride on its line (`also at: 40-46 rotate`).
+`aleph index`, `aleph update` and `aleph setup` prepare files on four cores (a cold index of Django in about 3.5 s);
+after this build the code graph reads each repository's facts once more, at its first graph question.
 `aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
 repository; a session (`aleph serve`) starts it when it starts, where vectors are on, so that its first question
 has them; it unloads its model after ten idle minutes and exits after thirty. Waking takes half a second:
