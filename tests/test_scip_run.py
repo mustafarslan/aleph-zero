@@ -102,10 +102,12 @@ def test_a_guard_that_cannot_see_stops_the_run(project, tmp_path, monkeypatch):
         Engine(repo.root).scip_run("python", limit_mb=150)
 
 
-def test_a_limit_that_is_not_a_number_is_refused_and_doctor_still_answers(project, monkeypatch):
+def test_a_limit_that_is_not_a_number_is_refused_and_doctor_still_answers(project, tmp_path, monkeypatch):
     from aleph_zero import doctor
 
     repo, _ = project
+    # An indexer stands in: on a machine without scip-python the run would stop at that first (found by CI).
+    monkeypatch.setitem(indexers.INDEXERS, "python", stand_in(tmp_path, "import sys\n"))
     for bad in ("abc", "nan", "0", "-5"):
         monkeypatch.setenv("ALEPH_SCIP_MEMORY_MB", bad)
         with pytest.raises(indexers.CannotRun, match="ALEPH_SCIP_MEMORY_MB"):

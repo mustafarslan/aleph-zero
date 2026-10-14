@@ -1,4 +1,5 @@
 """The temperature guard for long jobs (bench/tools/temps.py)."""
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,8 @@ import temps  # noqa: E402
 @pytest.mark.skipif(sys.platform != "darwin", reason="reads Apple's sensors")
 def test_the_machines_sensors_give_a_plausible_chip_temperature():
     found = temps.reading()
+    if found["hottest"] is None and os.environ.get("CI"):
+        pytest.skip("a virtual machine in CI has no chip sensors")
     assert found["hottest"] is not None and 10 < temps.hottest_chip(found) < 120
     assert found["pressure"]
 
