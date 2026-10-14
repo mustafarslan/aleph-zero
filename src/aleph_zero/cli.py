@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources, vectorfile
 from .engine import Engine
-from .indexer import Index, collect_garbage
+from .indexer import PREPARE_PROCESSES, Index, collect_garbage
 from .store import StoreError, index_file, open_db
 from .view import build_view
 
@@ -23,6 +23,7 @@ def _open(cwd: Path) -> tuple[Index, object]:
 
 def _index(args) -> int:
     index, view = _open(args.cwd)
+    index.workers = PREPARE_PROCESSES       # a person waits for this one: the files are prepared on several cores
     indexed = skipped = 0
     while True:
         report = index.sync(view, budget_seconds=args.budget)
@@ -230,6 +231,7 @@ def _setup(args) -> int:
 
     def now():
         index, view = _open(args.cwd)                           # the list needs the counts, also of what was just linked;
+        index.workers = PREPARE_PROCESSES
         while index.sync(view, budget_seconds=30.0).pending:    # indexing costs seconds and nothing else
             fresh = build_view(args.cwd)
             if fresh.fingerprint == view.fingerprint:

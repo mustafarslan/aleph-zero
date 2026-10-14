@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,13 +96,41 @@ class _Prepared:
     definitions: list[Definition] = field(default_factory=list)
     chunk_of: list[int] = field(default_factory=list)
     imports: list[RawImport] = field(default_factory=list)
+    words: list[tuple[str, str, str, str]] | None = None   # each chunk's columns of the text index, if worked out already
+
+
+# Preparing a file (classify, parse, chunk, and the words of the text index) is computation on its bytes alone, 60 to
+# 70% of a cold index on one core. With `Index.workers` a command a person runs gives it to a few processes; the bytes
+# are read here (git's reader is a pipe that is not shared), the rows are written here (one writer).
+# Four: a cold index of Django took 8.3 s alone, 3.5 s with four and 4.6 with six; vscode 12.4, 4.5 and 4.4. The four
+# hold about 164 MB together while they run (vscode), so commands a person runs use them and a session never does.
+PREPARE_PROCESSES = max(1, min(4, (os.cpu_count() or 2) - 1))
+POOL_FROM = 64          # files to index, from which starting the processes costs less than it saves
+POOL_BATCH = 200        # files handed out at a time; the next batch is prepared while this one is stored
+
+
+def _digest(family: str, data: bytes, words: bool) -> tuple:
+    """What `Index._prepare` makes of a file's bytes: (kind, chunks, definitions, chunk_of, imports, words)."""
+    kind, text = filters.classify(family, data)
+    if text is None:
+        return kind, [], [], [], [], None
+    profile = lang.PROFILES.get(family)
+    if profile is not None:
+        code = code_chunks(profile, text)
+        if code.chunks:
+            return (kind, code.chunks, code.definitions, code.chunk_of, code.imports,
+                    [lexical.columns(chunk) for chunk in code.chunks] if words else None)
+    chunks = chunk_file(family, kind, text)
+    return (kind if chunks else "skip:empty", chunks, [], [], [], [lexical.columns(chunk) for chunk in chunks] if words else None)
 
 
 class Index:
     """One connection to a repository's index, and the view it is currently answering for."""
 
-    def __init__(self, conn: apsw.Connection) -> None:
+    def __init__(self, conn: apsw.Connection, workers: int = 0) -> None:
         self.conn = conn
+        self.workers = workers          # processes that prepare files when there are many: for commands a person runs
+        self.prepared_elsewhere = 0     # files those processes prepared
         self._fingerprint: str | None = None
         self._pending = 0
         self._missing: frozenset[Key] = frozenset()  # unindexed blobs of the view at the last sync
@@ -157,6 +188,40 @@ class Index:
         left = len(missing)
         stored: set[Key] = set()
         deadline = started + budget_seconds
+
+        def store(prepared: list[_Prepared]) -> None:
+            nonlocal indexed, skipped, left
+            storing = time.monotonic()
+            with transaction(self.conn):
+                for item in prepared:
+                    if not self._store(item):
+                        continue  # another session stored it first
+                    if item.chunks:
+                        indexed += 1
+                    else:
+                        skipped += 1
+            per_blob = (time.monotonic() - storing) / len(prepared)
+            self._store_seconds = max(per_blob, 0.5 * self._store_seconds)  # remembers large files for a while
+            left -= len(prepared)
+            stored.update(item.key for item in prepared)
+
+        if self.workers > 0 and len(todo) >= POOL_FROM:
+            handed: set[Key] = set()
+            try:
+                with gitio.Readers() as reader, ProcessPoolExecutor(
+                        self.workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+                    for prepared, unread in self._pooled(view, reader, todo, deadline, stop, pool):
+                        for key in unread:
+                            handed.add(key)
+                            if not any(path in view.dirty for path in self._paths[key]):
+                                self._deferred[key] = time.monotonic()
+                        if prepared:
+                            store(prepared)
+                todo = []       # done above: the loop below has nothing left
+            except (BrokenProcessPool, OSError):
+                # The processes could not be started or one died (a program that starts Aleph without guarding its
+                # main module, a machine out of processes): what is left is prepared here, as without them.
+                todo = [key for key in todo if key not in stored and key not in handed]
         with gitio.Readers() as reader:
             offset = 0
             size = 4  # small batches first, so the cost of storing is known before a large one is committed to
@@ -179,21 +244,8 @@ class Index:
                         # Git does not have the object. Asking again on every query would
                         # cost a lookup per missing blob; a working-copy file is one read.
                         self._deferred[key] = time.monotonic()
-                if not prepared:
-                    continue
-                storing = time.monotonic()
-                with transaction(self.conn):
-                    for item in prepared:
-                        if not self._store(item):
-                            continue  # another session stored it first
-                        if item.chunks:
-                            indexed += 1
-                        else:
-                            skipped += 1
-                per_blob = (time.monotonic() - storing) / len(prepared)
-                self._store_seconds = max(per_blob, 0.5 * self._store_seconds)  # remembers large files for a while
-                left -= len(prepared)
-                stored.update(item.key for item in prepared)
+                if prepared:
+                    store(prepared)
         if changed or indexed or skipped or frozenset(missing) != self._missing or removals != self._collections:
             # Also when another session indexed something of this view, or content was removed:
             # the same blobs may be back under new chunk ids.
@@ -386,25 +438,58 @@ class Index:
     def _prepare(self, view: View, reader: gitio.Readers, key: Key) -> _Prepared | None:
         """What to store for a blob, or None if its content cannot be read right now.
         The index is keyed by content, so nothing may be recorded without the content."""
-        _, family = key
-        for path in self._paths[key]:
-            data = view.read(path, reader, filters.MAX_BYTES)
-            if data is not None:
-                break
-        else:
+        data = self._read(view, reader, key)
+        if data is None:
             return None
         if isinstance(data, gitio.TooLarge):
             return _Prepared(key, "skip:too-large", data.size)
-        kind, text = filters.classify(family, data)
-        if text is None:
-            return _Prepared(key, kind, len(data))
-        profile = lang.PROFILES.get(family)
-        if profile is not None:
-            code = code_chunks(profile, text)
-            if code.chunks:
-                return _Prepared(key, kind, len(data), code.chunks, code.definitions, code.chunk_of, code.imports)
-        chunks = chunk_file(family, kind, text)
-        return _Prepared(key, kind if chunks else "skip:empty", len(data), chunks)
+        return self._made(key, len(data), _digest(key[1], data, False))
+
+    @staticmethod
+    def _made(key: Key, size: int, digest: tuple) -> _Prepared:
+        kind, chunks, definitions, chunk_of, imports, words = digest
+        return _Prepared(key, kind, size, chunks, definitions, chunk_of, imports, words)
+
+    def _read(self, view: View, reader: gitio.Readers, key: Key):
+        """A blob's bytes (or TooLarge), or None if they cannot be read right now."""
+        for path in self._paths[key]:
+            data = view.read(path, reader, filters.MAX_BYTES)
+            if data is not None:
+                return data
+        return None
+
+    def _pooled(self, view: View, reader: gitio.Readers, todo: list[Key], deadline: float,
+                stop: Callable[[], bool] | None, pool: ProcessPoolExecutor) -> Iterator[tuple[list[_Prepared], list[Key]]]:
+        """Batches of prepared files and the keys whose bytes could not be read, the next batch being prepared by
+        the processes while the caller stores this one."""
+        def hand_out(keys: list[Key]) -> list[tuple[Key, object, Future | None]]:
+            jobs = []
+            for key in keys:
+                data = self._read(view, reader, key)
+                plain = data is None or isinstance(data, gitio.TooLarge)
+                jobs.append((key, data, None if plain else pool.submit(_digest, key[1], data, True)))
+            return jobs
+
+        late = lambda: time.monotonic() >= deadline or (stop is not None and stop())  # noqa: E731
+        offset, ahead = 0, None
+        while ahead is not None or (offset < len(todo) and not late()):
+            if ahead is None:
+                ahead = hand_out(todo[offset:offset + POOL_BATCH])
+                offset += POOL_BATCH
+            current, ahead = ahead, None
+            if offset < len(todo) and not late():
+                ahead = hand_out(todo[offset:offset + POOL_BATCH])
+                offset += POOL_BATCH
+            prepared, unread = [], []
+            for key, data, job in current:
+                if data is None:
+                    unread.append(key)
+                elif isinstance(data, gitio.TooLarge):
+                    prepared.append(_Prepared(key, "skip:too-large", data.size))
+                else:
+                    prepared.append(self._made(key, len(data), job.result()))
+                    self.prepared_elsewhere += 1
+            yield prepared, unread
 
     def _store(self, item: _Prepared) -> bool:
         """Write one blob. False if another session had already written it."""
@@ -432,7 +517,7 @@ class Index:
             )
             if conn.changes() == 1:
                 chunk_id = conn.last_insert_rowid()
-                lexical.insert(conn, chunk_id, chunk)
+                lexical.insert(conn, chunk_id, chunk, item.words[ordinal] if item.words else None)
             else:  # the same content is already indexed, from another file or branch
                 chunk_id = conn.execute("SELECT chunk_id FROM chunks WHERE chunk_hash = ?", (digest,)).fetchall()[0][0]
             conn.execute(

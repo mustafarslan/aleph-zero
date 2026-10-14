@@ -621,3 +621,76 @@ def test_reading_paths_into_words_takes_little_more_memory_than_the_maps_it_leav
         tracemalloc.stop()
     assert len(maps[1]["outlined"]) == 20000
     assert peak < held * 1.5, (held, peak)
+
+
+def _a_mixed_repository(make_repo, where):
+    repo = make_repo(where)
+    for n in range(90):
+        repo.write(f"pkg/mod{n}.py", f"import os\nfrom .base import Base{n % 7}\n\n\nclass Handler{n}(Base{n % 7}):\n"
+                                     f"    def handle_request_{n}(self, request):\n        return os.path.join(request.path, '{n}')\n")
+        repo.write(f"web/part{n}.js", f"export function renderPart{n}(props) {{\n  return props.items.map((x) => x + {n})\n}}\n")
+    repo.write("docs/guide.md", "# Guide\n\n" + "\n\n".join(f"## Section {n}\n\nText about handlers {n}." for n in range(30)))
+    repo.write("data/table.json", "{" + ",".join(f'"k{n}": {n}' for n in range(400)) + "}\n")
+    repo.write("big/huge.py", "x = 1\n" * 80_000)                                   # over the size limit
+    repo.write("bin/blob.bin", "\0\1\2binary\0" * 100)
+    repo.commit("many files")
+    return repo
+
+
+def _what_an_index_holds(index):
+    import hashlib
+
+    digest = hashlib.sha256()
+    for query in ("SELECT chunk_hash, kind, symbol, signature, breadcrumb FROM chunks ORDER BY chunk_hash",
+                  "SELECT blob_oid, family, kind, size FROM blobs ORDER BY blob_oid, family",
+                  "SELECT b.blob_oid, b.ord, c.chunk_hash, b.start_line, b.end_line, b.scope_start, b.scope_end FROM blob_chunks b "
+                  "JOIN chunks c ON c.chunk_id = b.chunk_id ORDER BY b.blob_oid, b.ord",
+                  "SELECT blob_oid, ord, name, qualified, kind, signature, chunk_ord, line FROM symbols ORDER BY blob_oid, ord",
+                  "SELECT * FROM imports ORDER BY 1, 2, 3"):
+        for row in index.conn.execute(query):
+            digest.update(repr(row).encode())
+    index.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.words_check USING fts5vocab(main, chunk_fts, row)")
+    for row in index.conn.execute("SELECT term, doc, cnt FROM temp.words_check ORDER BY term"):
+        digest.update(repr(row).encode())
+    return digest.hexdigest()
+
+
+def test_an_index_made_with_worker_processes_is_the_index_made_without_them(make_repo, tmp_path):
+    # Preparing files (parse, chunk, the words of the text index) was 60 to 70% of a cold index on one core of twelve.
+    # A command a person runs gives it to a few processes; what is stored must be the same, row for row.
+    one = _a_mixed_repository(make_repo, tmp_path / "one")
+    several = _a_mixed_repository(make_repo, tmp_path / "several")
+    alone, view = _index(one), build_view(one.root)
+    while alone.sync(view, budget_seconds=60).pending:
+        pass
+    helped, other_view = _index(several), build_view(several.root)
+    helped.workers = 3
+    report = helped.sync(other_view, budget_seconds=60)
+    assert report.pending == 0 and report.indexed >= 180 and helped.prepared_elsewhere >= 180
+    assert alone.prepared_elsewhere == 0
+    assert _what_an_index_holds(helped) == _what_an_index_holds(alone)
+
+
+def test_a_few_files_are_prepared_here_whatever_was_asked(make_repo, tmp_path):
+    repo = make_repo(tmp_path / "small")
+    repo.write("a.py", "def a():\n    return 1\n")
+    repo.commit("one file")
+    index, view = _index(repo), build_view(repo.root)
+    index.workers = 3
+    assert index.sync(view, budget_seconds=60).indexed == 1 and index.prepared_elsewhere == 0   # starting processes would cost more
+
+
+def test_processes_that_cannot_be_used_leave_the_files_to_be_prepared_here(make_repo, tmp_path, monkeypatch):
+    from aleph_zero import indexer
+
+    class Broken:
+        def __init__(self, *args, **kwargs):
+            from concurrent.futures.process import BrokenProcessPool
+            raise BrokenProcessPool("no processes here")
+
+    monkeypatch.setattr(indexer, "ProcessPoolExecutor", Broken)
+    repo = _a_mixed_repository(make_repo, tmp_path / "broken")
+    index, view = _index(repo), build_view(repo.root)
+    index.workers = 3
+    report = index.sync(view, budget_seconds=60)
+    assert report.pending == 0 and report.indexed >= 180 and index.prepared_elsewhere == 0

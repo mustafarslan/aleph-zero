@@ -129,12 +129,15 @@ def match_expression(terms: list[str]) -> str:
     return " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
-def insert(conn, chunk_id: int, chunk: Chunk) -> None:
-    conn.execute(
-        "INSERT INTO chunk_fts(rowid, symbol, signature, doc, body) VALUES (?, ?, ?, ?, ?)",
-        (chunk_id, expand(f"{chunk.symbol} {chunk.breadcrumb}"), expand(chunk.signature),
-         expand(chunk.doc), expand(chunk.text)),
-    )
+def columns(chunk: Chunk) -> tuple[str, str, str, str]:
+    """A chunk's four columns as the text index holds them."""
+    return expand(f"{chunk.symbol} {chunk.breadcrumb}"), expand(chunk.signature), expand(chunk.doc), expand(chunk.text)
+
+
+def insert(conn, chunk_id: int, chunk: Chunk, words: tuple[str, str, str, str] | None = None) -> None:
+    """`words`: the chunk's `columns`, where another process has worked them out already."""
+    conn.execute("INSERT INTO chunk_fts(rowid, symbol, signature, doc, body) VALUES (?, ?, ?, ?, ?)",
+                 (chunk_id, *(words or columns(chunk))))
 
 
 def search(conn, query: str, limit: int, scoped: bool = False) -> list[tuple[int, float]]:

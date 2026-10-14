@@ -18,7 +18,7 @@ from pathlib import Path
 import apsw
 
 from . import archfacts, callgraph, gitio, scipstore, sources, vectorfile
-from .indexer import Index, collect_if_due
+from .indexer import PREPARE_PROCESSES, Index, collect_if_due
 from .store import StoreError, index_file, open_db, state_dir
 from .view import build_view
 
@@ -112,7 +112,7 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
 
     def index_all() -> None:
         nonlocal seen, index
-        index = Index(open_db(index_file(view.common_dir)))
+        index = Index(open_db(index_file(view.common_dir)), workers=PREPARE_PROCESSES)   # a command, not a session
         while True:
             done = index.sync(seen, budget_seconds=30.0)
             report["indexed"] += done.indexed
