@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "aleph-zero",
+  "description": "Aleph Zero: local code search for coding agents",
+  "owner": {
+    "name": "mustafarslan"
+  },
+  "plugins": [
+    {
+      "name": "aleph-zero",
+      "description": "Local code search for coding agents: ranked code locations by meaning or by name, always matching the working tree, and steering that makes Claude Code use it before recursive grep",
+      "source": "./plugin",
+      "category": "development",
+      "author": {
+        "name": "mustafarslan"
+      }
+    }
+  ]
+}

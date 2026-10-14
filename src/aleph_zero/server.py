@@ -176,7 +176,7 @@ GRAPH_SECONDS = 20.0     # how long a first graph question may spend reading fil
 
 
 def graph_enabled() -> bool:
-    return os.environ.get("ALEPH_GRAPH", "") == "1"
+    return os.environ.get("ALEPH_GRAPH", "") in ("1", "on")     # "on": the plugin's `graph` option, passed through
 
 
 def tools() -> list[dict]:
