@@ -300,9 +300,42 @@ def test_one_result_a_file_keeps_the_file_s_other_places_on_its_line(repo, monke
     assert "also at:" in shown and str(ledger.places[0][0]) in shown
 
 
-def test_ten_results_name_ten_files_by_default():
-    # Read three times by rules written first (ADR-002): +4.2 files among ten over 1,479 kept questions, +9.4 on 158
-    # never-asked Python questions, +3.2 on 211 never-asked JavaScript and TypeScript ones; no question worse.
+def test_an_answer_names_ten_files_and_keeps_its_results_code(repo):
+    # One result a file named ten files and cost the agent the code of a file's further results (edited functions whose
+    # code arrives: 34.0% -> 20.3% on Python's kept questions). The results stay as they were; further files follow.
+    import aleph_zero.search as ranker
+    from aleph_zero.engine import Engine
+
+    assert ranker.ONE_A_FILE is False
+    for n in range(12):
+        repo.write(f"src/billing/part{n}.py", f"def invoice_total_{n}(order):\n    return order.invoice_total + {n}\n")
+    answer = Engine(repo.root).search("invoice total", k=10)
+    named = {hit.path for hit in answer.hits} | {hit.path for hit in answer.more_files}
+    assert len(named) == 10 and not {hit.path for hit in answer.more_files} & {hit.path for hit in answer.hits}
+
+
+def test_after_its_results_an_answer_names_further_files_until_ten_files_are_named(repo, monkeypatch):
+    # Ten results named about seven files: a file's second and third results took the places of other files. The
+    # results stay as they are, code and all, and the next files of the same ranking follow as places only. Files
+    # named among ten: +3.4 on Python's kept questions; edited functions whose code the agent receives: unchanged.
     import aleph_zero.search as ranker
 
-    assert ranker.ONE_A_FILE is True and ranker.MORE_PLACES == 3
+    monkeypatch.setattr(ranker, "ONE_A_FILE", False)
+    repo.write("src/billing/ledger.py", "".join(f"def invoice_total_{n}(order):\n    return order.invoice_total + {n}\n\n\n" for n in range(4)))
+    for n in range(4):
+        repo.write(f"src/billing/other{n}.py", f"def invoice_total_elsewhere_{n}(order):\n    return order.invoice_total * {n}\n")
+    index, view = _synced(repo)
+    plain = search(index, view, "invoice total", k=4)
+    more: list = []
+    with_more = search(index, view, "invoice total", k=4, more_files=more)
+    assert with_more == plain                                             # the results are untouched
+    named = list(dict.fromkeys(hit.path for hit in plain))
+    assert more and len(named) + len(more) <= 4 and not {hit.path for hit in more} & set(named)
+    deep = list(dict.fromkeys(hit.path for hit in search(index, view, "invoice total", k=40)))
+    assert [hit.path for hit in more] == [path for path in deep if path not in named][:len(more)]   # the ranking's next files
+    from aleph_zero import render
+
+    shown = render.text(render.Answer("invoice total", plain, 0, False, 1, more_files=more))
+    assert "more files:" in shown and all(f"{hit.path}:{hit.start_line}-{hit.end_line}" in shown for hit in more)
+    assert all(hit.text not in shown.split("more files:")[1] for hit in more)        # places, never code
+    assert render.as_json(render.Answer("invoice total", plain, 0, False, 1, more_files=more))["more_files"][0]["path"] == more[0].path

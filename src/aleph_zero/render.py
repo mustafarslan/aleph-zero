@@ -33,6 +33,8 @@ class Answer:
     dense: str = ""
     covered: int = 0
     chunks: int = 0
+    # Further files of the same ranking after the results, as places only (`search(..., more_files=)`).
+    more_files: list[Hit] = field(default_factory=list)
 
 
 @dataclass
@@ -56,6 +58,8 @@ def as_json(answer: Answer) -> dict:
         "dense": answer.dense,
         "covered": answer.covered,
         "chunks": answer.chunks,
+        "more_files": [{"path": hit.path, "start_line": hit.start_line, "end_line": hit.end_line, "kind": hit.kind,
+                        "symbol": hit.symbol, "breadcrumb": hit.breadcrumb} for hit in answer.more_files],
     }
 
 
@@ -119,6 +123,20 @@ def text(answer: Answer, budget_tokens: int = DEFAULT_BUDGET, detail: str = "sni
             lines.append(bodies[position])
     if omitted:
         lines.append(omitted)
+    if answer.more_files and shown == len(entries):
+        # After every result and its text, what room is left names further files: places, never code.
+        title = "more files:"
+        if room(title, 0):
+            spent += estimate_tokens(title) + 1
+            named = []
+            for hit in answer.more_files:
+                line = f"  {hit.path}:{hit.start_line}-{hit.end_line}  {hit.kind}" + (f"  {hit.breadcrumb or hit.symbol}" if (hit.breadcrumb or hit.symbol) else "")
+                if not room(line, 0):
+                    break
+                spent += estimate_tokens(line) + 1
+                named.append(line)
+            if named:
+                lines += [title, *named]
     return _within("\n".join([*lines, *notes]), budget_tokens)
 
 

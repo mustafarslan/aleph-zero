@@ -266,10 +266,16 @@ class Engine:
         wait = WAKING_EMBED_SECONDS if unhurried else QUERY_EMBED_SECONDS
         early = self._early_vector(asked_from, query, wait)
 
+        more: list = []                    # further files after the results, as places (the last read's)
+
         def read(index: Index, view: View):
             note, covered, chunks, nearest = self._dense(index, view, query, early, wait)
-            return note, covered, chunks, lambda: run_search(
-                index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest) or []
+
+            def ranked():
+                more.clear()
+                return run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest,
+                                  more_files=more) or []
+            return note, covered, chunks, ranked
 
         try:
             (note, covered, chunks, hits), pending, late = self._consistent(cwd, started, until, read, ("", 0, 0))
@@ -280,7 +286,7 @@ class Engine:
         self._vectors_wanted[asked_from] = bool(note) and (note != "used" or covered < chunks)
         if note.startswith("the worker did not answer"):
             self._vector_missed = time.monotonic()
-        return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
+        return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks, list(more) if hits else [])
 
     def _early_vector(self, asked_from: str, query: str, wait: float = QUERY_EMBED_SECONDS) -> _EarlyVector | None:
         """The question's vector asked for now, before the worktree is known, where the last question from the same

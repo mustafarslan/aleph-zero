@@ -63,5 +63,6 @@ def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo, m
     assert as_it_is.count("src/auth/more.py") >= 2                                  # several results in one file
     one_each = [hit.path for hit in bench.cut(deep, 3, a_file=1)]
     assert len(set(one_each)) == len(one_each) == 3 and one_each[0] == as_it_is[0]  # three files, and first place is what it was
-    monkeypatch.setattr(ranker, "ONE_A_FILE", True)
-    assert [hit.path for hit in search(index, view, "rotate token helper", k=3)] == one_each           # the engine's own default now
+    more: list = []
+    search(index, view, "rotate token helper", k=3, more_files=more)
+    assert set(as_it_is) | {hit.path for hit in more} == set(one_each)                                 # the same files, named after the results

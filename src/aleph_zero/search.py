@@ -24,8 +24,9 @@ SYMBOL_CANDIDATES = 10
 # name is handled apart (see `search`). Weighing names 1.5 or 2 times was tried on 235 questions
 # (ADR-002, 2026-10-13): the order inside the ten results moves, the files among them do not.
 GENERATOR_WEIGHT: dict[str, float] = {}
-# One result a file, the file's other places on its line: read three times and adopted (ADR-002, 2026-10-14).
-ONE_A_FILE = True
+# One result a file, the file's other places on its line: read three times, then switched off again: it cost the agent the
+# code of a file's second and third results (ADR-002, 2026-10-14). `search(..., more_files=)` names the same files instead.
+ONE_A_FILE = False
 MORE_PLACES = 3
 # Two trials of 2026-10-14 (docs/DEFERRED.md, entry 1d), off. Read twice and not adopted on first lines (ADR-002);
 # back for a third reading on whole issue text, by a rule written before it, on questions never asked:
@@ -186,7 +187,7 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
 
 def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
            path_glob: str | None = None, families: frozenset[str] | None = None,
-           dense: Callable[[int, bool], list[int]] | None = None) -> list[Hit]:
+           dense: Callable[[int, bool], list[int]] | None = None, more_files: list[Hit] | None = None) -> list[Hit]:
     """Hits for `query` in `view`. Call `index.sync(view)` first: only blobs of the
     synced view can be returned. `dense(limit, scoped)` gives the chunks whose vectors
     are nearest the query's, best first; without it the search is by words and names."""
@@ -274,4 +275,15 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         hits += shown
     hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
     merged = merge_pieces(hits)
-    return arrange(one_a_file(merged) if ONE_A_FILE else merged, k, kind)
+    found = arrange(one_a_file(merged) if ONE_A_FILE else merged, k, kind)
+    if more_files is not None:
+        # Ten results named about seven files: the next files of the same ranking follow them, as places only, until
+        # k files are named. Files named among ten: +3.4 on Python's kept questions, the results' code untouched.
+        named = set(hit.path for hit in found)
+        for hit in merged:
+            if len(named) >= k:
+                break
+            if hit.path not in named:
+                named.add(hit.path)
+                more_files.append(hit)
+    return found
