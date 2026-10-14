@@ -319,6 +319,18 @@ The three readings measured files. Read at the level of the functions each fix e
 
 The rule written before it: the two changes together (dotted names; the path's vote to what was found in the file) adopted for every question if, on questions never asked, files among ten on whole issue text gain with an interval clear of zero, no language is lower and first lines are not lower. The third draw of JavaScript and TypeScript (211 never-asked questions): whole text +2.01 (−0.24 to +4.62); first lines +0.91 (+0.07 to +2.17). **Not adopted.** The path's vote alone gained on whole text with an interval clear of zero here (+1.66, +0.24 to +3.55) and in the first reading (+0.90), and +0.95 (+0.00 to +2.53) in the second; it was never named alone in a rule, and is left for one that does. agy, before this reading, called its design wrong: JavaScript and TypeScript with vectors were where the whole-text gain had been weakest. The switches stay in the code, off.
 
+## The path's vote alone (2026-10-14): a fourth reading, by its own rule, not adopted
+
+The owner said yes to reading it alone. The rule, written before anything was fetched (the deferred list, 1d, round 3): adopted if, on a fourth draw of never-asked JavaScript and TypeScript questions, each in its shipped arm, files among ten gain with an interval clear of zero on first lines or on whole text, the other is not lower with an interval clear of zero, no language is lower, and first place is not lower. The draw: 200 questions (material-ui 40, vscode 40, svelte 40, prettier 40, serverless 40), by main language 151 JavaScript and 49 TypeScript.
+
+| Fourth draw, files among ten | First line | Whole text |
+|---|---|---|
+| All 200, each in its shipped arm | −0.17 (−2.67 to +2.33), 3 / 4 | +1.46 (−0.04 to +3.46), 4 / 1 |
+| JavaScript, 151 | +1.32 (−1.32 to +3.97) | +1.49 (0.00 to +3.48) |
+| TypeScript, 49 | −4.76 (−10.88 to 0.00), 0 / 3 | +1.36 (−2.04 to +6.12) |
+
+**Not adopted:** neither form gains with an interval clear of zero, and TypeScript's first lines are lower in three questions and higher in none. Over four readings the whole-text gain has stayed between +0.9 and +1.7 points, twice clear of zero and twice not: a gain too small to be read surely from a few hundred questions, and not one that changes what an agent finds. `search.PATH_VOTE` stays in the code, off. Go's 339 never-asked, beside and deciding nothing: first line +0.61 (+0.02 to +1.28), first place +6.67 (+3.55 to +9.86), whole text +0.22; one repository (cli/cli), so it is not read as Go's.
+
 ## Benchmark C, C: vectors pass the gate (2026-10-14, the owner's "yes" to C and Rust)
 
 Read as the four languages were, by the rule written before anything was fetched (the deferred list, entry 1d, round 3): SWE-bench Multilingual and Multi-SWE-bench questions labelled C, at most 40 a repository, each read under its repository's main language at the question's commit. Prepared and embedded from 09:01 to 09:38, the chip at 76 °C at most, no waits. Of the 108 questions labelled C, 88 are in repositories whose main language is C and 20 (ponyc) in one whose main language is C++.
