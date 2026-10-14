@@ -22,7 +22,7 @@ function usage() {
 }
 
 // This session, since the mod loaded.
-const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0 } }
+const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0 }, listed: [] }
 let prompts = 0
 
 // The engine's server as Claude Code names it. The manifest calls it `aleph`; $.mcp.connect
@@ -437,6 +437,7 @@ export function register(on, options) {
     const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' }))
     if (!confident(hits)) return next(e)
     meter.added.prompt += 1
+    meter.listed = [...new Set(hits.map((hit) => hit.path))].slice(0, 5)  // the files of the lines, as locations() takes them
     return next({ ...e, context: [...(e.context ?? []), promptContext(hits, signatures)] })
   }).catch(async ($, e, next) => next(e))
 

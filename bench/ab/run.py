@@ -100,7 +100,7 @@ def mod_meter(store: Path = STORE) -> dict | None:
         kept = json.loads(newest.read_text())["aleph-zero.last-session"]
         meter = kept["meter"]
         return {"rung": kept["rung"], "added_to_prompt": meter["added"]["prompt"], "added_to_grep": meter["added"]["grep"],
-                "aleph_calls": meter["aleph"]}
+                "aleph_calls": meter["aleph"], "listed": list(meter.get("listed", []))}
     except (ValueError, OSError, KeyError, TypeError):
         return None
 
@@ -179,6 +179,8 @@ def read_stream(text: str, gold: list[str], root: str | None = None) -> dict:
     names = [call["name"] for call in calls]
     searches = [_search_kind(call) for call in calls]
     first_gold = next((position for position, call in enumerate(calls) if _reads_gold(call, gold)), None)
+    # The first file the agent itself opened: whether it went to a file rung 2 listed (ADR-011, the reading of 2026-10-14).
+    first_read = next((_opened(call, root) for call in calls if not call["subagent"] and _opened(call, root)), None)
     # What the agent typed into the engine's search, word for word: the gate for vectors assumes it is short (ADR-002).
     asked = [str(call["input"].get("query", "")) for call in calls if call["name"].endswith("aleph__search")]
     return {
@@ -191,7 +193,7 @@ def read_stream(text: str, gold: list[str], root: str | None = None) -> dict:
         "tool_calls": len(calls), "tools": {name: names.count(name) for name in sorted(set(names))},
         "aleph_calls": searches.count("aleph"), "grep_calls": searches.count("grep"),
         "first_search": next((kind for kind in searches if kind), None),
-        "calls_before_first_gold_read": first_gold,
+        "calls_before_first_gold_read": first_gold, "first_read": first_read,
         # Kept as the session reported them, so the sums above can be checked later.
         "usage": result.get("usage"), "model_usage": usage, "subagent_stats": result.get("subagent_stats"),
         "named": named, "file_hit": bool(set(named) & set(gold)),
@@ -233,6 +235,16 @@ def _search_kind(call: dict) -> str | None:
     if name == "Bash" and re.search(r"(^|[\s;&|(])(grep|rg|find)\s|git\s+grep", str(call["input"].get("command", ""))):
         return "grep"
     return None
+
+
+def _opened(call: dict, root: str | None = None) -> str | None:
+    """The file a call opens, relative to the session's worktree: a Read, or the engine's outline of a file."""
+    if call["name"] != "Read" and "outline" not in call["name"]:
+        return None
+    target = str(call["input"].get("file_path") or call["input"].get("path") or "")
+    if root and target.startswith(root.rstrip("/") + "/"):
+        target = target[len(root.rstrip("/")) + 1:]
+    return target.removeprefix("./") or None
 
 
 def _reads_gold(call: dict, gold: list[str]) -> bool:
@@ -297,6 +309,19 @@ def bootstrap(ratios: list[float], rounds: int = 10_000, seed: int = 7) -> tuple
     return exp(statistics.fmean(logs)), exp(means[int(rounds * 0.025)]), exp(means[int(rounds * 0.975)])
 
 
+def bootstrap_difference(differences: list[float], rounds: int = 10_000, seed: int = 7) -> tuple[float, float, float]:
+    """Mean of paired differences with a 95% interval, resampling tasks."""
+    chooser = random.Random(seed)
+    means = sorted(statistics.fmean(chooser.choices(differences, k=len(differences))) for _ in range(rounds))
+    return statistics.fmean(differences), means[int(rounds * 0.025)], means[int(rounds * 0.975)]
+
+
+def _followed(record: dict) -> bool | None:
+    """Whether the first file the agent opened was one rung 2 listed; None when it listed nothing."""
+    listed = (record.get("mod") or {}).get("listed") or []
+    return record.get("first_read") in listed if listed else None
+
+
 def report(records: list[dict], baseline: str) -> dict:
     """Arms against the baseline, paired by task. A task run more than once in an arm counts
     with the mean of its runs (so "thirty tasks twice" is thirty pairs, each steadier).
@@ -327,6 +352,9 @@ def report(records: list[dict], baseline: str) -> dict:
                 gave_up=sum(row["gave_up"] for row in rows),
                 aleph_first=sum(row.get("first_search") == "aleph" for row in rows),
             )
+            listed = [_followed(row) for row in rows if _followed(row) is not None]
+            if listed:
+                entry["follow"] = {"sessions_listed": len(listed), "followed": sum(listed), "rate": round(sum(listed) / len(listed), 3)}
         if arm != baseline:
             shared = sorted(set(done) & set(base))
             entry["unpaired_tasks"] = sorted((set(done) | set(base)) - set(shared))
@@ -336,6 +364,13 @@ def report(records: list[dict], baseline: str) -> dict:
                     centre, low, high = bootstrap(ratios)
                     entry[f"{measure}_ratio"] = {"paired_tasks": len(shared), "geometric_mean": round(centre, 3),
                                                  "interval_95": [round(low, 3), round(high, 3)]}
+                follow = lambda group: [_followed(row) for row in group if _followed(row) is not None]  # noqa: E731
+                both = [task for task in shared if follow(done[task]) and follow(base[task])]
+                if len(both) >= 2:
+                    centre, low, high = bootstrap_difference([statistics.fmean(follow(done[task])) - statistics.fmean(follow(base[task]))
+                                                              for task in both])
+                    entry["follow_against_baseline"] = {"paired_tasks": len(both), "difference": round(centre, 3),
+                                                        "interval_95": [round(low, 3), round(high, 3)]}
                 entry["file_hits_against_baseline"] = [round(sum(mean(done[task], "file_hit") for task in shared), 2),
                                                        round(sum(mean(base[task], "file_hit") for task in shared), 2)]
         out["arms"][arm] = entry

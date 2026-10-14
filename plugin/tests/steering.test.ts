@@ -125,6 +125,23 @@ test('L2: the first prompt of a session carries locations when two generators ag
   expect(sent[1].context).toBeUndefined()
 })
 
+test('L2: the meter keeps the files it listed, in their order, for a headless run to read afterwards', rung('2'), async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  on('mcp.call', () => engine([hit('src/auth/token_store.py', ['lexical', 'symbol']), hit('src/auth/sessions.py', ['lexical']),
+                               hit('src/auth/token_store.py', ['symbol'])]))
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('turn.complete', () => ({ text: '' }))
+  const saved = new Map<string, any>()
+  on('store.set', ($, e) => {
+    saved.set(e.key, e.value)
+    return { value: undefined }
+  })
+  await $.prompt.submit({ text: 'where are refresh tokens rotated in this service?' })
+  await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 5, isAborted: false, usage: null })
+  expect(saved.get('aleph-zero.last-session').meter.listed).toEqual(['src/auth/token_store.py', 'src/auth/sessions.py'])
+})
+
 test('L2 adds nothing to small talk, to a weak answer, or below rung 2', rung('2'), async ($, on) => {
   mock.clock(on)
   connected(on)

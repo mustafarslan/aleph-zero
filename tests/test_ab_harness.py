@@ -304,7 +304,7 @@ def test_tasks_can_come_from_the_other_languages_question_sets(tmp_path, monkeyp
 def test_what_the_mod_counted_for_a_session_is_read_from_its_store(tmp_path):
     store = tmp_path / "aleph-zero_inline-abc.json"
     store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": {"turns": 1, "aleph": 0, "added": {"prompt": 1, "grep": 0}}}}))
-    assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "aleph_calls": 0}
+    assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "aleph_calls": 0, "listed": []}
     store.write_text("not json")
     assert ab.mod_meter(tmp_path) is None and ab.mod_meter(tmp_path / "nowhere") is None      # no store, or not readable: nothing known
 
@@ -384,3 +384,46 @@ def test_the_first_git_command_comes_a_second_after_the_checkout_or_it_settles_n
     monkeypatch.setattr(ab.subprocess, "run", lambda args, *rest, **kwargs: order.append(args[3]) or real(args, *rest, **kwargs))
     ab.as_after_a_first_git_command(clone)
     assert order == ["wait True", "status"]
+
+
+def test_the_mod_s_listed_files_are_read_from_its_store(tmp_path):
+    store = tmp_path / "aleph-zero_inline-abc.json"
+    meter = {"turns": 1, "aleph": 0, "added": {"prompt": 1, "grep": 0}, "listed": ["src/a.py", "src/b.py"]}
+    store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": meter}}))
+    assert ab.mod_meter(tmp_path)["listed"] == ["src/a.py", "src/b.py"]
+    del meter["listed"]                                          # a plugin from before the meter kept them
+    store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": meter}}))
+    assert ab.mod_meter(tmp_path)["listed"] == []
+
+
+def test_the_first_file_the_agent_opens_is_kept_relative_to_its_worktree():
+    text = _stream(
+        _use("Grep", pattern="rotate"),
+        _use("Read", parent="toolu_1", file_path="/tmp/w/repo/src/sub.py"),     # a subagent's read is not the agent's choice
+        _use("mcp__plugin_aleph-zero_aleph__outline", path="src/auth/store.py"),
+        _use("Read", file_path="/tmp/w/repo/src/other.py"),
+        RESULT,
+    )
+    assert ab.read_stream(text, ["src/auth/store.py"], "/tmp/w/repo")["first_read"] == "src/auth/store.py"
+    read_first = _stream(_use("Read", file_path="/tmp/w/repo/src/other.py"), RESULT)
+    assert ab.read_stream(read_first, ["x.py"], "/tmp/w/repo")["first_read"] == "src/other.py"
+    assert ab.read_stream(_stream(_use("Grep", pattern="x"), RESULT), ["x.py"], "/tmp/w/repo")["first_read"] is None
+
+
+def test_the_follow_rate_counts_only_sessions_the_mod_listed_files_for_and_is_paired_by_task():
+    def row(task, arm, first, listed):
+        return {"task": task, "arm": arm, "ok": True, "tokens": 100, "tool_calls": 4, "file_hit": True, "gave_up": False,
+                "first_search": "aleph", "cost_usd": 0.1, "model": "m", "first_read": first,
+                "mod": {"rung": 2, "added_to_prompt": int(bool(listed)), "listed": listed}}
+
+    records = [row("t1", "L2", "a.py", ["a.py", "b.py"]), row("t1", "L2s", "b.py", ["a.py", "b.py"]),
+               row("t2", "L2", "z.py", ["a.py"]), row("t2", "L2s", "a.py", ["a.py"]),
+               row("t3", "L2", "z.py", ["a.py"]), row("t3", "L2s", "a.py", ["a.py"]),
+               row("t4", "L2", "a.py", []), row("t4", "L2s", "z.py", [])]       # nothing listed: no follow to read
+    found = ab.report(records, "L2")
+    assert found["arms"]["L2"]["follow"] == {"sessions_listed": 3, "followed": 1, "rate": 0.333}
+    assert found["arms"]["L2s"]["follow"] == {"sessions_listed": 3, "followed": 3, "rate": 1.0}
+    paired = found["arms"]["L2s"]["follow_against_baseline"]
+    assert paired["paired_tasks"] == 3 and paired["difference"] == 0.667
+    low, high = paired["interval_95"]
+    assert low <= 0.667 <= high
