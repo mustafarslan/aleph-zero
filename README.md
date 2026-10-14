@@ -1,307 +1,252 @@
-# aleph-zero
+# Aleph Zero
 
-Local code search for coding agents. Results always reflect the working tree,
-including uncommitted edits.
+Local code search for coding agents. Aleph Zero (`aleph`) indexes a repository on your
+machine and answers "where is this handled?" with ranked file and line locations, for
+Claude Code (as an MCP server or a plugin) and on the command line.
+
+- **Always current.** Every answer reflects the working tree as it is now, uncommitted
+  edits included. There is no stale index to rebuild.
+- **Local.** Your code never leaves the machine. The network is used only when you ask:
+  to fetch grammars, the optional embedding model, or a repository you link by URL.
+- **Fast.** A question takes 25 to 160 ms on repositories of 4,000 to 90,000 chunks; a
+  cold index of Django takes about 3.5 seconds.
+
+## Features
+
+- **Ranked search** by words, identifiers (split from `camelCase` and `snake_case`) and
+  paths, fused into one ranking, with optional search by meaning from a local embedding model.
+- **Definitions and outlines**: where a name is defined; what a file defines, with line ranges.
+- **Call graph**: who calls a function and what it calls, each answer marked certain or
+  candidate; exact answers from a compiler's [SCIP](https://github.com/sourcegraph/scip)
+  index when you import one.
+- **Facts the code states**: routes, models and tables, environment variables, tasks,
+  queues and gRPC services, each with its file and line.
+- **Decision records**: the ADRs that govern a task or a file.
+- **Linked sources**: search documentation or code from another repository beside your own.
+- **Memory across sessions**: answers and notes kept per repository, recalled later with
+  a check of whether the code they cite has changed.
+- **Claude Code integration**: an MCP server, and a plugin that steers the agent to search
+  before it greps.
+- **Languages**: Python, TypeScript, JavaScript, Go, Rust, Java, C++ and C, plus Markdown
+  and reStructuredText. Other text files are searched as plain text.
+
+## Requirements
+
+- Python 3.13, git, and [uv](https://docs.astral.sh/uv/). Developed and measured on macOS (Apple
+  Silicon); Linux is expected to work but has not been measured.
+- Optional, for search by meaning: cmake, ninja and a C++ compiler (the embedding server is
+  built locally), and 310 MB for the model. On Apple Silicon it runs on the GPU.
 
 ## Install
 
-Aleph needs Python 3.13, git, and [uv](https://docs.astral.sh/uv/). From a checkout of this
-repository:
+```sh
+git clone https://github.com/mustafarslan/aleph-zero.git
+cd aleph-zero
+uv tool install .            # puts `aleph` on your PATH
+aleph doctor                 # checks that everything is in place
+```
 
-    uv sync                                   # a development environment: use `uv run aleph ...`
-    uv tool install .                         # or: put `aleph` on your PATH
+For development, `uv sync` instead, then run commands as `uv run aleph …`. Keep the
+checkout: the Claude Code plugin is loaded from its `plugin/` directory and is not part of
+the installed package.
 
-What it fetches, and when:
-
-- **Grammars** for the languages it parses are downloaded the first time a file of that
-  language is read, into your cache directory. `aleph doctor --fetch-grammars` gets them
-  all at once; `aleph doctor` says which are missing. Without a language's grammar its
-  files are still searched as text, but `symbol` and `outline` find nothing in them.
-- **Search by meaning is optional** and off until you run `aleph embed setup`, which builds
-  a small local server and downloads a 310 MB model. Without it, search is by words and names.
-- Installing fetches Aleph's dependencies, as for any package (and a Python 3.13 if uv has none). After that, Aleph
-  uses the network only for the two things above and for a repository you ask it to fetch
-  (`aleph source add <URL>`). Nothing about your code ever leaves the machine.
-
-The Claude Code plugin (`plugin/`) is part of the repository, not of the installed package:
-point Claude Code at a checkout (see below).
+Language grammars are downloaded the first time a file of that language is read
+(`aleph doctor --fetch-grammars` gets them all at once).
 
 ## Quick start
 
-    uv run aleph doctor                       # is everything in place?
-    uv run aleph index                        # optional: the first search indexes too
-    uv run aleph search "where are refresh tokens rotated"
-    uv run aleph search TokenStore.get --detail full
-    uv run aleph symbol refresh_token         # where a name is defined
-    uv run aleph outline src/auth/store.py    # what a file defines, with line ranges
-    uv run aleph status
+```sh
+cd your/project
+aleph search "where are refresh tokens rotated"
+aleph symbol refresh_token          # where a name is defined
+aleph outline src/auth/store.py     # what a file defines
+aleph status                        # what the index holds, and what is switched on
+aleph setup                         # the optional parts, asked once (see below)
+```
 
-Useful options for `search`: `--kind code|docs`, `--glob "src/api/*"`, `--lang python`,
-`--detail locations|snippets|full`, `--json`, `--timeout-ms 500`.
+The first search indexes the repository. Later searches read only what changed.
 
-## Setting it up, once
+## Use with Claude Code
 
-Search by words and names needs no setup. Everything else is one checklist:
+**As an MCP server**, for every project:
 
-    uv run aleph setup                        # on a terminal: shows the list and asks about what is open
+```sh
+claude mcp add --scope user aleph-zero -- "$(which aleph)" serve
+```
 
-It asks five things, each with what a yes costs, and keeps the answers so that nothing is asked twice:
-whether Claude Code is connected (it prints the command with the place this engine is in,
-`claude mcp add --scope user aleph-zero -- /path/to/aleph serve`, for every project, and never changes
-Claude Code's settings itself);
-the embedding worker and its model (310 MB; offered where it will be used); documentation or code in
-another repository to search beside this one (a path or a URL); search by meaning in this repository
-(makes its vectors, what you linked included; can be interrupted and continued); and git's untracked
-cache for this worktree (in its index; no git configuration is changed). What belongs to the machine is
-answered once for every repository. A no is kept: `aleph setup --again` asks about it again.
+The agent gets `search` (always loaded), and `symbol`, `outline`, `status`, `recall` and
+`remember` on demand. Each tool takes the working directory, so one server answers for
+any worktree.
 
-Without a terminal (a script, an agent) it only shows the list. Each thing then has a flag of its own,
-and nothing that costs is done without it: `--worker`, `--source LOCATION`, `--embed`, `--dense` or
-`--no-dense` (this repository's own choice about search by meaning, kept beside its index),
-`--untracked-cache`; `--json` gives the list as data. A flag that fails is said on standard error, the
-others are still done, and the command ends with 2. `aleph doctor` and the agent's `status` tool
-show the same list and act on nothing. The first time you use `aleph` in a repository on a terminal,
-one line names this command, once.
+**As a plugin**, which adds steering towards search:
 
-## Keeping it up to date
+```sh
+claude --plugin-dir /path/to/aleph-zero/plugin
+```
 
-Nothing is built for a project as a whole, so nothing is built again as a whole. The index, the vectors,
-the code graph's facts and the architecture's facts are each kept per content: after a pull only the files
-that changed are read, a function that did not change keeps its vector, and a rename costs nothing. All of
-it happens by itself at the next question. One command does it at once, and also the two things nothing
-does by itself (fetching sources linked by URL, and making vectors while no server runs):
-
-    uv run aleph update                       # sources, the index, facts and vectors, for what changed
-    uv run aleph update --print-hook          # the lines for git's post-merge and post-checkout hooks
-
-It fetches linked sources unless `--no-fetch` is given; reads the code graph's and the architecture's facts
-only where they were ever asked for; makes vectors only where search by meaning is on already (it never
-switches it on), for at most `--minutes` (10 by default; the rest next time); and names compiler indexes
-that are out of date without running them. `--quiet` prints only what failed, `--json` gives the report as
-data. Aleph installs no hook: `--print-hook` prints lines that run the update detached after a pull or a
-change of branch, without the network and for five minutes of embedding at most, and you put them into the
-hooks yourself; it also prints a line for a nightly schedule, which does fetch.
-
-What is not incremental: a new version of Aleph that changes how chunks, facts or vectors are made reads
-everything again, once; compiler indexes are made again by `aleph scip run`, for the whole project; and a
-branch not visited for thirty days has its own content collected and is read again when you return.
-
-## Use it from Claude Code
-
-    claude mcp add aleph-zero -- /absolute/path/to/aleph-zero/.venv/bin/aleph serve
-    claude mcp add aleph-zero -- aleph serve          # if you installed it with `uv tool install`
-
-The server offers four tools for finding code. `search` is always loaded; `symbol`, `outline`
-and `status` load on demand. Each takes `cwd`, so one server answers for any worktree. Two
-more, `recall` and `remember`, belong to the memory layer below.
-
-### As a plugin, with steering
-
-    claude --plugin-dir /absolute/path/to/aleph-zero/plugin
-
-The plugin starts the same server and adds a mod that steers Claude Code towards it.
-How far it goes is one option, the rung (`/config`, or `pluginConfigs` in settings):
+The plugin's `rung` option (`/config`) sets how far it steers:
 
 | Rung | What it adds |
 |---|---|
-| 0 | Nothing: the tools as above |
-| 1 (default) | All four tools loaded up front with tuned descriptions, a short standing instruction to search before recursive grep, and a pointer to it in the descriptions of Claude Code's own Grep and Glob |
-| 2 | Ranked locations ride along with the first prompt of a session, when the engine is confident |
-| 3 | A recursive `grep`, `rg`, `git grep` or `find -name` that found nothing gets ranked locations appended |
+| 0 | The tools only |
+| 1 (default) | Tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions (`grep_pointer`: on/off) |
+| 2 | Ranked locations attached to the first prompt of a session, when the engine is confident (`lines`: `places`, or `signatures` to add each file's first signature) |
+| 3 | Ranked locations appended to a recursive `grep`, `rg`, `git grep` or `find` that found nothing |
 
-The pointer in Grep and Glob has its own switch (`grep_pointer`: on or off).
+`/aleph` opens a side chat about the repository whose answers cite `path:line`;
+`/aleph check` tests the connection to the engine and `/aleph stats` shows the session's
+tool use. Rungs 2 and 3 and the side chat call the engine themselves, which Claude Code
+allows only when its tools are: add `"mcp__plugin_aleph-zero_aleph__*"` to
+`permissions.allow`.
 
-`/aleph` with no argument opens a side chat about the repository: questions are answered from
-the index with `path:line` citations, by a model and effort you pick in the pane, and nothing
-reaches the main conversation unless you press Insert (ADR-012).
+## Setup
 
-Rungs 2 and 3 have the mod itself ask the engine, which Claude Code allows only if the
-engine's tools are allowed: add `"mcp__plugin_aleph-zero_aleph__*"` to `permissions.allow`.
-`/aleph check` says whether the mod can reach the engine; `/aleph stats` shows the session's
-tokens, tool calls and how often search was used before grep (`/aleph stats last` for the
-session before). Which rungs pay is being measured (ADR-011); until then the default is 1.
+Search by words and names needs no setup. `aleph setup` lists the optional parts, says
+what each costs, and asks about each once on a terminal:
 
-## Documentation that lives in another repository
+| Part | What it does | Flag (for scripts) |
+|---|---|---|
+| Claude Code | Prints the `claude mcp add` command; never edits Claude Code's settings | — |
+| Embedding worker | Builds the local server and downloads the model (310 MB, network) | `--worker` |
+| Linked sources | Searches another repository beside this one | `--source PATH_OR_URL` |
+| Search by meaning | Uses it in this repository (`--dense`, vectors made in the background) or makes the vectors now (`--embed`) | `--embed`, `--dense`, `--no-dense` |
+| Git's untracked cache | Speeds up git's look at the worktree; suggested from 3,000 files | `--untracked-cache` |
 
-    uv run aleph source add ../team-docs --name docs        # read in place, follows that clone
-    uv run aleph source add https://example.com/handbook.git   # cloned once; uses the network
-    uv run aleph source refresh                                # fetch URL sources again
-    uv run aleph source list
+Answers are kept; `aleph setup --again` asks about declined parts again. Without a
+terminal it only prints the list (`--json` for data). `aleph doctor` names what is still open.
 
-Its files are searched as `docs:path/in/that/repo.md`.
+## Commands
+
+| Command | What it does |
+|---|---|
+| `aleph search QUERY` | Ranked locations. Options: `--kind code\|docs`, `--glob`, `--lang`, `--detail locations\|snippets\|full`, `-k`, `--budget-tokens`, `--timeout-ms`, `--dense`/`--no-dense`, `--json` |
+| `aleph symbol NAME` | Where a name is defined |
+| `aleph outline PATH` | What a file defines, with line ranges |
+| `aleph callers NAME` / `aleph callees NAME` | The call graph, with how sure each answer is; the first question reads every file once |
+| `aleph scip import\|run\|list\|forget` | A compiler's [SCIP](https://github.com/sourcegraph/scip) index for exact call answers while its files are unchanged (`import FILE [--tree REV\|--worktree]`; `run` needs the language's indexer installed, e.g. `scip-python`) |
+| `aleph facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states |
+| `aleph decisions TASK` / `--for PATH` | Decision records that govern a task or a file |
+| `aleph source add\|list\|remove\|refresh` | Repositories searched beside this one (`name:path` in results) |
+| `aleph memory list\|recall\|forget` | What earlier sessions kept |
+| `aleph embed setup\|run\|status\|stop` | The embedding worker and this worktree's vectors |
+| `aleph index` | Index now (searching does it on demand) |
+| `aleph update` | Everything up to date at once after a pull: fetches URL sources, then the index, facts and vectors for what changed. `--print-hook` prints lines for git's `post-merge`/`post-checkout` hooks and a nightly schedule; Aleph installs none itself |
+| `aleph status` / `aleph doctor` | What the index holds; whether everything is in place |
+| `aleph gc [--days N]` | Drop content no worktree has used for N days (30 by default) |
+| `aleph serve` | The MCP server, on standard input and output |
+
+`--cwd DIR` before the command runs it for another directory.
 
 ## Search by meaning
 
-    uv run aleph embed setup      # once: builds the worker and downloads the model (310 MB; uses the network)
-    uv run aleph embed run        # gives this worktree's code and docs their vectors (about 90 chunks a second)
-    uv run aleph embed status
+Optional. With the embedding worker installed (`aleph embed setup`) and vectors made
+(`aleph embed run`, about 90 chunks a second), results also come from a local embedding
+model. It is on by default for a project whose main language passed a benchmark: at least
+5 points of file recall@10 on issue titles, with a 95% interval that excludes zero
+([ADR-002](docs/adr/ADR-002-lexical-and-fusion.md)).
 
-With the worker installed, vectors are used by default in projects whose main language
-has a benchmark verdict in their favour (ADR-002): 5 points or more of file recall@10 on the first
-line of an issue, with an interval that excludes zero. Measured so far:
-
-| Main language | Gain on first lines (95% interval) | Default |
+| Main language | Gain (95% interval) | Default |
 |---|---|---|
-| JavaScript | +9.8 points (+6.0 to +13.6), 448 questions; +16.2 (+9.4 to +23.1) on the 164 asked last, alone | on |
+| JavaScript | +9.8 (+6.0 to +13.6), 448 questions | on |
 | TypeScript | +7.3 (+1.8 to +12.9), 110 questions | on |
 | C | +12.3 (+3.7 to +21.3), 88 questions | on |
-| Rust | +8.0 (+2.3 to +13.9), 170 questions | on |
 | C++ | +6.7 (+1.4 to +12.3), 108 questions | on |
-| Python | +3.9 (+0.6 to +7.2), 400 questions; +1.6 on the 165 held out | off |
+| Rust | +8.0 (+2.3 to +13.9), 170 questions | on |
+| Python | +3.9 (+0.6 to +7.2), 400 questions | off |
 | Go | +2.0 (−3.9 to +7.8), 111 questions | off |
 | Java | +0.1 (−3.2 to +3.4), 296 questions | off |
 
-On whole issue text vectors gain in every language (5 to 20
-points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on,
-and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
-`aleph status` shows a project's main language and whether vectors are on, and why.
-After its results an answer names the next files of the same ranking, as places only, until ten files are named.
-`aleph index`, `aleph update` and `aleph setup` prepare files on four cores (a cold index of Django in about 3.5 s);
-after this build the code graph reads each repository's facts once more, at its first graph question.
-`aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
-repository; a session (`aleph serve`) starts it when it starts, where vectors are on, so that its first question
-has them; it unloads its model after ten idle minutes and exits after thirty. Waking takes half a second:
-a question with no time limit waits for it, one with a time limit is answered by words and says so.
+On whole issue texts vectors gain 5 to 20 points in every language. Switch them on or off
+per repository with `aleph setup --dense` / `--no-dense`, or per call with `--dense`,
+`--no-dense` or `ALEPH_DENSE=1|0`. One worker serves every repository; it unloads its
+model after ten idle minutes and exits after thirty.
 
-## Memory across sessions
+## Environment variables
 
-What the side chat answered, and the notes you inserted from it, are kept per repository
-and can be recalled later (the `recall` tool, or the command line):
+| Variable | Effect |
+|---|---|
+| `ALEPH_DENSE=1\|0` | Search by meaning on or off, overriding the language default |
+| `ALEPH_GRAPH=1` | Offer the agent the call-graph, facts and decisions tools as well |
+| `ALEPH_SCIP_MEMORY_MB` | Memory limit for `aleph scip run` (2,048 MB by default; JavaScript 3,072) |
+| `ALEPH_AEON_LIB` | Path to Aeon's core library, for recalling memories by meaning |
+| `XDG_CACHE_HOME` | Where the machine-wide cache lives (`~/.cache` by default) |
 
-    uv run aleph memory list
-    uv run aleph memory recall "why did we change token rotation"
-    uv run aleph memory forget <id>        # or --all
+## Performance
 
-A recalled memory says when it was made, what code it cites, and whether that code has
-changed since. Without anything else installed, recall is by words and recency. With
-Aeon's core extension available (`ALEPH_AEON_LIB=/path/to/its/build`), recall is also by
-meaning (ADR-006). The text stays on this machine, in the repository's state directory.
+Measured on an M4 Max: median of five warm questions with vectors on, and a cold index with four processes
+(the cold-index figures are from another commit of the same repository):
 
-## Faster queries
+| Repository | Question | Cold index |
+|---|---|---|
+| fmt (4,000 chunks) | 24 ms | |
+| pandas (43,000) | 44 ms | |
+| vscode (77,000) | 83 ms | 4.5 s (87,000 chunks) |
+| trino (90,000) | 84 ms | |
+| django (52,000) | 105 ms | 3.5 s (64,000 chunks) |
+| material-ui (59,000) | 159 ms | |
 
-Every query asks git what the working tree looks like. On a large repository that is
-most of a query's time. Git can remember untracked files between calls:
+Most of a question on a large repository is git listing what changed. Git's untracked
+cache shortens it (vscode 36 → 13 ms); `aleph setup` offers it, or run
+`git update-index --untracked-cache` in the repository.
 
-    git config core.untrackedCache true
+## Where data lives
 
-On Django (7,000 files) this takes a query from about 80 ms to about 30 ms.
-`aleph doctor` shows whether it is on. Aleph never changes your git configuration itself.
+| What | Where |
+|---|---|
+| The index, vectors, settings and memory of a repository | `<git-common-dir>/aleph-zero/`, shared by its worktrees; `~/.cache/aleph-zero/index/` when git's directory cannot be written or is on a network filesystem (`aleph status` says which) |
+| The embedding worker, model and machine-wide answers | `~/.cache/aleph-zero/` (`$XDG_CACHE_HOME` if set) |
+| Clones of sources linked by URL; indexes of directories outside git | `~/.cache/aleph-zero/sources/`, `~/.cache/aleph-zero/index/` |
+| The plugin's session meter | `~/.claude/plugins/store/aleph-zero_*.json` |
+| Language grammars | `tree-sitter-language-pack`'s cache (`~/Library/Caches/` on macOS, `~/.cache/` on Linux) |
 
-## Who calls what
+The index, vectors and facts are caches: deleting them is safe, they are rebuilt as
+needed, and a damaged index is set aside and rebuilt. Memories, the list of linked sources,
+setup answers and imported SCIP indexes are not: deleting the directory loses them.
 
-    uv run aleph callers TokenStore.get      # every call that reaches it
-    uv run aleph callees refresh_token       # what it calls
+## What is searched
 
-Each answer says how it was found. A call is listed as certain when the code itself says
-where it goes: the same file, an import followed to the file that declares the name, the
-class the call sits in or one it is built on, a parameter or field whose type is stated.
-A call on a value whose type nothing states is listed apart, as one of the definitions
-that share the name. A call into a library is not listed at all. A call to a function
-defined inside the calling function is listed, as certain unless the name is given another
-value somewhere or defined twice; such a function is not itself found by `aleph symbol`.
+What git tracks in the worktree, as it is on disk, plus untracked files that are not
+ignored. Files over 300 KB, binary and non-UTF-8 files, lockfiles, Git LFS pointers and
+minified files are skipped.
 
-The first question about a worktree reads every file's calls and imports (a few seconds
-on a large repository); later ones take milliseconds. Searching never pays for this.
-The agent is offered the matching `references` tool only when `ALEPH_GRAPH=1` is set
-for the server: whether it helps an agent has not been measured yet.
+- **Sparse checkouts:** files outside the checkout are not searched.
+- **Submodules** are not searched; link one with `aleph source add path/to/submodule`.
+- **Shallow and partial clones** work; nothing is fetched to answer a question.
+- **Outside git**, a directory is searched from there down, as it is on disk, without
+  hidden files, `node_modules`, `venv`, `__pycache__`, symbolic links and nested
+  repositories. Aleph refuses your home directory, system directories and directories of
+  more than 20,000 files.
 
-### Exact answers from a compiler's index
+## Uninstall
 
-    uv run aleph scip import index.scip             # an index made elsewhere (CI, by hand), from HEAD
-    uv run aleph scip import index.scip --tree v1.4 # ... or from another revision
-    uv run aleph scip import index.scip --worktree  # ... or from the worktree as it is now
-    uv run aleph scip run --lang python             # or let Aleph run the indexer here
-    uv run aleph scip list
+```sh
+aleph embed stop                                   # stop the embedding worker, if running
+claude mcp remove aleph-zero                       # if you added the MCP server
+uv tool uninstall aleph-zero
+```
 
-A [SCIP](https://github.com/sourcegraph/scip) index is what a compiler knows about the
-code. Once one is imported, `callers` and `callees` answer from it where it has an answer,
-marked `(compiler index)`: also for calls on values whose type nothing in the source
-states. With uncommitted changes, say what the index was made from (`--tree`, `--worktree`).
+Then remove what it kept:
 
-It is believed only for files that are still what it was made from, and whose
-dependencies are too. Edit a file, and that file and everything that depends on it are
-answered by the resolver again until a new index is imported; the answer says so.
+```sh
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/aleph-zero" # worker, model, linked clones, settings
+rm -rf "/tmp/aleph-zero-$(id -u)"                   # the worker's socket, where the cache path was too long
+rm -f ~/.claude/plugins/store/aleph-zero_*.json     # the plugin's meter, if you used the plugin
+rm -rf "$(git rev-parse --git-common-dir)/aleph-zero"   # in each repository you used it in
+git update-index --no-untracked-cache               # optional: in each worktree where setup switched it on
+```
 
-`aleph scip run` runs the indexer for the languages where its memory was measured under
-the limit (Python, Go, Rust, Java with Maven, TypeScript with its dependencies installed),
-watches it, and stops it above 2,048 MB. JavaScript's indexer needs more (2.3 GB on eslint)
-and has a limit of its own, 3,072 MB. `ALEPH_SCIP_MEMORY_MB` names another limit for all. For Java and Rust this compiles the project, in a copy of its
-files: your worktree is not touched, and it is only ever done when you ask. Aleph never
-installs an indexer; `aleph doctor` says which are present.
+If you used the plugin, also remove the `--plugin-dir` flag, and the `permissions.allow`
+and `pluginConfigs` entries from your Claude Code settings. Remove any lines you added from
+`aleph update --print-hook` (git hooks, cron or launchd), then delete the checkout. The
+grammar cache is shared with other tools that use `tree-sitter-language-pack`; delete it
+only if nothing else needs it.
 
-## What the repository says about itself
+## Documentation
 
-    uv run aleph facts                      # how many routes, models, environment names, tasks ... it states
-    uv run aleph facts route --like users   # each with its file and line
-    uv run aleph facts env --like REDIS     # where a setting is read, set, or declared in an example file
-    uv run aleph decisions "cache the invoice totals in redis"   # the decision records that govern a task
-    uv run aleph decisions --for src/billing/invoice.py          # the records that name this file, and its layer
+- Design: [`docs/superpowers/specs/`](docs/superpowers/specs/)
+- Decisions and measurements: [`docs/adr/`](docs/adr/)
+- Open work: [`docs/DEFERRED.md`](docs/DEFERRED.md)
 
-`aleph facts` reads what a file says in so many words: a route registered under a literal
-path (Express, FastAPI, Flask, Go's net/http, chi, gin, Spring), where a router is mounted,
-a model or a table (SQLAlchemy, Django, Alembic, JPA, Prisma), an environment name, a
-Celery task, a queue, a gRPC service. A route's path is as written in its file; a mount's
-prefix is listed as its own fact and not added to it. The first question about a worktree
-reads every file once (2.5 s on a repository of 1,300 files); searching never pays for it.
-A call like `x.get("/users", handler)` is read as a route only when `x` is known for a router
-(the file makes it one, or it is called `app`, `router`, `apiRouter` and the like): a lookup
-reported as an endpoint would be the worse mistake. Express, FastAPI, Prisma, Alembic, Celery,
-Go's net/http and gRPC were measured on real repositories; the other readers are covered by
-tests only (ADR-003).
+## License
 
-`aleph decisions` ranks decision records (numbered Markdown or reStructuredText files in a
-directory such as `docs/adr` or `docs/decisions`) as whole documents for a task, and answers in a few hundred tokens. When the
-embedding worker is running, each record's own vector is added to the words (a record no
-word of the task names can then still be found); without it the ranking is by words. With
-`--for`, it lists the records whose `applies-to` frontmatter covers a file and, when the
-repository has an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer the
-file is in and what that layer may depend on. Aleph reads these; it enforces nothing.
-
-Like `references`, the matching tools are offered to the agent only with `ALEPH_GRAPH=1`.
-
-## Without git
-
-Aleph also searches a directory that is not inside a git repository: the files as they are
-on disk, this directory and below (in a repository it is always the whole repository).
-Nothing says what belongs to such a directory, so some things are left out: every file and
-directory whose name begins with a dot, `node_modules`, `__pycache__`, `venv`, directories
-marked with a `CACHEDIR.TAG`, symbolic links, and git repositories inside it (run Aleph in
-those). `aleph status` and `aleph doctor` say so.
-
-It refuses, with one sentence, where walking would be a mistake: your home directory or
-anything that holds it (however the path is spelled), the top of a disk, system
-directories (`/usr/local`, `/var`, somebody else's home), the temporary directories
-themselves, and a directory of more than 20,000 files (or one where more than
-200,000 entries would have to be looked at). For those, `git init` and a `.gitignore` are
-the way to say what belongs to the project. A directory with a `.git` at or above it that
-git cannot read is an error, not a plain directory: what it ignores must stay ignored.
-
-So `.github/` and other hidden files are not searched here, files over 300 KB and binary
-files are left out as everywhere, and the first search of a large directory reads all of
-it once (about five seconds for 5,000 files); later ones read only what changed.
-
-## Where things are
-
-The index lives in `<git-common-dir>/aleph-zero/index.db` and is shared by every
-worktree of the repository. It is a cache: deleting it is always safe. When git's
-directory cannot be written, or is on a network filesystem, it lives in
-`~/.cache/aleph-zero/index/` instead; `aleph status` says where and why.
-
-In a directory that is not a git repository the index always lives in `~/.cache/aleph-zero/index/`:
-Aleph writes nothing into such a directory.
-
-What is searched is what git tracks in this worktree, as it is on disk now:
-
-- In a sparse checkout, files outside it are not searched. `status` says how many.
-- Submodules are not searched. `status` and `doctor` list them; link one as a source
-  with `aleph source add path/to/submodule`.
-- Shallow and partial clones work. Nothing is ever fetched to answer a query.
-- A directory that is not a git repository is searched as described under "Without git", with what that leaves out.
-
-Content no worktree has used for 30 days is dropped by itself; `aleph gc --days N`
-does it on request. A damaged index file is set aside (kept as `index.db.damaged-…`)
-and built again.
-Supported languages: Python, TypeScript, JavaScript, Go, Rust, Java, C++, C, plus
-Markdown and reStructuredText. Other text files are searched as plain text.
-
-Design: `docs/superpowers/specs/`. Decisions and measurements: `docs/adr/`.
+[MIT](LICENSE)
