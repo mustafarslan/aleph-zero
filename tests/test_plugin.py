@@ -56,14 +56,14 @@ def test_an_installed_plugin_finds_the_engine_where_uv_put_it_when_it_is_not_on_
     serve = _installed_copy(tmp_path)
     _stub(tmp_path / "uvbin")
     done = subprocess.run([str(serve)], capture_output=True, text=True, timeout=30,
-                          env={"PATH": "/usr/bin:/bin", "UV_TOOL_BIN_DIR": str(tmp_path / "uvbin"), "HOME": str(tmp_path)})
+                          env={"PATH": "/usr/bin:/bin", "UV_TOOL_BIN_DIR": str(tmp_path / "uvbin")})
     assert done.stdout.strip() == "stub serve"
 
 
 def test_an_installed_plugin_says_how_to_install_the_engine_when_there_is_none(tmp_path):
     serve = _installed_copy(tmp_path)
     done = subprocess.run([str(serve)], capture_output=True, text=True, timeout=30,
-                          env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
+                          env={"PATH": "/usr/bin:/bin"})          # no HOME: nothing of the real one is looked at
     assert done.returncode != 0 and "uv tool install" in done.stderr
 
 
