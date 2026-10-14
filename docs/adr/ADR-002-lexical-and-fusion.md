@@ -319,6 +319,17 @@ The three readings measured files. Read at the level of the functions each fix e
 
 The rule written before it: the two changes together (dotted names; the path's vote to what was found in the file) adopted for every question if, on questions never asked, files among ten on whole issue text gain with an interval clear of zero, no language is lower and first lines are not lower. The third draw of JavaScript and TypeScript (211 never-asked questions): whole text +2.01 (−0.24 to +4.62); first lines +0.91 (+0.07 to +2.17). **Not adopted.** The path's vote alone gained on whole text with an interval clear of zero here (+1.66, +0.24 to +3.55) and in the first reading (+0.90), and +0.95 (+0.00 to +2.53) in the second; it was never named alone in a rule, and is left for one that does. agy, before this reading, called its design wrong: JavaScript and TypeScript with vectors were where the whole-text gain had been weakest. The switches stay in the code, off.
 
+## Benchmark C, C: vectors pass the gate (2026-10-14, the owner's "yes" to C and Rust)
+
+Read as the four languages were, by the rule written before anything was fetched (the deferred list, entry 1d, round 3): SWE-bench Multilingual and Multi-SWE-bench questions labelled C, at most 40 a repository, each read under its repository's main language at the question's commit. Prepared and embedded from 09:01 to 09:38, the chip at 76 °C at most, no waits. Of the 108 questions labelled C, 88 are in repositories whose main language is C and 20 (ponyc) in one whose main language is C++.
+
+| Main language | Questions, repositories | Words and names | With vectors | Gain (95%) | By repository | Better / worse | Whole text |
+|---|---|---|---|---|---|---|---|
+| **C** | 88, 6 (zstd 29, ponyc 20, jq 18, redis 12, micropython 5, valkey 4) | 0.463 | 0.586 | **+12.3 (+3.7 to +21.3)** | −2.6 to +33.8 | 20 / 8 | +19.8 (+10.9 to +29.2), 26 / 3 |
+| C++, with ponyc's 20 | 128, 6 | 0.387 | 0.453 | +6.6 (+1.9 to +11.6) | +4.3 to +11.3 | 17 / 3 | +9.5 (+4.0 to +15.4) |
+
+**`dense_policy.VERDICTS["c"]` is on.** The interval by repository holds zero (six repositories, one of 29 questions): the gate does not ask for it, and it is said here because JavaScript's decision used it. C++ read again with the new questions stays on, by much the same margin as before. Rust is the next in the same run and is off until it is read.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.
