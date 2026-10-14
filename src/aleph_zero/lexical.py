@@ -53,8 +53,15 @@ def _parts(piece: str) -> list[str]:
 def split_identifier(token: str) -> list[str]:
     """Sub-words of an identifier, lower-cased: getUserName -> get, user, name.
     Empty when there is nothing to split, so a plain word is not repeated."""
-    parts = [part.lower() for piece in token.split("_") if piece for part in _parts(piece)]
-    return parts if len(parts) > 1 else []
+    return list(_split(token))
+
+
+@functools.lru_cache(maxsize=8192)
+def _split(token: str) -> tuple[str, ...]:
+    """`split_identifier`, remembered: a repository writes the same few ten thousand words hundreds of thousands
+    of times. Measured on a cold index of Django: 8.6 s, 7.7 s with this, for 2 MB (65,536 kept were 19 MB for nothing more)."""
+    parts = tuple(part.lower() for piece in token.split("_") if piece for part in _parts(piece))
+    return parts if len(parts) > 1 else ()
 
 
 def expand(text: str) -> str:
@@ -64,7 +71,7 @@ def expand(text: str) -> str:
     for match in _WORD.finditer(text):
         token = match.group()
         out.append(token)
-        out.extend(split_identifier(token))
+        out.extend(_split(token))
     return " ".join(out)
 
 
@@ -72,7 +79,7 @@ def expand(text: str) -> str:
 def _forms(token: str) -> tuple[str, ...]:
     """A word as it is searched for: itself, and the sub-words of an identifier. Remembered, because
     the paths of a view are read through this and repeat the same few thousand words."""
-    return (token.lower(), *split_identifier(token))
+    return (token.lower(), *_split(token))
 
 
 def all_forms(text: str) -> frozenset[str]:

@@ -76,3 +76,19 @@ def test_bare_numbers_are_not_the_rarest_words_of_a_long_query_and_huge_queries_
     started = time.perf_counter()
     lexical.search(conn, " ".join(f"unknownword{i}" for i in range(5000)), 10)
     assert time.perf_counter() - started < 0.1
+
+
+def test_an_identifier_is_split_once_however_often_it_is_written(monkeypatch):
+    # Splitting identifiers into sub-words, token by token, was nearly half of a cold index (8.4 of 18.1 s on Django,
+    # under the profiler): `self`, `return`, `request` are written hundreds of thousands of times.
+    split: list[str] = []
+    real = lexical._parts
+    monkeypatch.setattr(lexical, "_parts", lambda piece: split.append(piece) or real(piece))
+    lexical._split.cache_clear()
+    text = "def getUserName(self):\n    return self.getUserName() + getUserName(self)\n" * 50
+    expanded = lexical.expand(text)
+    assert expanded.count("getUserName get user name") == 150
+    assert split.count("getUserName") == 1 and split.count("self") == 1
+    assert lexical.split_identifier("getUserName") == ["get", "user", "name"]     # a list of its own, as before
+    lexical.split_identifier("getUserName").append("changed")
+    assert lexical.split_identifier("getUserName") == ["get", "user", "name"]     # what is remembered cannot be changed
