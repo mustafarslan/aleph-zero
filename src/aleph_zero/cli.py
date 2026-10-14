@@ -382,9 +382,18 @@ def _gc(args) -> int:
 HINTED = ("index", "search", "symbol", "callers", "callees", "decisions", "facts", "outline", "status")
 
 
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("aleph-zero")
+    except PackageNotFoundError:     # a source tree that was never installed
+        return "unknown"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aleph", description="Local code search for coding agents.")
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="a directory inside the repository")
+    parser.add_argument("--version", action="version", version=f"aleph-zero {_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     index = commands.add_parser("index", help="index everything in the current view")

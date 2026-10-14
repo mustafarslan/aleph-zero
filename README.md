@@ -36,25 +36,32 @@ services, each with its file and line. With an [oxn](docs/adr/ADR-007-relationsh
 **Decision records.** Ranks a repository's ADRs for a task, or lists those that apply to a
 file, so the agent sees what was already decided.
 
-**Memory across sessions.** Answers and notes are kept per repository and recalled later.
+**Memory across sessions.** The side chat's answers and the notes you keep are stored per
+repository and recalled later, by the agent (`recall`, `remember`) or on the command line.
 Each memory cites code by content, so a recall says whether that code has changed since. It
-is recalled by words and recency, and also by meaning when [Aeon](docs/adr/ADR-006-memory-layer.md)'s
-store is available.
+is recalled by words and recency, and also by meaning when the optional
+[Aeon](docs/adr/ADR-006-memory-layer.md) store is available. `aleph memory forget` erases a
+memory's text, except the copy Aeon's store keeps when it is used.
 
 **Linked sources.** Documentation or code from another repository, searched beside your own
 and cited as `name:path`.
 
-**Claude Code plugin.** Starts the engine and steers the agent to search before it greps,
-in levels you choose: tool descriptions, ranked locations with the first prompt, and
-suggestions after a grep that found nothing. `/aleph` opens a side chat about the
-repository whose answers cite `path:line`.
+**Claude Code plugin.** Starts the engine, loads its tools, and steers the agent to search
+before it greps, in levels you choose: tool descriptions, ranked locations with the first
+prompt, and suggestions after a grep that found nothing. Whether steering saves tokens has
+not been shown yet: in measured sessions the agent often still greps first
+([ADR-011](docs/adr/ADR-011-steering.md)). `/aleph` opens a side chat about the repository
+whose answers cite `path:line`.
 
 ## Requirements
 
-- macOS on Apple Silicon (where it is developed and measured; Linux is expected to work but
-  has not been tested), git, [uv](https://docs.astral.sh/uv/), and Claude Code for the plugin.
-- For search by meaning: cmake, ninja and Xcode's command-line tools (the embedding server is
-  built locally from llama.cpp), and 310 MB for the model.
+- macOS on Apple Silicon, where it is developed and measured. Linux is expected to work but
+  has not been tested.
+- [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself if needed), git, and
+  Claude Code for the plugin.
+- For search by meaning: cmake, ninja and Xcode's command-line tools. The embedding server
+  is built locally from one pinned commit of llama.cpp (about 220 MB of source), and the
+  model is a 310 MB download.
 
 ## Install with Claude Code
 
@@ -62,20 +69,30 @@ repository whose answers cite `path:line`.
 
 ```sh
 brew install uv cmake ninja
-xcode-select --install                      # the C++ compiler, if not installed yet
+xcode-select --install                     # the C++ compiler, if not installed yet
 
-git clone https://github.com/mustafarslan/aleph-zero.git ~/aleph-zero
-cd ~/aleph-zero
-uv tool install .                           # the `aleph` command
-uv tool update-shell                        # puts uv's tool directory on PATH (open a new terminal after)
-aleph setup --worker                        # builds the embedding server, downloads the model
+uv tool install git+https://github.com/mustafarslan/aleph-zero.git
+uv tool update-shell                       # puts uv's tool directory on PATH; open a new terminal after
+aleph setup --worker                       # optional: builds the embedding server, downloads the model
 
-claude plugin marketplace add ~/aleph-zero
+claude plugin marketplace add mustafarslan/aleph-zero
+claude plugin install aleph-zero@aleph-zero
+```
+
+The engine is installed as `aleph` and, under the same code, as `aleph-zero`. TeX Live also
+installs a program called `aleph`: if `which aleph` points into a TeX directory, use
+`aleph-zero` instead. The plugin always starts `aleph-zero`.
+
+The plugin installs with its measured defaults. To turn every option on (see
+[Plugin options](#plugin-options)):
+
+```sh
 claude plugin install aleph-zero@aleph-zero --config rung=3 --config graph=on
 ```
 
-Then allow the plugin to call the engine itself, which the higher steering levels and the
-side chat need. Add this to `~/.claude/settings.json` (merge it into what is there):
+Rungs 2 and 3 and the side chat call the engine from the plugin itself, which Claude Code
+allows only when its tools are allowed. Add this to `~/.claude/settings.json`, merged into
+what is there:
 
 ```json
 { "permissions": { "allow": ["mcp__plugin_aleph-zero_aleph__*"] } }
@@ -90,13 +107,13 @@ aleph status
 ```
 
 - `--source` links a documentation (or code) repository: a path is read in place and
-  follows that checkout; a URL is cloned once (`aleph update` fetches it again). Repeat it
-  for each repository to link.
+  follows that checkout; a URL is cloned once and fetched again by `aleph update`. Give it
+  once for each repository to link.
 - `--embed` makes vectors for the project and its linked sources, and switches search by
-  meaning on for this project. Do it for every project where you want it: by default it is
-  on only where the main language is JavaScript, TypeScript, C, C++ or Rust (see below).
-  Each project keeps its own vectors, so docs linked to three projects are embedded three
-  times (about 90 chunks a second).
+  meaning on for this project. By default it is on only where the main language is
+  JavaScript, TypeScript, C, C++ or Rust (see [Search by meaning](#search-by-meaning)), so use
+  it for a Python, Go or Java project where you want it. Each project keeps its own vectors:
+  docs linked to three projects are embedded three times (about 90 chunks a second).
 - `--untracked-cache` turns on git's untracked cache, which makes git's look at a large
   worktree several times faster.
 - `aleph status` shows the main language, whether vectors are on and why, and the linked
@@ -108,35 +125,48 @@ next question, in the docs too, and missing vectors are made in the background.
 ### Updating
 
 ```sh
-cd ~/aleph-zero && git pull
-uv tool install --reinstall .               # the engine
+uv tool install --reinstall git+https://github.com/mustafarslan/aleph-zero.git
+claude plugin marketplace update aleph-zero
+claude plugin update aleph-zero@aleph-zero
 ```
-
-The plugin is read from the checkout, so `git pull` updates it at the next session.
 
 ### Plugin options
 
-Set at install (`--config KEY=VALUE`), with `claude plugin configure aleph-zero@aleph-zero`,
-or with `/plugin` in Claude Code.
+Set at install (`--config KEY=VALUE`), later with
+`claude plugin configure aleph-zero@aleph-zero`, or with `/plugin` in Claude Code.
 
 | Option | Values | What it does |
 |---|---|---|
-| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. |
+| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
 | `graph` | `off`/`on` (default `off`) | Also offer the agent the code-graph, architecture-facts and decision-record tools. Whether they help an agent has not been measured yet. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |
 
 ### Other MCP clients
 
-The engine is a standard MCP server on standard input and output:
+The engine is a standard MCP server on standard input and output, `aleph-zero serve`:
 
 ```sh
-claude mcp add --scope user aleph-zero -- "$(which aleph)" serve     # Claude Code, without the plugin
+claude mcp add --scope user aleph-zero -- "$(which aleph-zero)" serve     # Claude Code, without the plugin
 ```
 
 The agent gets `search` (always loaded), and `symbol`, `outline`, `status`, `recall` and
 `remember` on demand; with `ALEPH_GRAPH=1` also `references`, `facts` and `decisions`. Each
 tool takes the working directory, so one server answers for any worktree.
+
+## What it runs, sends and fetches
+
+- **Runs:** the engine (`aleph-zero serve`) as a local process started by Claude Code, and
+  `git` in your repositories to read what changed. With search by meaning, a local
+  llama.cpp server for the embedding model, started on demand and stopped after thirty idle
+  minutes. `aleph scip run` runs a language's compiler indexer only when you ask.
+- **Sends:** nothing. Your code, the index, vectors and memories stay on the machine. The
+  side chat (`/aleph`) uses Claude Code's own model connection, as any Claude Code request does.
+- **Fetches, only when asked:** language grammars (the first time a language is read), the
+  llama.cpp source and the embedding model (`aleph setup --worker`), and repositories you
+  link by URL (`aleph setup --source URL`, `aleph update`).
+- **Writes:** see [Where data lives](#where-data-lives). It changes no git configuration;
+  `--untracked-cache` writes git's cache into the worktree's index only.
 
 ## Command line
 
@@ -157,19 +187,19 @@ terminal it only prints the list.
 
 | Command | What it does |
 |---|---|
-| `aleph search QUERY` | Ranked locations. Options: `--kind code\|docs`, `--glob`, `--lang`, `--detail locations\|snippets\|full`, `-k`, `--budget-tokens`, `--timeout-ms`, `--dense`/`--no-dense`, `--json` |
+| `aleph search QUERY` | Ranked locations. Options: `--kind any\|code\|docs`, `--glob`, `--lang`, `--detail locations\|snippets\|full`, `-k`, `--budget-tokens`, `--timeout-ms`, `--dense`/`--no-dense`, `--json` |
 | `aleph symbol NAME` | Where a name is defined |
 | `aleph outline PATH` | What a file defines, with line ranges |
 | `aleph callers NAME` / `aleph callees NAME` | The call graph, with how sure each answer is; the first question reads every file once |
 | `aleph scip import\|run\|list\|forget` | A compiler's [SCIP](https://github.com/sourcegraph/scip) index for exact call answers while its files are unchanged (`import FILE [--tree REV\|--worktree]`; `run` needs the language's indexer installed, e.g. `scip-python`) |
 | `aleph facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states |
-| `aleph decisions TASK` / `--for PATH` | Decision records that govern a task or a file |
+| `aleph decisions [TASK]` / `--for PATH` | Decision records that govern a task or a file; all of them with neither |
 | `aleph source add\|list\|remove\|refresh` | Repositories searched beside this one (`name:path` in results) |
 | `aleph memory list\|recall\|forget` | What earlier sessions kept |
 | `aleph embed setup\|run\|status\|stop` | The embedding worker and this worktree's vectors |
 | `aleph index` | Index now (searching does it on demand) |
 | `aleph update` | Everything up to date at once after a pull: fetches URL sources, then the index, facts and vectors for what changed. `--print-hook` prints lines for git's `post-merge`/`post-checkout` hooks and a nightly schedule; Aleph installs none itself |
-| `aleph status` / `aleph doctor` | What the index holds; whether everything is in place |
+| `aleph status` / `aleph doctor [--fetch-grammars]` | What the index holds; whether everything is in place |
 | `aleph gc [--days N]` | Drop content no worktree has used for N days (30 by default) |
 | `aleph serve` | The MCP server, on standard input and output |
 
@@ -195,8 +225,8 @@ model. It is on by default for a project whose main language passed a benchmark:
 | Java | +0.1 (−3.2 to +3.4), 296 questions | off |
 
 On whole issue texts vectors gain 5 to 20 points in every language. Switch them on or off
-per repository with `aleph setup --dense` / `--no-dense`, or per call with `--dense`,
-`--no-dense` or `ALEPH_DENSE=1|0`. One worker serves every repository; it unloads its
+per repository with `aleph setup --dense` / `--no-dense`, for one search with
+`aleph search --dense` / `--no-dense`, or for a process with `ALEPH_DENSE=1|0`. One worker serves every repository; it unloads its
 model after ten idle minutes and exits after thirty.
 
 ## Environment variables
@@ -234,12 +264,13 @@ cache shortens it (vscode 36 → 13 ms); `aleph setup` offers it, or run
 | The index, vectors, settings and memory of a repository | `<git-common-dir>/aleph-zero/`, shared by its worktrees; `~/.cache/aleph-zero/index/` when git's directory cannot be written or is on a network filesystem (`aleph status` says which) |
 | The embedding worker, model and machine-wide answers | `~/.cache/aleph-zero/` (`$XDG_CACHE_HOME` if set) |
 | Clones of sources linked by URL; indexes of directories outside git | `~/.cache/aleph-zero/sources/`, `~/.cache/aleph-zero/index/` |
-| The plugin's session meter | `~/.claude/plugins/store/aleph-zero_*.json` |
+| The plugin's session meter and side-chat settings | `~/.claude/plugins/store/aleph-zero_*.json` |
 | Language grammars | `tree-sitter-language-pack`'s cache (`~/Library/Caches/` on macOS, `~/.cache/` on Linux) |
 
 The index, vectors and facts are caches: deleting them is safe, they are rebuilt as
-needed, and a damaged index is set aside and rebuilt. Memories, the list of linked sources,
-setup answers and imported SCIP indexes are not: deleting the directory loses them.
+needed, and a damaged index is set aside and rebuilt. Imported SCIP indexes live in the
+index, so import them again after that. Memories, the list of linked sources and setup
+answers are not caches: deleting the directory loses them.
 
 ## What is searched
 
@@ -261,8 +292,8 @@ minified files are skipped.
 claude plugin uninstall aleph-zero@aleph-zero
 claude plugin marketplace remove aleph-zero
 claude mcp remove aleph-zero                          # only if you added the server without the plugin
-aleph embed stop                                      # stop the embedding worker, if running
-uv tool uninstall aleph-zero
+aleph-zero embed stop                                 # stop the embedding worker, if running
+uv tool uninstall aleph-zero                          # removes both `aleph` and `aleph-zero`
 ```
 
 Then remove what it kept:
@@ -270,10 +301,9 @@ Then remove what it kept:
 ```sh
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/aleph-zero"   # worker, model, URL clones, machine settings
 rm -rf "/tmp/aleph-zero-$(id -u)"                     # the worker's socket, if the cache path was too long for one
-rm -f ~/.claude/plugins/store/aleph-zero_*.json       # the plugin's session meter
+rm -f ~/.claude/plugins/store/aleph-zero_*.json       # the plugin's meter and side-chat settings
 rm -rf "$(git rev-parse --git-common-dir)/aleph-zero" # in each project: its index, vectors, memories, settings
 git update-index --no-untracked-cache                 # optional, in each worktree where setup turned it on
-rm -rf ~/aleph-zero                                   # the checkout
 ```
 
 Also remove the `permissions.allow` entry from your Claude Code settings, and any lines you

@@ -78,3 +78,12 @@ def test_the_commands_a_person_runs_prepare_files_in_several_processes_and_a_ses
     asked.clear()
     Engine(repo.root).search("fresh")
     assert asked and set(asked) == {0}
+
+
+def test_the_version_is_the_package_s(capsys):
+    from importlib.metadata import version
+    import pytest
+
+    with pytest.raises(SystemExit) as done:
+        cli.main(["--version"])
+    assert done.value.code == 0 and capsys.readouterr().out.strip() == f"aleph-zero {version('aleph-zero')}"

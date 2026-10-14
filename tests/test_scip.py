@@ -1,4 +1,5 @@
 """Reading a SCIP index (the oracle for the code graph)."""
+import os
 from pathlib import Path
 
 import pytest
@@ -78,10 +79,11 @@ def test_a_fixed_width_field_that_runs_past_the_end_is_an_error():
         list(scip.iter_fields(varint(5 << 3 | 5) + b"\x00"))
 
 
-REAL = Path("~/Projects/oxn/benchmarks/.scip-cache/python-httpx.scip")
+# A real index made by scip-python (httpx's, for one), named by ALEPH_TEST_SCIP; the test is skipped without one.
+REAL = Path(os.environ.get("ALEPH_TEST_SCIP", "/nonexistent"))
 
 
-@pytest.mark.skipif(not REAL.exists(), reason="no real SCIP index on this machine")
+@pytest.mark.skipif(not REAL.exists(), reason="set ALEPH_TEST_SCIP to a real .scip file made by scip-python")
 def test_a_real_index_from_scip_python_is_read():
     found = scip.load_index(REAL)
     assert len(found.documents) > 20 and found.occurrence_count > 10_000

@@ -100,3 +100,13 @@ def test_the_repository_is_a_marketplace_and_the_plugin_s_version_is_said_in_one
     # An installed copy changes when this version does (a release); said in the manifest only, never also in the entry.
     assert json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
     assert all("version" not in entry for entry in marketplace["plugins"])
+
+
+def test_the_package_the_plugin_and_the_server_say_one_version():
+    # Users get a new plugin only when its version rises; a release raises all three together.
+    import tomllib
+
+    from aleph_zero import server
+    package = tomllib.loads((PLUGIN.parent / "pyproject.toml").read_text())["project"]["version"]
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
+    assert package == plugin == server.SERVER_INFO["version"]
