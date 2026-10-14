@@ -54,7 +54,7 @@ QUESTION = (
     "answer with one line of JSON and nothing after it, in exactly this form: "
     '{"files": ["path/relative/to/the/repository/root.py"]} listing at most five files, most likely first.'
 )
-ARMS = ("none", "L0", "L1n", "L1", "L2", "L3")
+ARMS = ("none", "L0", "L1n", "L1", "L2", "L2s", "L3")
 JOB = "A/B run"
 
 
@@ -143,6 +143,8 @@ def command(arm: str, model: str, budget: float, prompt: str) -> list[str]:
         options = {"rung": arm[1]}
         if arm.endswith("n"):
             options["grep_pointer"] = "off"  # rung 1 as the pilot ran it: without the pointer in Grep and Glob
+        if arm.endswith("s"):
+            options["lines"] = "signatures"  # rung 2 with the signature of each file's first result under its line
         allowed.append(ENGINE_TOOLS)
         args += ["--plugin-dir", str(PLUGIN),
                  "--settings", json.dumps({"pluginConfigs": {"aleph-zero@inline": {"options": options}}})]

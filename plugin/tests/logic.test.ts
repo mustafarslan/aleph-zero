@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  confident, foundNothing, hitsOf, isSearchCommand, locations, resultText, searchPattern, worthAsking,
+  confident, foundNothing, hitsOf, isSearchCommand, locations, promptContext, resultText, searchPattern, worthAsking,
 } from '../hooks/logic.js'
 
 const hit = (path: string, sources: string[], symbol = 'f') =>
@@ -94,4 +94,17 @@ test('search commands are counted as grep by the meter', async () => {
   expect(isSearchCommand('find . -name "*.py"')).toBe(true)
   expect(isSearchCommand('git status')).toBe(false)
   expect(isSearchCommand('pytest -q')).toBe(false)
+})
+
+test('with signatures, each location line is followed by the signature of the file\'s first result', async () => {
+  // The literature's strongest lever on what an agent does next is the matching line shown with a location
+  // (arXiv 2608.13568): an option of rung 2 so that a paid run can compare the two (ADR-011).
+  const at = (path: string, start: number, signature: string) =>
+    ({ path, start_line: start, end_line: start + 6, kind: 'function', symbol: 'f', signature, sources: ['x', 'y'], score: 0.03 })
+  const hits = [at('a.py', 3, 'def rotate(self, token):'), at('a.py', 40, 'def other(self):'), at('b.py', 3, '')]
+  const plain = promptContext(hits)
+  const signed = promptContext(hits, true)
+  expect(plain).not.toContain('def rotate')
+  expect(signed).toContain('a.py:3-9, 40-46  function  f\n    def rotate(self, token):')
+  expect(signed.split('\n').filter((line) => line.startsWith('    ')).length).toBe(1)        // b.py has none to show
 })

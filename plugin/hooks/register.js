@@ -198,6 +198,8 @@ export function register(on, options) {
   // The pointer in the descriptions of Grep and Glob is part of rung 1 but has its own switch,
   // so a measurement can tell it from the rest of the rung.
   const pointer = !(options && options.grep_pointer === 'off')
+  // Rung 2's lines: places only, or with the signature of each file's first result (an option, for a paid comparison).
+  const signatures = Boolean(options && options.lines === 'signatures')
 
   on('session.start', async ($, e, next) => {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
@@ -435,7 +437,7 @@ export function register(on, options) {
     const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' }))
     if (!confident(hits)) return next(e)
     meter.added.prompt += 1
-    return next({ ...e, context: [...(e.context ?? []), promptContext(hits)] })
+    return next({ ...e, context: [...(e.context ?? []), promptContext(hits, signatures)] })
   }).catch(async ($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {

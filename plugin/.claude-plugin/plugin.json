@@ -34,6 +34,16 @@
         "off"
       ],
       "default": "on"
+    },
+    "lines": {
+      "type": "string",
+      "title": "Rung 2's lines",
+      "description": "What the ranked locations of rung 2 show for each file: its places, kind and name; or the same with the signature of its first result on the next line. Its own switch so that the two can be measured apart.",
+      "options": [
+        "places",
+        "signatures"
+      ],
+      "default": "places"
     }
   }
 }

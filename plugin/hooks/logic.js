@@ -69,13 +69,14 @@ export function hitsOf(answer) {
 // line (three at most), with the kind and name of its best.
 const PLACES_A_FILE = 3
 
-export function locations(hits, limit) {
+export function locations(hits, limit, signatures = false) {
   const files = new Map()
   for (const hit of hits) {
     let file = files.get(hit.path)
     if (!file) {
       if (files.size >= limit) continue  // a later file: the lines are full, but a listed file may still gain a place
-      file = { places: [], what: '  ' + hit.kind + (hit.symbol ? '  ' + hit.symbol : '') }
+      file = { places: [], what: '  ' + hit.kind + (hit.symbol ? '  ' + hit.symbol : ''),
+               signature: signatures && hit.signature ? '\n    ' + String(hit.signature).split('\n')[0].slice(0, 200) : '' }
       files.set(hit.path, file)
     }
     // With one result a file the engine sends the file's further places on its result (start, end, name).
@@ -85,7 +86,7 @@ export function locations(hits, limit) {
       if (!file.places.includes(place) && file.places.length < PLACES_A_FILE) file.places.push(place)
     }
   }
-  return [...files].map(([path, file]) => path + ':' + file.places.join(', ') + file.what).join('\n')
+  return [...files].map(([path, file]) => path + ':' + file.places.join(', ') + file.what + file.signature).join('\n')
 }
 
 // ---- L2: the first prompt of a session ------------------------------------------------------
@@ -105,10 +106,10 @@ export function confident(hits) {
   return Array.isArray(sources) && sources.length >= 2
 }
 
-export function promptContext(hits) {
+export function promptContext(hits, signatures = false) {
   return 'Aleph Zero (this repository\'s code search) ranks these locations highest for the request above. '
     + 'They are a starting point, not an answer; ignore them if the request is not about locating code.\n'
-    + locations(hits, 5)
+    + locations(hits, 5, signatures)
 }
 
 // ---- L3: a search command that found nothing --------------------------------------------------
