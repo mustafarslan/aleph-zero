@@ -80,6 +80,35 @@ real result is returned, with the rung 3 addition above.
 - To Claude Code's plugin store, on this machine: the session meter and the side chat's model
   and effort setting.
 
+### For the directory's review
+
+Each finding of the directory's validation, answered:
+
+- **MOD_CALLS_TOOLS, MOD_CAN_FETCH_AND_RUN** (`mcp.call`, line 43): the mod's only outbound call is
+  `$.mcp.call` to this plugin's own server, `aleph`, which runs on the user's machine. It calls
+  `search`, `symbol` and `remember` there, at the times listed above, with arguments it builds
+  itself; nothing it receives is run as a command. It runs no shell command. Its only network
+  traffic is the side chat's request to Claude, made through Claude Code's own `model.complete`.
+- **MOD_SESSION_DATA_LEAVES** (`prompt.submit`): at rung 2 the first 2,000 characters of the
+  session's first question go to the local engine's `search`, and nowhere else.
+- **MOD_LOCAL_DATA_LEAVES** (`session.model`): the session's model name is read only when the side
+  chat is set to "same as the session", to ask Claude Code for that model in `model.complete`. It
+  is not sent to the engine.
+- **MOD_REWRITES_TOOL_INPUT** (`tool.call`, line 391): this hook only counts calls for
+  `/aleph stats`; it reads the tool's name and, for Bash, the command, and passes the event on
+  unchanged (`return next(e)`).
+- **MOD_ANSWERS_FOR_TOOL** (`tool.call`, line 461): the Bash command always runs first; the hook
+  returns the command's own result, with ranked locations appended to its output only at rung 3
+  and only when a recursive search found nothing.
+- **MOD_HOOKS_OPERATION** (`command.run`): the hooks answer only the plugin's own `/aleph` command.
+- **MOD_HOOKS_POLICY_EVENT** (`tool.describe`): the changes are the ones in the table above: tuned
+  descriptions of the engine's four search tools, and one sentence added to Grep's and Glob's.
+- **COMMAND_SCRIPT_NOT_FOLLOWED** (`scripts/serve.sh`): it starts the separately installed engine.
+  It looks, in order, for `aleph-zero` in a checkout's `.venv` (when the plugin is loaded from a
+  clone of this repository), on `PATH`, and in uv's tool directory (`$UV_TOOL_BIN_DIR`,
+  `$XDG_BIN_HOME` or `~/.local/bin`), and runs `aleph-zero serve`. It never runs a program called
+  `aleph`, because TeX Live installs one. It installs nothing and downloads nothing.
+
 ## License
 
 MIT
