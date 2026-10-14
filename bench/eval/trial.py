@@ -112,8 +112,9 @@ def score_all(workdir: Path, rows: list[dict], say, words_only: bool = False) ->
                     left["left_out"] += 1
                     continue
             forms = bench.question_forms(index, row["problem_statement"])
+            languages = index.languages()                      # as a verdict is applied: the repository's main language here
             vectors = None if words_only else dict(zip(FORMS, client.embed([forms[form] for form in FORMS], kind="query")))
-            entry: dict = {"repo": row["repo"], "arms": {}}
+            entry: dict = {"repo": row["repo"], "arms": {}, "read_language": next(iter(languages), None)}
             for arm, switches in ARMS.items():
                 with switched(switches):
                     entry["arms"][arm] = {}
@@ -236,9 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     scored, left = score_all(args.workdir, rows, say, args.words_only)
     for name, entry in scored.items():
-        # Never-asked questions of a set of one language (Loc-Bench: Python; `--language`) are that language's: their
-        # repositories were not embedded, so nothing but the set says what they are.
-        entry["main_language"] = kept.get(name, {}).get("main_language") or ("python" if args.set == "locbench" else args.language if not args.only else None)
+        entry["main_language"] = kept.get(name, {}).get("main_language") or entry.get("read_language")
         if not entry["main_language"]:
             raise SystemExit(f"no main language recorded for {name}: run population.py on {args.only} first")
     args.out.write_text(json.dumps({"left": left, "scores": scored}, indent=1) + "\n")

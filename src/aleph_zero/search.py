@@ -24,6 +24,10 @@ SYMBOL_CANDIDATES = 10
 # name is handled apart (see `search`). Weighing names 1.5 or 2 times was tried on 235 questions
 # (ADR-002, 2026-10-13): the order inside the ten results moves, the files among them do not.
 GENERATOR_WEIGHT: dict[str, float] = {}
+# Two trials of 2026-10-14 (docs/DEFERRED.md, entry 1d), off. Read twice and not adopted on first lines (ADR-002);
+# back for a third reading on whole issue text, by a rule written before it, on questions never asked:
+DOTTED_FALLBACK = False     # `self.rotate`, `pkg.Func`: looked up without what stands before the dot when the whole finds nothing
+PATH_VOTE = "first"         # "found": a file's path votes for the best chunk found in it, not for its first lines
 SYMBOL_TIE_LIMIT = 25
 # What makes a word of a longer query look like an identifier: an underscore, a digit, a
 # capital after the first letter, or a qualifier.
@@ -105,6 +109,14 @@ def symbol_ranking(index: Index, query: str, scoped: bool) -> tuple[list[int], b
         if not alone and not _SHAPED.search(name):
             continue  # in a sentence, a plain word is a word; `refresh_token` and `TokenStore` are names
         found = symbols.rows(index, name, scoped)
+        if not found and DOTTED_FALLBACK and not alone:
+            # What stands before the dot is often a variable or a module (`self.rotate`, `store.rotate`,
+            # `auth.TokenStore.rotate`), which a definition's own qualified name does not hold.
+            parts = [part for part in symbols.SEPARATOR.split(name) if part]
+            for shorter in range(len(parts) - 1, 0, -1):
+                found = symbols.rows(index, ".".join(parts[-shorter:]), scoped)
+                if found:
+                    break
         if not alone and len(found) > SYMBOL_TIE_LIMIT:
             continue
         for row in found[:SYMBOL_CANDIDATES]:
@@ -202,7 +214,15 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         columns + "JOIN temp.view_blobs v ON v.blob_oid = bc.blob_oid AND v.family = bc.family "
         f"WHERE bc.chunk_id IN ({','.join('?' * len(by_chunk))})", list(by_chunk))) if by_chunk else []
     seen = {(row[1], row[2], row[3]) for row in rows}
+    voted: dict[tuple, int] = {}        # with PATH_VOTE "found": the file -> the chunk found in it that its path votes for
+    if PATH_VOTE == "found":
+        for row in rows:
+            key = (row[1], row[2])
+            if key in by_file and (key not in voted or by_chunk[row[0]][0] > by_chunk[voted[key]][0]):
+                voted[key] = row[0]
     for oid, family in by_file:
+        if (oid, family) in voted:
+            continue                    # the file is among the results already: no need of its first lines
         rows += [row for row in index.conn.execute(
             columns + "WHERE bc.blob_oid = ? AND bc.family = ? AND bc.ord = 0", (oid, family))
             if (row[1], row[2], row[3]) not in seen]
@@ -214,7 +234,7 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         if kind == "code" and chunk_kind == "doc":
             continue
         score, sources = by_chunk.get(chunk_id, (0.0, ()))
-        if ordinal == 0 and (oid, family) in by_file:
+        if (oid, family) in by_file and (voted.get((oid, family)) == chunk_id if (oid, family) in voted else ordinal == 0):
             score, sources = score + by_file[(oid, family)], (*sources, "path")
         for path in index.paths_for(oid, family):
             if accept is None or accept(path):
