@@ -11,7 +11,7 @@ The plugin starts the engine, which is installed separately:
 
 ```sh
 uv tool install git+https://github.com/mustafarslan/aleph-zero.git
-uv tool update-shell
+uv tool update-shell        # then open a new terminal
 ```
 
 Then, optionally: `aleph-zero setup --worker` once (the embedding server and model), and in each project `aleph-zero setup --embed` for search by meaning and
@@ -39,8 +39,9 @@ Rungs 2 and 3 and the side chat need the engine's tools allowed: add
   local llama.cpp embedding server when search by meaning is on.
 - **Sends** nothing anywhere. Code, index, vectors and memories stay on your machine. The side
   chat uses Claude Code's own model connection.
-- **Stores** the side chat's answers in the repository's memory (`.git/aleph-zero/`), and its
-  meter and settings in Claude Code's plugin store.
+- **Stores** the side chat's answers and the notes you keep from it in the repository's
+  memory (`<git-common-dir>/aleph-zero/`, or `~/.cache/aleph-zero/` where that cannot be
+  written), and its meter and settings in Claude Code's plugin store.
 - **Fetches** only when you ask the engine to: language grammars, the embedding model and
   llama.cpp source (`aleph-zero setup --worker`), and repositories you link by URL.
 

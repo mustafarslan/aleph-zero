@@ -117,3 +117,15 @@ def test_only_the_pinned_commit_of_llama_cpp_is_fetched_not_its_history(home, mo
     fetches = [command for command in ran if "fetch" in command]
     assert fetches and "--depth" in fetches[0] and fetches[0][-1] == embed_setup.LLAMA_COMMIT
     assert not any(command[:2] == ["git", "clone"] for command in ran)
+
+
+def test_a_fetch_that_was_interrupted_is_made_again_on_the_next_try(home, monkeypatch):
+    # `git init` leaves the directory behind when the fetch after it fails; the next setup must not take it for a checkout.
+    ran = []
+    monkeypatch.setattr(embed_setup, "_run", lambda command: ran.append([str(part) for part in command]))
+    monkeypatch.setattr(embed_setup.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(embed_setup, "_has_commit", lambda checkout: False)
+    (home / "src" / "llama.cpp").mkdir(parents=True)              # what a failed first try left
+    with pytest.raises(embed_setup.SetupError):
+        embed_setup.install_binary()
+    assert any("fetch" in command and command[-1] == embed_setup.LLAMA_COMMIT for command in ran)

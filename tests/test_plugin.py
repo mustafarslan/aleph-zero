@@ -110,3 +110,9 @@ def test_the_package_the_plugin_and_the_server_say_one_version():
     package = tomllib.loads((PLUGIN.parent / "pyproject.toml").read_text())["project"]["version"]
     plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"]
     assert package == plugin == server.SERVER_INFO["version"]
+
+
+def test_the_plugin_folder_carries_the_license_the_repository_has():
+    # The directory installs the plugin folder alone; it must hold its license itself.
+    assert (PLUGIN / "LICENSE").read_text() == (PLUGIN.parent / "LICENSE").read_text()
+    assert len((PLUGIN / "README.md").read_text().split()) >= 40

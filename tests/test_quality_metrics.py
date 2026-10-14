@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# The benchmark's own packages (`uv sync --group bench`); without them this file is skipped.
+pytest.importorskip("pyarrow", reason="needs the bench group: uv sync --group bench")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "spikes"))
 
 import quality  # noqa: E402

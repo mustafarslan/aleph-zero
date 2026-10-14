@@ -1,8 +1,12 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 import numpy as np
 
+# The benchmark's own packages (`uv sync --group bench`); without them this file is skipped.
+pytest.importorskip("huggingface_hub", reason="needs the bench group: uv sync --group bench")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "spikes"))
 
 import cap_quality  # noqa: E402

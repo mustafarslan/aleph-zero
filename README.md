@@ -67,17 +67,28 @@ whose answers cite `path:line`.
 
 ### Once per machine
 
-```sh
-brew install uv cmake ninja
-xcode-select --install                     # the C++ compiler, if not installed yet
+1. The tools it is built with. `xcode-select --install` opens a dialog; let it finish first.
 
-uv tool install git+https://github.com/mustafarslan/aleph-zero.git
-uv tool update-shell                       # puts uv's tool directory on PATH; open a new terminal after
-aleph setup --worker                       # optional: builds the embedding server, downloads the model
+   ```sh
+   brew install uv cmake ninja
+   xcode-select --install
+   ```
 
-claude plugin marketplace add mustafarslan/aleph-zero
-claude plugin install aleph-zero@aleph-zero
-```
+2. The engine. `uv tool update-shell` puts uv's tool directory on PATH for new terminals.
+
+   ```sh
+   uv tool install git+https://github.com/mustafarslan/aleph-zero.git
+   uv tool update-shell
+   ```
+
+3. In a new terminal: the embedding server and model (optional, for search by meaning), then
+   the plugin.
+
+   ```sh
+   aleph setup --worker
+   claude plugin marketplace add mustafarslan/aleph-zero
+   claude plugin install aleph-zero@aleph-zero
+   ```
 
 The engine is installed as `aleph` and, under the same code, as `aleph-zero`. TeX Live also
 installs a program called `aleph`: if `which aleph` points into a TeX directory, use
@@ -137,7 +148,7 @@ Set at install (`--config KEY=VALUE`), later with
 
 | Option | Values | What it does |
 |---|---|---|
-| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
+| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: the four search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
 | `graph` | `off`/`on` (default `off`) | Also offer the agent the code-graph, architecture-facts and decision-record tools. Whether they help an agent has not been measured yet. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |

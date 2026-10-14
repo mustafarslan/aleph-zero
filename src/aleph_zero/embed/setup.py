@@ -88,6 +88,15 @@ def build_steps(source: Path, build: Path, metal: bool) -> list[list[str]]:
     ]
 
 
+def _has_commit(checkout: Path) -> bool:
+    """Whether a checkout holds the pinned commit (a fetch that was interrupted leaves the directory without it)."""
+    if not (checkout / ".git").exists():
+        return False
+    found = subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", f"{LLAMA_COMMIT}^{{commit}}"],
+                           capture_output=True)
+    return found.returncode == 0
+
+
 def install_binary(source: Path | None = None, report=lambda text: None) -> Path:
     """Build llama-server and put it in the worker's home. `source` is an existing
     llama.cpp checkout to build from (no network); without it the repository is cloned."""
@@ -96,16 +105,17 @@ def install_binary(source: Path | None = None, report=lambda text: None) -> Path
         if shutil.which(tool) is None:
             raise SetupError(f"{tool} is needed to build the worker and was not found")
     checkout = home / "src" / "llama.cpp"
-    if not checkout.exists():
+    if source is not None and not checkout.exists():
         checkout.parent.mkdir(parents=True, exist_ok=True)
-        if source is not None:
-            report(f"copying {source}")
-            _run(["git", "clone", "--quiet", "--no-hardlinks", str(source), str(checkout)])
-        else:
-            # The one commit that is built, not the project's history (hundreds of megabytes).
-            report(f"fetching {LLAMA_REPOSITORY} at {LLAMA_COMMIT[:12]}")
-            _run(["git", "init", "--quiet", str(checkout)])
-            _run(["git", "-C", str(checkout), "fetch", "--quiet", "--depth", "1", LLAMA_REPOSITORY, LLAMA_COMMIT])
+        report(f"copying {source}")
+        _run(["git", "clone", "--quiet", "--no-hardlinks", str(source), str(checkout)])
+    elif source is None and not _has_commit(checkout):
+        # The one commit that is built, not the project's history (hundreds of megabytes). Asked again when an
+        # earlier try was interrupted after `git init`: the directory is there, the commit is not.
+        checkout.parent.mkdir(parents=True, exist_ok=True)
+        report(f"fetching {LLAMA_REPOSITORY} at {LLAMA_COMMIT[:12]}")
+        _run(["git", "init", "--quiet", str(checkout)])
+        _run(["git", "-C", str(checkout), "fetch", "--quiet", "--depth", "1", LLAMA_REPOSITORY, LLAMA_COMMIT])
     build = home / "build"
     for step in build_steps(checkout, build, metal=sys.platform == "darwin"):
         report(" ".join(step[:4]) + " …")
