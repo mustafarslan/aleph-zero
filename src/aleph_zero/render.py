@@ -184,6 +184,8 @@ def _head(entry: _Entry) -> str:
     lines = [line]
     if hit.signature and hit.signature != label:
         lines.append(f"  {hit.signature}")
+    if hit.places:
+        lines.append("  also at: " + ", ".join(f"{start}-{end}" + (f" {name}" if name else "") for start, end, name in hit.places))
     if entry.also or hit.duplicates:
         places = ", ".join(f"{other.path}:{other.start_line}" for other in entry.also)
         more = f" (+{hit.duplicates} more files)" if hit.duplicates else ""

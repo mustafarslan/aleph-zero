@@ -273,3 +273,28 @@ def test_a_file_s_path_vote_goes_to_what_was_found_in_it(repo, monkeypatch):
     monkeypatch.setattr(ranker, "PATH_VOTE", "found")
     alone = search(index, view, "receipt printer", k=10)
     assert alone and alone[0].path == "src/billing/receipt_printer.py" and alone[0].start_line == 1
+
+
+def test_one_result_a_file_keeps_the_file_s_other_places_on_its_line(repo, monkeypatch):
+    # Ten results named about six files: a file's second and third places took the places of other files. With one
+    # result a file the ten name ten files, and what the file's other results were is kept beside its first.
+    import aleph_zero.search as ranker
+    from aleph_zero import render
+
+    repo.write("src/billing/ledger.py", "".join(f"def invoice_total_{n}(order):\n    return order.invoice_total + {n}\n\n\n" for n in range(4)))
+    for n in range(4):
+        repo.write(f"src/billing/other{n}.py", f"def invoice_total_elsewhere_{n}(order):\n    return order.invoice_total * {n}\n")
+    index, view = _synced(repo)
+    monkeypatch.setattr(ranker, "ONE_A_FILE", False)
+    before = search(index, view, "invoice total", k=4)
+    assert [hit.path for hit in before].count("src/billing/ledger.py") >= 2
+    monkeypatch.setattr(ranker, "ONE_A_FILE", True)
+    after = search(index, view, "invoice total", k=4)
+    assert len({hit.path for hit in after}) == len(after) == 4
+    ledger = next(hit for hit in after if hit.path == "src/billing/ledger.py")
+    assert 1 <= len(ledger.places) <= ranker.MORE_PLACES
+    monkeypatch.setattr(ranker, "ONE_A_FILE", False)
+    every = [(hit.start_line, hit.end_line) for hit in search(index, view, "invoice total", k=40) if hit.path == ledger.path]
+    assert [(start, end) for start, end, _ in ledger.places] == every[1:1 + ranker.MORE_PLACES]     # its next places, in order
+    shown = render.text(render.Answer("invoice total", after, 0, False, 1))
+    assert "also at:" in shown and str(ledger.places[0][0]) in shown

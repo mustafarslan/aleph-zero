@@ -24,6 +24,9 @@ SYMBOL_CANDIDATES = 10
 # name is handled apart (see `search`). Weighing names 1.5 or 2 times was tried on 235 questions
 # (ADR-002, 2026-10-13): the order inside the ten results moves, the files among them do not.
 GENERATOR_WEIGHT: dict[str, float] = {}
+# One result a file, the file's other places on its line (docs/DEFERRED.md, entry 1d, round 2): off until read twice.
+ONE_A_FILE = False
+MORE_PLACES = 3
 # Two trials of 2026-10-14 (docs/DEFERRED.md, entry 1d), off. Read twice and not adopted on first lines (ADR-002);
 # back for a third reading on whole issue text, by a rule written before it, on questions never asked:
 DOTTED_FALLBACK = False     # `self.rotate`, `pkg.Func`: looked up without what stands before the dot when the whole finds nothing
@@ -53,6 +56,8 @@ class Hit:
     scope_end_line: int = 0
     # How many more files hold exactly this chunk and are not listed.
     duplicates: int = 0
+    # With one result a file: the file's other places among the results, best first, as (start, end, label).
+    places: tuple[tuple[int, int, str], ...] = ()
 
 
 def rrf(rankings: dict[str, list[int]]) -> list[tuple[int, float, tuple[str, ...]]]:
@@ -146,6 +151,21 @@ def _path_filter(path_glob: str | None, families: frozenset[str] | None) -> Call
     if matches is None:
         return lambda path: filters.family(path) in families
     return lambda path: bool(matches(path)) and filters.family(path) in families
+
+
+def one_a_file(hits: list[Hit]) -> list[Hit]:
+    """Each file's best result, in order, with the file's further results as its places (at most MORE_PLACES)."""
+    first: dict[str, int] = {}
+    out: list[Hit] = []
+    places: dict[str, list[tuple[int, int, str]]] = {}
+    for hit in hits:
+        if hit.path not in first:
+            first[hit.path] = len(out)
+            out.append(hit)
+            places[hit.path] = []
+        elif len(places[hit.path]) < MORE_PLACES:
+            places[hit.path].append((hit.start_line, hit.end_line, hit.breadcrumb or hit.symbol))
+    return [replace(hit, places=tuple(places[hit.path])) if places[hit.path] else hit for hit in out]
 
 
 def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
@@ -253,4 +273,5 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
             shown[0] = replace(shown[0], duplicates=len(files) - len(listed))
         hits += shown
     hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
-    return arrange(merge_pieces(hits), k, kind)
+    merged = merge_pieces(hits)
+    return arrange(one_a_file(merged) if ONE_A_FILE else merged, k, kind)
