@@ -75,3 +75,10 @@ Five tests the reviewer found would pass with the behaviour broken were made to 
 Left as it is: whether Claude Code is connected is not detected (it would mean reading its configuration or starting every server it knows); the person says so.
 
 Two things added after the review, before the owner tries it (the advisor's): the command printed for Claude Code names the place this engine is in, since from a checkout `aleph` is on the path only under `uv run` and Claude Code would not find it by name; and the owner's own example is a test from end to end: a documentation repository linked in the menu, a yes to search by meaning, every chunk of the view with a vector, the linked ones among them, and a question in plain words answered with vectors and the documentation among the hits.
+
+## Git's untracked cache is suggested from 3,000 files (the owner's yes, 2026-10-14)
+
+Step 5 was never suggested. It is now pre-ticked where the worktree has 3,000 files or more of its own (`firstrun.UNTRACKED_CACHE_FROM`) and the cache is not on; it is still a step a person answers, still the form that changes no configuration. Measured: a question's look at the worktree 36 → 13 ms on vscode (5,000 files), 288 → 60 on babel (27,000); 7.2 → 7.3 on this repository (235), which is why there is a floor.
+
+- *agy (boost), asked before it was built:* (1) the count was of every file in the view, linked sources included, so a 50-file repository with a 5,000-file source linked would have been pre-ticked: **fixed**, the sources' files are taken off (a test). (2) A no is kept for the repository, while the cache is per worktree's index: kept as it is, because a no in one worktree is the person's answer for the repository, and the step stays in the list to be ticked by hand. (3) `aleph setup` looks at the worktree again before every step: setup only, once, not a question's cost; not changed. (4) A locked index: already said and left open, as the review above made it.
+- The commands for the owner's other repositories are given, not run: the engine changes no repository it was not asked to.
