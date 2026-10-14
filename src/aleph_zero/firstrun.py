@@ -32,6 +32,7 @@ class Found:
     untracked_cache: bool      # git keeps its untracked cache for this repository
     repository: bool           # a git repository: sources are linked to one, and git's cache is its own
     aleph: str = "aleph"       # how this engine is started: where it is, when that is known
+    files: int = 0             # files of the worktree
 
 
 @dataclass(frozen=True)
@@ -99,7 +100,8 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
             "untracked_cache", "repository", "Git's untracked cache for this worktree (a faster look at it on every query)",
             _state(found.untracked_cache, repo, "untracked_cache"),
             "on" if found.untracked_cache else "off",
-            "", "git update-index --untracked-cache", False))
+            "", "git update-index --untracked-cache",
+            not found.untracked_cache and found.files >= UNTRACKED_CACHE_FROM))
     return steps
 
 
@@ -132,6 +134,12 @@ def engine_path() -> str:
     return shutil.which("aleph") or "aleph"
 
 
+# From how many files git's untracked cache is suggested (the owner's yes, 2026-10-14): it took a question's look at
+# the worktree from 36 to 13 ms on vscode (5,000 files) and from 288 to 60 on babel (27,000); on this repository (235)
+# it changed nothing.
+UNTRACKED_CACHE_FROM = 3000
+
+
 def look(status: dict) -> Found:
     """What is found, from the engine's status of the worktree (after it was indexed) and the machine."""
     from .embed import setup as embed_setup
@@ -143,7 +151,7 @@ def look(status: dict) -> Found:
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
                  repository=bool(status.get("repository", True)),
-                 aleph=engine_path())
+                 aleph=engine_path(), files=int(status.get("files_in_view") or 0))
 
 
 def of(status: dict) -> list[Step]:

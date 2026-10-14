@@ -150,3 +150,15 @@ def test_no_hint_once_anything_was_answered_however_it_was_answered(repo):
     settings.answer(kept, "sources", None)                 # answered by a flag: the file holds an empty list of answers
     assert settings.read(kept) == {"setup": {}}
     assert firstrun.hint(repo.root) is None
+
+
+def test_git_s_untracked_cache_is_suggested_where_the_worktree_is_large_enough_for_it_to_pay():
+    # The owner said yes (2026-10-14). Measured: vscode (5,000 files) 36 -> 13 ms a question, babel (27,000) 288 -> 60;
+    # this repository (235 files) 7.2 -> 7.3. Still a step a person answers, in the form that changes no configuration.
+    small = replace(CPP, files=235)
+    large = replace(CPP, files=firstrun.UNTRACKED_CACHE_FROM)
+    assert not _by_key(firstrun.plan(small, repo={}, machine={}))["untracked_cache"].suggested
+    step = _by_key(firstrun.plan(large, repo={}, machine={}))["untracked_cache"]
+    assert step.suggested and step.command == "git update-index --untracked-cache"
+    assert not _by_key(firstrun.plan(replace(large, untracked_cache=True), repo={}, machine={}))["untracked_cache"].suggested
+    assert firstrun.look({"files_in_view": 12_345, "untracked_cache": False}).files == 12_345
