@@ -153,6 +153,36 @@ Your words: "analyze capabilities of aleph zero and do research webseaech litera
   - *Cost:* about 2.4 hours of GPU for each title to make the vectors and about an hour to score three widths, so about seven hours for the two, through the night; heat guarded as for a machine nobody sits at; any part can be paused: `uv run --group bench python bench/eval/benchmark_c.py pause|resume|status|stop bench/data/benchc-<language>`; the chain is `bench/data/widths-chain.sh`, its log `bench/data/widths-chain.log`.
 - **The width is read (04:30): 256 stays.** On the languages that ship with vectors (549 questions, 22 repositories): 512 against 256 +0.70 points (−0.95 to +2.29), 768 against 256 +0.33 (−1.50 to +2.06) and lower on whole issue text (−1.74, −3.46 to −0.09). The rule asked +2 with an interval clear of zero. No language moves either way with an interval clear of zero (Python 0.0, TypeScript +2.5, JavaScript +1.4, Go +2.0, Java −1.0, C++ −3.0 for 512). ADR-001 has the table. **The title is read (07:20): `title: none` stays.** The breadcrumb as title, at 256, on the languages that ship with vectors: +1.40 on first lines (−0.41 to +3.19), and lower on whole text (−1.85, −3.28 to −0.47). ADR-001 has the table.
 - **The search for improvements ends here, by its own rule:** every candidate named (by the literature, the advisor, agy and me) has been read, and the last round passed nothing (the two generator changes, the fusion's constant, the width, the title). What it gave is what was found and fixed on the way, above. What is left is yours to decide: the whole-text gain of the two generator changes (ADR-002), the plugin's output shape (paid sessions), the memory share on repositories of very many files (ADR-010), git's untracked cache where git is slow, and C and Rust. The experiment's vectors (all 768 numbers, two titles) are kept beside the benchmark's indexes in `bench/data/benchc*` (`vectors.*_768.f16`); they serve nothing else and can be deleted.
+- **Round 2 (2026-10-14, 07:45): the capabilities the first round did not reach.** The stop above was premature: the goal is every capability, and four were never searched or measured. The table, one row per capability of the inventory; "done" means every row filled.
+
+  | # | Capability | Literature | Measured | Candidate | Outcome |
+  |---|---|---|---|---|---|
+  | 1 | Words (FTS5, BM25) | searched | 14–42 ms a question | merge segments; fusion constant | not adopted (flat) |
+  | 2 | Names and paths | agy's reading | path words 123 → 47 ms | dotted names; path vote | path words adopted; the two trials not adopted on first lines; whole text: row 13 |
+  | 3a | Vectors: model, width, title | searched | 973 questions per variant | 512, 768; breadcrumb title | not adopted |
+  | 3b | Vectors: worker, first question | measured | 546 → 308 ms with vectors | wake and warm at start; wait for a waking worker | adopted |
+  | 3c | Vectors: embedding throughput | — | 72–116 a second, GPU 85–88% busy | — | open |
+  | 4 | Fusion and ranking | searched | union headroom 5–8 points | slot rules; constant | not adopted |
+  | 5 | Chunking | searched (cAST) | split sweep (ADR-001) | — | closed before tonight |
+  | 6 | The view (git) | searched | 7–9 ms | side by side; harness settle | adopted; untracked cache is yours |
+  | 7 | Indexing and the store | — | cold: Django 10.3 s, airflow 30.7 s | — | open |
+  | 8 | Code graph, compiler indexes | — | recall 50–95% (ADR-003) | — | open |
+  | 9 | Linked sources, update, setup | — | never | — | open |
+  | 10 | Server and plugin | searched | first question; memory thrash | warm, wake, relief rule | adopted; output shape is yours (paid) |
+  | 11 | Decisions and memory | — | P@1 0.58 on 100 pairs | — | open |
+  | 12 | Process costs | measured | imports 50 ms | lazy imports | ruled out |
+  | 13 | Whole-text ranking (from row 2) | — | +2.1 and +2.8 in two readings | the two trials for whole text | open |
+  | 14 | Memory on very large repositories | — | 190–250 MB on material-ui | — | open |
+
+- **Round 2's rules, written before any of its measurements:**
+  - *Indexing (7):* profile a cold `aleph index` on django and airflow by phase. If parsing and chunking are half or more and run on one core, the candidate is to do them in parallel with the writes kept in one place; adopted if the cold index takes half the time or less, the same chunks (hashes) and the same rows result, and private memory stays inside ADR-005. Otherwise the phase table is written and the row closes.
+  - *Whole text (13):* the two trials' code comes back behind its switches, off. Fresh questions only: JavaScript's and TypeScript's never-asked ones (a third draw by the same seed, at most 40 a repository: material-ui, svelte, serverless, prettier, vscode, vue), each language in its shipped arm (vectors); Go's 339 never-asked (one repository) beside, deciding nothing. **Adopted for every question if files among ten on whole issue text gain with an interval clear of zero, no language is lower, and first lines are not lower with an interval clear of zero.** Python's never-asked questions were used by the second reading and are not used again; Java's and C++'s left are too few (4 and 12). Cost: about an hour and a half of GPU for the new commits' vectors.
+  - *Memory (14):* what a session holds on material-ui, piece by piece, in a clean process; a candidate is adopted if it halves its piece with the same answers.
+  - *Linked sources (9):* a question's time with and without a linked source of a few thousand files; a candidate only if the source's part is a fifth of the question or more.
+  - *Graph (8):* the missed calls on FastAPI and Flask (73.1 and 76.9 recall) sorted by why they are missed; a candidate only if one kind of miss is a third of them and can be resolved without type inference. The tools are off by default and never compared in sessions, so the outcome may be a list and no change.
+  - *Decisions and memory (11):* 100 pairs cannot show a change under about 10 points of P@1; the row is read by the literature and closes unless something larger is found.
+  - *Embedding throughput (3c):* whether the worker ever waits for Python while embedding (its busy share); if it does not, the row closes.
+  - *The end:* every row filled; the same end-to-end measurement as before; then each row's outcome is stated by its rule.
 - **Baseline, settled worktrees, worker awake, vectors on (median of five warm first-line questions):** vscode 88 ms (git status 36, the repository's facts 10, the query's vector 17, words 15, vector scan 4); material-ui 183 (98, 11, 21, 30, 3); trino 108 (46, 11, 19, 16, 4); django 131 (69, 11, 19, 18, 5); pandas 64 (14, 11, 19, 14, 2); fmt 34 (8, 9, 9, 2, 1). On whole issue text the query's vector takes 14 to 45 ms and words 4 to 42. A process's first question: 76 to 560 ms. The record of what was searched for, found and measured is `bench/data/improvement-ledger.md`.
 
 ## 1c. Tuning runs that need the GPU for hours
