@@ -98,7 +98,7 @@ Not planned: a lock inside the kernel. The `flock` in Aleph covers it.
 
 ## Aleph's side as built (M6a, 2026-10-12)
 
-Built and tested before any change in Aeon, on the owner's standing instruction to keep working; the design draft (`docs/superpowers/specs/2026-10-12-m6-memory-layer-design.md`) is not yet approved, and its open decisions were taken with their proposed answers.
+Built and tested before any change in Aeon, on the owner's standing instruction to keep working; the design draft (kept outside this repository) is not yet approved, and its open decisions were taken with their proposed answers.
 
 - **The catalogue** is a small database of its own, `memory/memories.db` in the repository's state directory, with a table of memories and a table of what they cite. **Not the index.** The first version put the tables in the index; the review pointed out that the index is a cache which is set aside and rebuilt when damaged or when its shape changes, and that would have taken every memory with it. The catalogue is the authority: a memory it marks deleted is never recalled, whatever the vector store still holds. It keeps the text too (the proposal above had the text in Aeon only): recall then works by words and recency without Aeon, and forgetting removes the text from the place Aleph reads.
 - **Recall** fuses candidates by meaning from the store (asked for twenty times what is wanted, each id counted once) with matches by words among the newest 2,000 memories, newest first among equals. What the store proposes is looked up by itself, so a memory older than those 2,000 is still recalled by meaning. Ids the catalogue does not know are ignored. With a view, each memory says whether the content it cites is still at that path.

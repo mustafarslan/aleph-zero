@@ -324,7 +324,6 @@ uses it.
 
 ## Documentation
 
-- Design: [`docs/superpowers/specs/`](docs/superpowers/specs/)
 - Decisions and measurements: [`docs/adr/`](docs/adr/)
 - Open work: [`docs/DEFERRED.md`](docs/DEFERRED.md)
 
