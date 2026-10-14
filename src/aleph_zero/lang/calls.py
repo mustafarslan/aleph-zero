@@ -407,6 +407,13 @@ def _stated(family: str, node: Node) -> list[tuple[str, str]]:
     if family == "go":
         if kind == "short_var_declaration":
             left, right = get("left"), get("right")
+            if (left is not None and right is not None and left.named_child_count > 1 and right.named_child_count == 1
+                    and right.named_children[0].type == "call_expression" and left.named_children[0].type == "identifier"):
+                # `x, err := f()`: the first name is what the call returns first (its signature's `(T, error)`); the
+                # others say nothing. Not `v, ok := m[k]` or a type assertion: those are not calls.
+                first, *others = left.named_children
+                return [(_text(first), _go_value(right.named_children[0])),
+                        *((_text(each), "") for each in others if each.type == "identifier")]
             if left is None or right is None or left.named_child_count != 1 or right.named_child_count != 1:
                 return [(_text(each), "") for each in (left.named_children if left is not None else []) if each.type == "identifier"]
             return [(_text(left.named_children[0]), _go_value(right.named_children[0]))] if left.named_children[0].type == "identifier" else []

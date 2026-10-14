@@ -689,3 +689,21 @@ def test_an_import_made_inside_another_function_does_not_make_a_rust_function_do
            "src/run.rs": "#[cfg(unix)]\nuse crate::other::f;\n\n#[cfg(not(unix))]\nfn f() {}\n\nfn go() {\n    f();\n}\n"}
     found, certain = certainty(top, "src/run.rs", "f")
     assert sorted(found) == ["f", "f"] and certain is False                            # at the file's own level: still one of two
+
+
+GO_PAIRS = {
+    "go.mod": "module example.com/store\n\ngo 1.21\n",
+    "db/db.go": ("package db\n\ntype Conn struct{}\ntype Row struct{}\n\nfunc Open(name string) (*Conn, error) { return &Conn{}, nil }\n"
+                 "func (c *Conn) Query(q string) (*Row, error) { return &Row{}, nil }\nfunc (r *Row) Scan() {}\n"),
+    "app/app.go": ("package app\n\nimport \"example.com/store/db\"\n\nfunc Run(cache map[string]*db.Row) {\n"
+                   "\tconn, err := db.Open(\"x\")\n\tif err != nil {\n\t\treturn\n\t}\n\trow, err := conn.Query(\"select\")\n\t_ = err\n\trow.Scan()\n"
+                   "\tcached, ok := cache[\"k\"]\n\t_ = ok\n\tcached.Scan()\n}\n"),
+}
+
+
+def test_go_binds_the_first_name_of_a_call_that_also_returns_an_error():
+    # `x, err := f()` is how Go code calls nearly everything that can fail; the first name took no type from the call,
+    # so every method called on it went unanswered. A map or a type assertion (`v, ok := m[k]`) still says nothing.
+    assert answers(GO_PAIRS, "app/app.go", "Query") == ("L1", "import-resolved", [("db/db.go", "Conn.Query")])
+    # Not followed further: `row, err := conn.Query()` would need the method's own result read through `conn`'s type.
+    assert answers(GO_PAIRS, "app/app.go", "Scan")[1] == "name"
