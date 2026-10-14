@@ -322,6 +322,11 @@ def _followed(record: dict) -> bool | None:
     return record.get("first_read") in listed if listed else None
 
 
+def _first_right(record: dict) -> bool:
+    """Whether the first file the agent itself opened is one the fix edited."""
+    return record.get("first_read") in (record.get("gold") or [])
+
+
 def report(records: list[dict], baseline: str) -> dict:
     """Arms against the baseline, paired by task. A task run more than once in an arm counts
     with the mean of its runs (so "thirty tasks twice" is thirty pairs, each steadier).
@@ -352,6 +357,8 @@ def report(records: list[dict], baseline: str) -> dict:
                 gave_up=sum(row["gave_up"] for row in rows),
                 aleph_first=sum(row.get("first_search") == "aleph" for row in rows),
             )
+            right = [_first_right(row) for row in rows]
+            entry["first_read_right"] = {"sessions": len(right), "right": sum(right), "rate": round(sum(right) / len(right), 3)}
             listed = [_followed(row) for row in rows if _followed(row) is not None]
             if listed:
                 entry["follow"] = {"sessions_listed": len(listed), "followed": sum(listed), "rate": round(sum(listed) / len(listed), 3)}
@@ -367,6 +374,12 @@ def report(records: list[dict], baseline: str) -> dict:
                 follow = lambda group: [_followed(row) for row in group if _followed(row) is not None]  # noqa: E731
                 both = [task for task in shared if follow(done[task]) and follow(base[task])]
                 if len(both) >= 2:
+                    # The decision measure of a run between two ways of listing (ADR-011): a right first file. Following
+                    # what was listed is reported and decides nothing: it rises as much when the listed files are wrong.
+                    centre, low, high = bootstrap_difference([statistics.fmean(_first_right(row) for row in done[task])
+                                                              - statistics.fmean(_first_right(row) for row in base[task]) for task in both])
+                    entry["first_read_right_against_baseline"] = {"paired_tasks": len(both), "difference": round(centre, 3),
+                                                                  "interval_95": [round(low, 3), round(high, 3)]}
                     centre, low, high = bootstrap_difference([statistics.fmean(follow(done[task])) - statistics.fmean(follow(base[task]))
                                                               for task in both])
                     entry["follow_against_baseline"] = {"paired_tasks": len(both), "difference": round(centre, 3),

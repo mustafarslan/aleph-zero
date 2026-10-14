@@ -447,3 +447,19 @@ def test_a_run_never_starts_a_session_that_could_take_its_spending_over_the_limi
                     "--budget-usd", "1.0", "--spend-usd", "3.0"]) == 4
     assert len(asked) == 2 and "spending" in capsys.readouterr().out
     assert len(out.read_text().splitlines()) == 3
+
+
+def test_whether_the_first_file_opened_was_a_right_one_is_read_paired_over_the_tasks_rung_2_listed_for():
+    def row(task, arm, first, listed, gold=("a.py",)):
+        return {"task": task, "arm": arm, "ok": True, "tokens": 100, "tool_calls": 4, "file_hit": True, "gave_up": False,
+                "first_search": "aleph", "cost_usd": 0.1, "model": "m", "first_read": first, "gold": list(gold),
+                "mod": {"rung": 2, "added_to_prompt": int(bool(listed)), "listed": listed}}
+
+    records = [row("t1", "L2", "b.py", ["a.py", "b.py"]), row("t1", "L2s", "a.py", ["a.py", "b.py"]),   # follows either way
+               row("t2", "L2", "a.py", ["b.py"]), row("t2", "L2s", "b.py", ["b.py"]),                   # following was wrong
+               row("t3", "L2", None, ["a.py"]), row("t3", "L2s", "a.py", ["a.py"]),
+               row("t4", "L2", "z.py", []), row("t4", "L2s", "a.py", [])]                               # nothing listed
+    found = ab.report(records, "L2")
+    assert found["arms"]["L2"]["first_read_right"] == {"sessions": 4, "right": 1, "rate": 0.25}
+    paired = found["arms"]["L2s"]["first_read_right_against_baseline"]
+    assert paired["paired_tasks"] == 3 and paired["difference"] == 0.333     # (+1 −1 +1) / 3: t4 is not counted
