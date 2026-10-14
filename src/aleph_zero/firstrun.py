@@ -90,7 +90,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
         # The default is read on an issue's first line, as nearest what an agent types. A whole question is another
         # matter, and the plugin's second rung asks with the whole prompt: said here so that a yes or a no is informed.
         + ("" if found.verdict else "; on whole questions (a pasted issue, or the plugin's second rung, which asks with the "
-           "whole prompt) vectors gained in every language measured, 5 to 18 points")
+           "whole prompt) vectors gained in every language measured, 5 to 20 points")
         + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors")
         + ("; `aleph embed run` makes the rest, and so does a running server" if vectors == "done" and missing else ""),
         "" if not missing else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",

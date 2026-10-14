@@ -293,3 +293,10 @@ def test_c_has_its_verdict_from_its_own_questions_read_by_main_language():
     assert verdict.helps is True and dense_policy.decide(None, "c")[0] is True
     assert "+12.3 points" in verdict.evidence and "88 questions" in verdict.evidence and "six repositories" in verdict.evidence
     assert "no benchmark has been run" in dense_policy.decide(None, "rust")[1] or "rust" in dense_policy.VERDICTS
+
+
+def test_rust_has_its_verdict_from_its_own_questions_read_by_main_language():
+    # Read with C on the owner's "yes" (2026-10-14): 170 questions whose repository's main language is Rust.
+    verdict = dense_policy.VERDICTS["rust"]
+    assert verdict.helps is True and dense_policy.decide(None, "rust")[0] is True
+    assert "+8.0 points" in verdict.evidence and "170 questions" in verdict.evidence and "thirteen repositories" in verdict.evidence

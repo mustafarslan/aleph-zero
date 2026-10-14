@@ -56,6 +56,9 @@ VERDICTS: dict[str, Verdict] = {
     # questions are in commits that are mostly C++ and count there (C++ with them: +6.6 on 128 questions, still on).
     "c": Verdict(True, "+12.3 points of file recall@10, interval +3.7 to +21.3, on 88 questions from six repositories whose "
                        "main language is C, asked by their first line; on whole issue text +19.8; ADR-002, 2026-10-14"),
+    # Rust, read with C (2026-10-14): 170 questions, 6 of bat's left to JavaScript where its commits were mostly that.
+    "rust": Verdict(True, "+8.0 points of file recall@10, interval +2.3 to +13.9, on 170 questions from thirteen repositories "
+                          "whose main language is Rust, asked by their first line; on whole issue text +8.9; ADR-002, 2026-10-14"),
     "java": Verdict(False, "+0.1 points of file recall@10 on 296 questions from eighteen repositories asked by their first line, "
                            "interval -3.2 to +3.4, which holds zero; on whole issue text +5.3; ADR-002, 2026-10-13"),
 }

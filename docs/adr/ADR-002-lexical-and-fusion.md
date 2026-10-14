@@ -328,7 +328,13 @@ Read as the four languages were, by the rule written before anything was fetched
 | **C** | 88, 6 (zstd 29, ponyc 20, jq 18, redis 12, micropython 5, valkey 4) | 0.463 | 0.586 | **+12.3 (+3.7 to +21.3)** | −2.6 to +33.8 | 20 / 8 | +19.8 (+10.9 to +29.2), 26 / 3 |
 | C++, with ponyc's 20 | 128, 6 | 0.387 | 0.453 | +6.6 (+1.9 to +11.6) | +4.3 to +11.3 | 17 / 3 | +9.5 (+4.0 to +15.4) |
 
-**`dense_policy.VERDICTS["c"]` is on.** The interval by repository holds zero (six repositories, one of 29 questions): the gate does not ask for it, and it is said here because JavaScript's decision used it. C++ read again with the new questions stays on, by much the same margin as before. Rust is the next in the same run and is off until it is read.
+**`dense_policy.VERDICTS["c"]` is on.** The interval by repository holds zero (six repositories, one of 29 questions): the gate does not ask for it, and it is said here because JavaScript's decision used it. C++ read again with the new questions stays on, by much the same margin as before.
+
+| Main language | Questions, repositories | Words and names | With vectors | Gain (95%) | By repository | Better / worse | Whole text |
+|---|---|---|---|---|---|---|---|
+| **Rust** | 170, 13 (clap 40, tokio 33, nushell 16, tracing 16, fd 14, ripgrep 12, bat 11, ruff 7, axum 7, bytes 5, coreutils 5, rayon 2, serde 2) | 0.492 | 0.572 | **+8.0 (+2.3 to +13.9)** | +1.5 to +16.5 | 40 / 19 | +8.9 (+3.1 to +14.8), 36 / 12 |
+
+Rust was prepared and embedded from 09:38 to 10:17 in the same run, the chip at 77 °C at most, no waits for heat; six of bat's questions are in commits whose main language is JavaScript and count there. **`dense_policy.VERDICTS["rust"]` is on**, and here the interval by repository is clear of zero too. Of the eight languages Aleph reads, vectors are now on by default for five: JavaScript, TypeScript, C, C++ and Rust; off for Python, Go and Java, where they gain on whole issue text but not on a first line.
 
 ## The gate is per language (owner's instruction, 2026-10-12)
 

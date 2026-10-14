@@ -145,12 +145,13 @@ line of an issue, with an interval that excludes zero. Measured so far:
 | JavaScript | +9.8 points (+6.0 to +13.6), 448 questions; +16.2 (+9.4 to +23.1) on the 164 asked last, alone | on |
 | TypeScript | +7.3 (+1.8 to +12.9), 110 questions | on |
 | C | +12.3 (+3.7 to +21.3), 88 questions | on |
+| Rust | +8.0 (+2.3 to +13.9), 170 questions | on |
 | C++ | +6.7 (+1.4 to +12.3), 108 questions | on |
 | Python | +3.9 (+0.6 to +7.2), 400 questions; +1.6 on the 165 held out | off |
 | Go | +2.0 (−3.9 to +7.8), 111 questions | off |
 | Java | +0.1 (−3.2 to +3.4), 296 questions | off |
 
-Rust is not measured yet and is off. On whole issue text vectors gain in every language (5 to 18
+On whole issue text vectors gain in every language (5 to 20
 points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on,
 and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
 `aleph status` shows a project's main language and whether vectors are on, and why.
