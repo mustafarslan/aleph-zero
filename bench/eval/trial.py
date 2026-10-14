@@ -166,6 +166,8 @@ def read(scored: dict[str, dict]) -> dict:
         together = []
         for language, entries in sorted(by_language.items()):
             mode = shipped_mode(language)
+            if any(mode not in entry["arms"]["as it is"]["title"] for entry in entries):
+                mode = "lexical"            # scored with words alone (--words-only): that is what can be read
             other = "lexical" if mode == "hybrid" else "hybrid"
             together += [(entry, mode) for entry in entries]
             block[language] = {"ships with": "vectors" if mode == "hybrid" else "words and names",

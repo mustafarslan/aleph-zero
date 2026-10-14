@@ -78,8 +78,12 @@ export function locations(hits, limit) {
       file = { places: [], what: '  ' + hit.kind + (hit.symbol ? '  ' + hit.symbol : '') }
       files.set(hit.path, file)
     }
-    const place = hit.start_line + '-' + hit.end_line
-    if (!file.places.includes(place) && file.places.length < PLACES_A_FILE) file.places.push(place)
+    // With one result a file the engine sends the file's further places on its result (start, end, name).
+    const own = [[hit.start_line, hit.end_line], ...(Array.isArray(hit.places) ? hit.places : [])]
+    for (const [start, end] of own) {
+      const place = start + '-' + end
+      if (!file.places.includes(place) && file.places.length < PLACES_A_FILE) file.places.push(place)
+    }
   }
   return [...files].map(([path, file]) => path + ':' + file.places.join(', ') + file.what).join('\n')
 }

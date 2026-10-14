@@ -82,6 +82,9 @@ test('locations are one line a file: its path, its places, kind and name of the 
   expect(locations(hits, 2)).toBe('a.py:3-9, 40-46, 80-86  function  alpha\nb.py:3-9  function')        // three places of a file at most; c.py is a third file
   expect(locations(hits, 5).split('\n')).toEqual(['a.py:3-9, 40-46, 80-86  function  alpha', 'b.py:3-9  function', 'c.py:3-9  function  f'])
   expect(locations([hit('a.py', ['x']), hit('b.py', ['x']), hit('c.py', ['x'])], 2).split('\n').length).toBe(2)
+  // With one result a file the engine sends a file's further places on its result: they ride on its line the same way.
+  const placed = { ...hit('a.py', ['x']), start_line: 3, end_line: 9, places: [[40, 46, 'beta'], [80, 86, ''], [90, 99, 'gamma']] }
+  expect(locations([placed, hit('b.py', ['x'])], 5).split('\n')[0]).toBe('a.py:3-9, 40-46, 80-86  function  f')
 })
 
 test('search commands are counted as grep by the meter', async () => {
