@@ -11,6 +11,11 @@ claude = shutil.which("claude")
 needs_claude = pytest.mark.skipif(claude is None, reason="Claude Code is not installed: the plugin cannot be validated here")
 
 
+def test_the_engine_is_installed_under_a_name_no_other_program_has():
+    scripts = (PLUGIN.parent / "pyproject.toml").read_text()
+    assert 'aleph-zero = "aleph_zero.cli:main"' in scripts and 'aleph = "aleph_zero.cli:main"' in scripts
+
+
 def test_the_manifest_and_the_engine_entry_are_what_the_mod_expects():
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "aleph-zero"
@@ -45,10 +50,25 @@ def _installed_copy(tmp_path: Path) -> Path:
     return copy / "scripts" / "serve.sh"
 
 
-def _stub(directory: Path) -> None:
-    directory.mkdir(parents=True)
-    (directory / "aleph").write_text("#!/bin/sh\necho \"stub $*\"\n")
-    (directory / "aleph").chmod(0o755)
+def _stub(directory: Path, name: str = "aleph-zero", says: str = "stub") -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(f"#!/bin/sh\necho \"{says} $*\"\n")
+    (directory / name).chmod(0o755)
+
+
+def test_an_installed_plugin_never_starts_another_program_called_aleph(tmp_path):
+    # TeX Live and MacTeX install their own `aleph` (/Library/TeX/texbin/aleph): started with `serve` it waits on
+    # standard input, and Claude Code gives up on the server after thirty seconds. Found on the owner's Mac.
+    serve = _installed_copy(tmp_path)
+    _stub(tmp_path / "texbin", name="aleph", says="tex")
+    _stub(tmp_path / "uvbin")
+    done = subprocess.run([str(serve)], capture_output=True, text=True, timeout=30,
+                          env={"PATH": f"{tmp_path / 'texbin'}:/usr/bin:/bin", "UV_TOOL_BIN_DIR": str(tmp_path / "uvbin")})
+    assert done.stdout.strip() == "stub serve"
+    _stub(tmp_path / "onpath")
+    done = subprocess.run([str(serve)], capture_output=True, text=True, timeout=30,
+                          env={"PATH": f"{tmp_path / 'texbin'}:{tmp_path / 'onpath'}:/usr/bin:/bin"})
+    assert done.stdout.strip() == "stub serve"
 
 
 def test_an_installed_plugin_finds_the_engine_where_uv_put_it_when_it_is_not_on_path(tmp_path):

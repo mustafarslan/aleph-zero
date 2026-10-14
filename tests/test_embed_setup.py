@@ -105,3 +105,15 @@ def test_doctor_and_status_say_whether_the_worker_is_installed(home, capsys):
     assert cli.main(["embed", "status"]) == 0
     out = capsys.readouterr().out
     assert "installed: yes" in out and "running: no" in out
+
+
+def test_only_the_pinned_commit_of_llama_cpp_is_fetched_not_its_history(home, monkeypatch):
+    # A full clone is hundreds of megabytes of history for one commit that is built.
+    ran = []
+    monkeypatch.setattr(embed_setup, "_run", lambda command: ran.append([str(part) for part in command]))
+    monkeypatch.setattr(embed_setup.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    with pytest.raises(embed_setup.SetupError):          # nothing is built here, so no server comes out
+        embed_setup.install_binary()
+    fetches = [command for command in ran if "fetch" in command]
+    assert fetches and "--depth" in fetches[0] and fetches[0][-1] == embed_setup.LLAMA_COMMIT
+    assert not any(command[:2] == ["git", "clone"] for command in ran)

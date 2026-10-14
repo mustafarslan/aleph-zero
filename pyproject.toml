@@ -1,10 +1,11 @@
 [project]
 name = "aleph-zero"
-version = "0.0.1"
+version = "0.1.0"
 description = "Local-first code intelligence for coding agents"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = { file = "LICENSE" }
+authors = [{ name = "Mustafa Arslan" }]
 dependencies = [
   # 0.26.0 segfaults when node positions are read across large trees
   # (tests/test_tree_sitter_stability.py); 0.25.2 is clean.
@@ -13,6 +14,10 @@ dependencies = [
   "numpy>=2.0",
   "apsw>=3.53",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mustafarslan/aleph-zero"
+Issues = "https://github.com/mustafarslan/aleph-zero/issues"
 
 [dependency-groups]
 dev = [
@@ -31,6 +36,8 @@ bench = [
 
 [project.scripts]
 aleph = "aleph_zero.cli:main"
+# The same command under a name no other program has: TeX Live installs an `aleph` of its own.
+aleph-zero = "aleph_zero.cli:main"
 
 [build-system]
 requires = ["hatchling"]

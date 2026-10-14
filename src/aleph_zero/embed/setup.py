@@ -102,8 +102,10 @@ def install_binary(source: Path | None = None, report=lambda text: None) -> Path
             report(f"copying {source}")
             _run(["git", "clone", "--quiet", "--no-hardlinks", str(source), str(checkout)])
         else:
-            report(f"cloning {LLAMA_REPOSITORY}")
-            _run(["git", "clone", "--quiet", LLAMA_REPOSITORY, str(checkout)])
+            # The one commit that is built, not the project's history (hundreds of megabytes).
+            report(f"fetching {LLAMA_REPOSITORY} at {LLAMA_COMMIT[:12]}")
+            _run(["git", "init", "--quiet", str(checkout)])
+            _run(["git", "-C", str(checkout), "fetch", "--quiet", "--depth", "1", LLAMA_REPOSITORY, LLAMA_COMMIT])
     build = home / "build"
     for step in build_steps(checkout, build, metal=sys.platform == "darwin"):
         report(" ".join(step[:4]) + " …")
