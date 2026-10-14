@@ -44,8 +44,13 @@ def test_the_summary_says_how_many_files_each_ranker_s_answer_named():
     assert "dense10" in bench.MODES     # vectors alone at the depth the engine's arms are read at
 
 
-def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo):
+def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo, monkeypatch):
+    # The harness's own cut, as the engine was before one result a file became its default (2026-10-14): the kept
+    # results' `lexical1` and `hybrid1` arms were read this way. Since then the engine itself names ten files.
+    import aleph_zero.search as ranker
     from aleph_zero.search import search
+
+    monkeypatch.setattr(ranker, "ONE_A_FILE", False)
 
     repo.write("src/auth/more.py", "".join(f"def rotate_helper_{n}(token):\n    return rotate(token, {n})\n\n\n" for n in range(6)))
     repo.write("src/auth/other.py", "def rotate(token, n):\n    return token\n")
@@ -58,3 +63,5 @@ def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo):
     assert as_it_is.count("src/auth/more.py") >= 2                                  # several results in one file
     one_each = [hit.path for hit in bench.cut(deep, 3, a_file=1)]
     assert len(set(one_each)) == len(one_each) == 3 and one_each[0] == as_it_is[0]  # three files, and first place is what it was
+    monkeypatch.setattr(ranker, "ONE_A_FILE", True)
+    assert [hit.path for hit in search(index, view, "rotate token helper", k=3)] == one_each           # the engine's own default now

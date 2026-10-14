@@ -24,8 +24,8 @@ SYMBOL_CANDIDATES = 10
 # name is handled apart (see `search`). Weighing names 1.5 or 2 times was tried on 235 questions
 # (ADR-002, 2026-10-13): the order inside the ten results moves, the files among them do not.
 GENERATOR_WEIGHT: dict[str, float] = {}
-# One result a file, the file's other places on its line (docs/DEFERRED.md, entry 1d, round 2): off until read twice.
-ONE_A_FILE = False
+# One result a file, the file's other places on its line: read three times and adopted (ADR-002, 2026-10-14).
+ONE_A_FILE = True
 MORE_PLACES = 3
 # Two trials of 2026-10-14 (docs/DEFERRED.md, entry 1d), off. Read twice and not adopted on first lines (ADR-002);
 # back for a third reading on whole issue text, by a rule written before it, on questions never asked:

@@ -298,3 +298,11 @@ def test_one_result_a_file_keeps_the_file_s_other_places_on_its_line(repo, monke
     assert [(start, end) for start, end, _ in ledger.places] == every[1:1 + ranker.MORE_PLACES]     # its next places, in order
     shown = render.text(render.Answer("invoice total", after, 0, False, 1))
     assert "also at:" in shown and str(ledger.places[0][0]) in shown
+
+
+def test_ten_results_name_ten_files_by_default():
+    # Read three times by rules written first (ADR-002): +4.2 files among ten over 1,479 kept questions, +9.4 on 158
+    # never-asked Python questions, +3.2 on 211 never-asked JavaScript and TypeScript ones; no question worse.
+    import aleph_zero.search as ranker
+
+    assert ranker.ONE_A_FILE is True and ranker.MORE_PLACES == 3

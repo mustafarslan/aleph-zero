@@ -161,18 +161,18 @@ Your words: "analyze capabilities of aleph zero and do research webseaech litera
   | 2 | Names and paths | agy's reading | path words 123 → 47 ms | dotted names; path vote | path words adopted; the two trials not adopted on first lines; whole text: row 13 |
   | 3a | Vectors: model, width, title | searched | 973 questions per variant | 512, 768; breadcrumb title | not adopted |
   | 3b | Vectors: worker, first question | measured | 546 → 308 ms with vectors | wake and warm at start; wait for a waking worker | adopted |
-  | 3c | Vectors: embedding throughput | — | 72–116 a second, GPU 85–88% busy | — | open |
+  | 3c | Vectors: embedding throughput | agy | fmt: the worker's answers 100% of the time | — | closed: the worker is the bound |
   | 4 | Fusion and ranking | searched | union headroom 5–8 points | slot rules; constant | not adopted |
   | 5 | Chunking | searched (cAST) | split sweep (ADR-001) | — | closed before tonight |
   | 6 | The view (git) | searched | 7–9 ms | side by side; harness settle | adopted; untracked cache is yours |
-  | 7 | Indexing and the store | — | cold: Django 10.3 s, airflow 30.7 s | — | open |
-  | 8 | Code graph, compiler indexes | — | recall 50–95% (ADR-003) | — | open |
-  | 9 | Linked sources, update, setup | — | never | — | open |
+  | 7 | Indexing and the store | agy | cold, one core: Django 8.3 s, vscode 12.4 s | a split remembered; four processes for commands | adopted: Django 3.5 s, vscode 4.5 s, the same index |
+  | 8 | Code graph, compiler indexes | PyCG, JARVIS; agy | misses: 86–92% calls through a local name | Go `x, err := f()`; `x = self.make()` | adopted: bleve confident recall 84.6 → 90.4%, httpx 89.6 → 90.2% |
+  | 9 | Linked sources, update, setup | agy | a path source of 6,781 files: 10 → 81 ms a question | side by side (saves 10 ms) | not adopted; a path source's freshness is yours (below) |
   | 10 | Server and plugin | searched | first question; memory thrash | warm, wake, relief rule | adopted; output shape is yours (paid) |
-  | 11 | Decisions and memory | — | P@1 0.58 on 100 pairs | — | open |
+  | 11 | Decisions and memory | searched; agy | P@1 0.58 on 100 pairs | — | closed: 100 pairs cannot show a change |
   | 12 | Process costs | measured | imports 50 ms | lazy imports | ruled out |
-  | 13 | Whole-text ranking (from row 2) | — | +2.1 and +2.8 in two readings | the two trials for whole text | open |
-  | 14 | Memory on very large repositories | — | 190–250 MB on material-ui | — | open |
+  | 13 | Whole-text ranking (from row 2) | agy | third reading +2.01 (−0.24 to +4.62) | the two trials for whole text | not adopted; the path vote alone left for a rule of its own |
+  | 14 | Memory on very large repositories | agy | the background thread's own view: 68 MB | it works only when needed | adopted: material-ui 183 → 139 MB, 248 → 150 ms a search |
 
 - **Round 2's rules, written before any of its measurements:**
   - *Indexing (7):* profile a cold `aleph index` on django and airflow by phase. If parsing and chunking are half or more and run on one core, the candidate is to do them in parallel with the writes kept in one place; adopted if the cold index takes half the time or less, the same chunks (hashes) and the same rows result, and private memory stays inside ADR-005. Otherwise the phase table is written and the row closes.
@@ -183,6 +183,7 @@ Your words: "analyze capabilities of aleph zero and do research webseaech litera
   - *Decisions and memory (11):* 100 pairs cannot show a change under about 10 points of P@1; the row is read by the literature and closes unless something larger is found.
   - *Embedding throughput (3c):* whether the worker ever waits for Python while embedding (its busy share); if it does not, the row closes.
   - *The end:* every row filled; the same end-to-end measurement as before; then each row's outcome is stated by its rule.
+  | 15 | Results a file (agy's "largest left") | ADR-011 | +4.24 kept, +9.38 and +3.18 never asked | one result a file, its places on its line | adopted |
   - *One result a file, the file's other places on its line (agy's "largest left", written 2026-10-14, 08:20, before reading):* ten results then name ten files, and a file's second and third places are not lost but shown beside its first (as the plugin's rung 2 already does). ADR-011 read it on Python and C++ only, under a 5-point bar. **Read now on every kept question, each language in its shipped arm (the benchmark's `lexical1` and `hybrid1` arms against `lexical` and `hybrid`), by the rule for free changes; if that passes, read again on questions never used to choose it (the 158 never-asked Python questions; the third draw of JavaScript and TypeScript), the same rule; adopted only if both pass.**
 - **Baseline, settled worktrees, worker awake, vectors on (median of five warm first-line questions):** vscode 88 ms (git status 36, the repository's facts 10, the query's vector 17, words 15, vector scan 4); material-ui 183 (98, 11, 21, 30, 3); trino 108 (46, 11, 19, 16, 4); django 131 (69, 11, 19, 18, 5); pandas 64 (14, 11, 19, 14, 2); fmt 34 (8, 9, 9, 2, 1). On whole issue text the query's vector takes 14 to 45 ms and words 4 to 42. A process's first question: 76 to 560 ms. The record of what was searched for, found and measured is `bench/data/improvement-ledger.md`.
 

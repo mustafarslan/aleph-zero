@@ -297,6 +297,22 @@ Not adopted by that rule: the files among ten barely move. First place did, most
 
 *Three voices.* agy found both and proposed them as "a free recall win for Python, Go, and Java". The advisor: the rule written at 00:15 names first lines; it fails; the code comes out and the whole-text finding is written down, not acted on. Mine: the same; and the first reading is a lesson in why a second was needed.
 
+## One result a file, the file's other places on its line (2026-10-14): adopted, read three times
+
+Ten results named about six files: a file's second and third places took the places of other files. ADR-011 read "at most one result a file" on Python and C++ under a 5-point bar and kept the layout, since the second and third places would be lost. agy (boost) named it the largest improvement left, with those places kept on the result's line. Now each file's best result stands for it, with up to three further places of the file on its line (`Hit.places`; in the text `also at: 40-46 rotate, 88-120 save`; in the plugin's rung 2 on the file's line as before). The rule, written first: read on every kept question by the rule for free changes, and again on questions never used to choose it; adopted only if both pass.
+
+| Reading | Questions | First line, files among ten | Better / worse | Whole text |
+|---|---|---|---|---|
+| Kept, each language in its shipped arm | 1,479 | +4.24 (+3.37 to +5.15) | 108 / 0 | +2.49 (+1.80 to +3.23) |
+| Python, never asked, 129 repositories never fetched | 158 | +9.38 (+5.63 to +13.53) | 23 / 0 | +6.98 |
+| JavaScript and TypeScript, a third draw never asked | 211 | +3.18 (+1.24 to +5.54) | 11 / 0 | +2.61 |
+
+Per language on the kept questions: Python +3.4, TypeScript +6.0, JavaScript +3.5, Go +6.6, Java +3.9, C++ +7.0, each clear of zero. First place is unchanged by construction. **Adopted: `search.ONE_A_FILE` is on.** The vector verdicts read with it in both arms do not change: Python +4.6 (+1.3 to +7.9), TypeScript +8.1, JavaScript +7.0, Go +2.5, Java +2.7, C++ +8.1.
+
+## The two generator changes on whole issue text (2026-10-14): a third reading, not adopted
+
+The rule written before it: the two changes together (dotted names; the path's vote to what was found in the file) adopted for every question if, on questions never asked, files among ten on whole issue text gain with an interval clear of zero, no language is lower and first lines are not lower. The third draw of JavaScript and TypeScript (211 never-asked questions): whole text +2.01 (−0.24 to +4.62); first lines +0.91 (+0.07 to +2.17). **Not adopted.** The path's vote alone gained on whole text with an interval clear of zero here (+1.66, +0.24 to +3.55) and in the first reading (+0.90), and +0.95 (+0.00 to +2.53) in the second; it was never named alone in a rule, and is left for one that does. agy, before this reading, called its design wrong: JavaScript and TypeScript with vectors were where the whole-text gain had been weakest. The switches stay in the code, off.
+
 ## The gate is per language (owner's instruction, 2026-10-12)
 
 Whether search by meaning is on is decided for each project from the language most of its source is written in, using the benchmark for that language. A result on Python questions says nothing reliable about C++ or Go, and Loc-Bench is Python only.

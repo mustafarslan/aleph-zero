@@ -153,6 +153,7 @@ C and Rust are not measured and are off. On whole issue text vectors gain in eve
 points); `--dense`, `ALEPH_DENSE=1` or a yes in `aleph setup` (kept for the repository) switches them on,
 and `--no-dense`, `ALEPH_DENSE=0` or `aleph setup --no-dense` switches them off.
 `aleph status` shows a project's main language and whether vectors are on, and why.
+Ten results name ten files: a file's further places among the results ride on its line (`also at: 40-46 rotate`).
 `aleph decisions` uses a record's own vector whenever the worker runs. One worker serves every session and
 repository; a session (`aleph serve`) starts it when it starts, where vectors are on, so that its first question
 has them; it unloads its model after ten idle minutes and exits after thirty. Waking takes half a second:
