@@ -7,6 +7,11 @@
     "name": "mustafarslan"
   },
   "license": "MIT",
+  "homepage": "https://github.com/mustafarslan/aleph-zero",
+  "repository": "https://github.com/mustafarslan/aleph-zero",
+  "documentationUrl": "https://github.com/mustafarslan/aleph-zero#readme",
+  "supportUrl": "https://github.com/mustafarslan/aleph-zero/issues",
+  "privacyPolicyUrl": "https://github.com/mustafarslan/aleph-zero/blob/master/PRIVACY.md",
   "keywords": [
     "search",
     "code-intelligence",
@@ -16,7 +21,7 @@
     "rung": {
       "type": "string",
       "title": "Steering rung",
-      "description": "How much the plugin steers Claude Code towards Aleph. 0: the search tools only. 1: tools loaded up front with tuned descriptions, a short standing instruction, and a pointer in the descriptions of Grep and Glob. 2: also ranked locations with the first question of a session. 3: also ranked locations after a recursive grep that found nothing.",
+      "description": "How far the plugin steers Claude Code towards Aleph's search. 0: the tools only. 1 (default): the search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. 2: also ranked locations with the first question of a session. 3: also ranked locations after a recursive grep that found nothing.",
       "options": [
         "0",
         "1",
@@ -28,7 +33,7 @@
     "grep_pointer": {
       "type": "string",
       "title": "Pointer in Grep and Glob",
-      "description": "Part of rung 1: whether the descriptions of Claude Code's own Grep and Glob tools point to Aleph's search. Its own switch so that it can be measured apart from the rest of the rung.",
+      "description": "on or off (default on): whether the descriptions of Grep and Glob point to Aleph's search (part of rung 1).",
       "options": [
         "on",
         "off"
@@ -38,7 +43,7 @@
     "lines": {
       "type": "string",
       "title": "Rung 2's lines",
-      "description": "What the ranked locations of rung 2 show for each file: its places, kind and name; or the same with the signature of its first result on the next line. Its own switch so that the two can be measured apart.",
+      "description": "places or signatures (default places): what rung 2 shows for each file, its places only, or also the signature of its first result.",
       "options": [
         "places",
         "signatures"
