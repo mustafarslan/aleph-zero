@@ -162,3 +162,9 @@ def test_git_s_untracked_cache_is_suggested_where_the_worktree_is_large_enough_f
     assert step.suggested and step.command == "git update-index --untracked-cache"
     assert not _by_key(firstrun.plan(replace(large, untracked_cache=True), repo={}, machine={}))["untracked_cache"].suggested
     assert firstrun.look({"files_in_view": 12_345, "untracked_cache": False}).files == 12_345
+
+
+def test_the_files_counted_for_git_s_untracked_cache_are_the_worktree_s_own_not_its_linked_sources():
+    # Git's look at the worktree is what the cache speeds up; a linked source's files are another repository's.
+    status = {"files_in_view": 5_050, "untracked_cache": False, "sources": [{"name": "docs", "kind": "path", "files": 5_000}]}
+    assert firstrun.look(status).files == 50

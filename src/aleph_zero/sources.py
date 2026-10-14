@@ -244,9 +244,11 @@ def _git_stamp(location: str) -> tuple | None:
             stamp.append((found.st_mtime_ns, found.st_size) if found else None)
         named = head.read_text().strip().partition("ref:")[2].strip()
         if named:
-            ref = git_dir / named
-            stamp.append(ref.stat().st_mtime_ns if ref.exists() else (git_dir / "packed-refs").stat().st_mtime_ns
-                         if (git_dir / "packed-refs").exists() else None)
+            # A linked worktree's branches are in the repository's common directory, which its `commondir` names.
+            common = git_dir / "commondir"
+            refs = (git_dir / common.read_text().strip()).resolve() if common.is_file() else git_dir
+            ref, packed = refs / named, refs / "packed-refs"
+            stamp.append(ref.stat().st_mtime_ns if ref.exists() else packed.stat().st_mtime_ns if packed.exists() else None)
         return tuple(stamp)
     except OSError:
         return None

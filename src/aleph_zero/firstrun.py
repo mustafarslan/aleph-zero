@@ -32,7 +32,7 @@ class Found:
     untracked_cache: bool      # git keeps its untracked cache for this repository
     repository: bool           # a git repository: sources are linked to one, and git's cache is its own
     aleph: str = "aleph"       # how this engine is started: where it is, when that is known
-    files: int = 0             # files of the worktree
+    files: int = 0             # files of the worktree itself, linked sources not counted
 
 
 @dataclass(frozen=True)
@@ -151,7 +151,9 @@ def look(status: dict) -> Found:
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
                  repository=bool(status.get("repository", True)),
-                 aleph=engine_path(), files=int(status.get("files_in_view") or 0))
+                 aleph=engine_path(),
+                 # the worktree's own files: a linked source's are another repository's, which git's cache here does not see
+                 files=int(status.get("files_in_view") or 0) - sum(int(row.get("files") or 0) for row in status.get("sources") or ()))
 
 
 def of(status: dict) -> list[Step]:

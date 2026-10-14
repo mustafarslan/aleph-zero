@@ -4,7 +4,8 @@ import time
 
 import pytest
 
-from aleph_zero import cli, sources
+from aleph_zero import cli, gitio, sources
+from aleph_zero import view as views
 from aleph_zero.engine import Engine
 
 
@@ -306,3 +307,39 @@ def test_a_git_command_that_runs_out_of_time_leaves_no_helper_behind(tmp_path):
     subprocess.run(["pkill", "-f", f"127.0.0.1:{port}"])
     server.close()
     assert left == []                                              # git's own helper went with it
+
+
+def test_a_commit_in_a_path_source_that_is_a_linked_worktree_changes_its_stamp(docs_repo, tmp_path):
+    # A linked worktree's branches live in the repository's common directory, not in its own git directory.
+    side = tmp_path / "docs-side"
+    docs_repo.git("worktree", "add", "-q", "-b", "side", str(side))
+    before = sources._git_stamp(str(side))
+    first = docs_repo.git("rev-parse", "HEAD").strip()
+    subprocess.run(["git", "-C", str(side), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    "commit", "-q", "--allow-empty", "-m", "nothing"], check=True)
+    time.sleep(0.01)
+    subprocess.run(["git", "-C", str(side), "update-ref", "refs/heads/side", first], check=True)   # moved back: index untouched
+    assert before is not None and sources._git_stamp(str(side)) != before
+
+
+def test_a_path_source_s_kept_view_is_dropped_when_a_file_of_it_can_no_longer_be_read_as_it_saw_it(repo, docs_repo, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(sources.time, "monotonic", lambda: clock[0])
+    sources.forget_mounts()
+    docs_repo.write("guides/auth.md", "# Authentication\n\nFirst draft about the numbat_gateway.\n")    # not committed
+    sources.add(repo.root, str(docs_repo.root), name="docs")
+    view = views.build_view(repo.root)
+    assert sources._MOUNTS
+    docs_repo.write("guides/auth.md", "# Authentication\n\nSecond draft.\n")                      # within the few seconds
+    with gitio.Readers() as readers:
+        assert view.read("docs:guides/auth.md", readers) is None
+    assert not sources._MOUNTS                             # the next question looks at the source again
+
+
+def test_letting_go_of_memory_drops_the_kept_views_of_path_sources(repo, docs_repo):
+    sources.forget_mounts()
+    sources.add(repo.root, str(docs_repo.root), name="docs")
+    views.build_view(repo.root)
+    assert sources._MOUNTS
+    views.forget_trees()
+    assert not sources._MOUNTS

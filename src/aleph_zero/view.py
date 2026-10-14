@@ -89,16 +89,24 @@ class View:
             try:
                 data = (root / inside).read_bytes()
             except OSError:
-                return None
-            return data if gitio.hash_blob(data, fmt) == self.files[path] else None
+                data = None
+            if data is not None and gitio.hash_blob(data, fmt) == self.files[path]:
+                return data
+            if path in self.mounted:
+                from . import sources
+                sources.forget_mounts()     # a path source's kept view is behind its working tree: the next question looks again
+            return None
         return readers.reader(root, other=root != self.root).read(self.files[path], max_bytes)
 
 
 def forget_trees() -> None:
-    """Drop the remembered trees (a session over its memory share); they are read again when needed."""
+    """Drop the remembered trees and the kept views of path sources (a session over its memory share); they are read
+    again when needed."""
+    from . import sources
     with _CACHE_LOCK:
         _TREE_CACHE.clear()
         _SPARSE_CACHE.clear()
+    sources.forget_mounts()
 
 
 def _tree(root: Path, common_dir: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
