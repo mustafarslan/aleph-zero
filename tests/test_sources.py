@@ -33,13 +33,26 @@ def test_a_source_added_by_path_is_searchable_under_its_name(repo, docs_repo):
     assert [(s["name"], s["kind"], s["files"]) for s in status["sources"]] == [("docs", "path", 2)]
 
 
-def test_a_path_source_follows_that_clones_working_tree(repo, docs_repo):
+def test_a_path_source_follows_that_clones_working_tree_within_a_few_seconds(repo, docs_repo, monkeypatch):
+    # The owner's yes (2026-10-14): a linked checkout may be answered from a view up to PATH_SOURCE_SECONDS old. Its own
+    # `git status` ran at every question: 70 ms for a source of 6,781 files. A stage, a commit or a checkout there is
+    # seen at once; an edit not yet staged within the few seconds. The worktree itself is never answered from the past.
+    clock = [1000.0]
+    monkeypatch.setattr(sources.time, "monotonic", lambda: clock[0])
+    sources.forget_mounts()
     sources.add(repo.root, str(docs_repo.root), name="docs")
     engine = Engine(repo.root)
     engine.search("anything")
     docs_repo.write("guides/auth.md", "# Authentication\n\nNow handled by the numbat_gateway.\n")  # not committed
+    assert paths(engine.search("numbat_gateway")) == []                                       # within the few seconds
+    clock[0] += sources.PATH_SOURCE_SECONDS + 0.1
     assert paths(engine.search("numbat_gateway")) == ["docs:guides/auth.md"]
     assert paths(engine.search("wombat_rotator")) == []
+    docs_repo.write("guides/billing.md", "# Billing\n\nInvoices go through the quokka_ledger.\n")
+    docs_repo.git("add", "guides/billing.md")                                               # staged: seen at once
+    assert paths(engine.search("quokka_ledger")) == ["docs:guides/billing.md"]
+    repo.write("src/billing/invoice.py", "def render_invoice(order):\n    return 'the platypus_total'\n")
+    assert "src/billing/invoice.py" in paths(engine.search("platypus_total"))                # the worktree's own edit, at once
 
 
 def test_a_source_added_by_url_is_cloned_and_follows_refresh(repo, docs_repo, tmp_path, monkeypatch):

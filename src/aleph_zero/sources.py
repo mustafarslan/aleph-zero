@@ -1,7 +1,8 @@
 """Linked sources: documentation (or code) that lives in another repository.
 
 A source appears in the view as a second set of paths, `name:path`. One added by local
-path is read in place and follows that clone's working tree. One added by URL is an
+path is read in place and follows that clone's working tree within PATH_SOURCE_SECONDS (a
+stage, a commit or a checkout there at once; the owner's choice of 2026-10-14). One added by URL is an
 explicit choice to use the network: it is cloned bare into the user's cache directory
 and is as fresh as the last `aleph source refresh`. A query never touches the network.
 
@@ -27,6 +28,11 @@ from .store import state_dir
 from .view import Mount, tree_files, worktree_files
 
 CLONE_SECONDS = 300
+# A path source's own `git status` ran at every question: 70 ms for a source of 6,781 files. Its view is kept this long,
+# and dropped at once when its index, HEAD or the branch HEAD names changes (a stage, a commit, a checkout there).
+PATH_SOURCE_SECONDS = 5.0
+_MOUNTS: dict[str, tuple[float, tuple, Mount]] = {}
+_MOUNTS_LOCK = threading.Lock()
 FETCH_SECONDS = 60
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
@@ -217,12 +223,53 @@ def describe(common_dir: Path) -> list[dict]:
     return rows
 
 
+def forget_mounts() -> None:
+    """Drop every path source's kept view."""
+    with _MOUNTS_LOCK:
+        _MOUNTS.clear()
+
+
+def _git_stamp(location: str) -> tuple | None:
+    """What changes when a checkout's git state changes: its index, its HEAD and the branch HEAD names, by time and size.
+    None where it cannot be read (no `.git` there): such a source is not kept."""
+    try:
+        git_dir = Path(location) / ".git"
+        if git_dir.is_file():               # a linked worktree or a submodule: `gitdir: <path>`
+            pointed = git_dir.read_text().strip().partition("gitdir:")[2].strip()
+            git_dir = (Path(location) / pointed).resolve() if pointed else git_dir
+        head = git_dir / "HEAD"
+        stamp: list = []
+        for path in (git_dir / "index", head):
+            found = path.stat() if path.exists() else None
+            stamp.append((found.st_mtime_ns, found.st_size) if found else None)
+        named = head.read_text().strip().partition("ref:")[2].strip()
+        if named:
+            ref = git_dir / named
+            stamp.append(ref.stat().st_mtime_ns if ref.exists() else (git_dir / "packed-refs").stat().st_mtime_ns
+                         if (git_dir / "packed-refs").exists() else None)
+        return tuple(stamp)
+    except OSError:
+        return None
+
+
 def _mount(common_dir: Path, source: Source) -> Mount:
     # Another repository than the one Aleph was pointed at: its git is not told by the environment which one it is.
+    if source.kind == "path":
+        stamp = _git_stamp(source.location)
+        now = time.monotonic()
+        with _MOUNTS_LOCK:
+            kept = _MOUNTS.get(source.location)
+        if stamp is not None and kept is not None and kept[1] == stamp and now - kept[0] < PATH_SOURCE_SECONDS \
+                and kept[2].name == source.name:
+            return kept[2]
     with gitio.elsewhere():
         if source.kind == "path":
             info, files, dirty = worktree_files(Path(source.location))
-            return Mount(source.name, info.root, info.object_format, files, dirty)
+            mount = Mount(source.name, info.root, info.object_format, files, dirty)
+            if stamp is not None:
+                with _MOUNTS_LOCK:
+                    _MOUNTS[source.location] = (now, stamp, mount)
+            return mount
         directory = clone_dir(common_dir, source.location)
         if source.tree is None or not directory.is_dir():
             raise gitio.GitError(f"the clone of {source.location} is missing; add the source again")
