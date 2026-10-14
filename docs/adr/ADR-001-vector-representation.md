@@ -85,6 +85,19 @@ Per language, 512 against 256 on first lines, deciding nothing by itself (72 to 
 
 **Not adopted: 256 stays.** Neither width gains two points, neither interval is clear of zero, and the full 768 is lower on whole issue text with an interval clear of zero. What the model's card shows on its benchmark does not show here, with the vectors fused with words and names and the question an issue's first line. The vectors were made in 2 hours 38 minutes (01:30 to 04:09 with the readings), the chip at 79 °C at most, no waits.
 
+## The document's title read on localisation (2026-10-14): `title: none` stays
+
+The model's card gives `title: {title} | text: {content}` as a document's form, and the engine sends `title: none` with the breadcrumb as the text's first line. The file's path as title was not read: a vector would belong to a path and a moved file would have to be embedded again (agy). The chunk's own breadcrumb as title keeps vectors content (agy's proposal), so it was read, by the same script and on the same 973 questions, with the rule written first: **adopted with a gain clear of zero at the width kept, and no language lower.**
+
+| Breadcrumb as title against `none` | First line, files among ten | First place | Whole text, files among ten |
+|---|---|---|---|
+| At 256, languages that ship with vectors (549 questions) | +1.40 (−0.41 to +3.19), 30 better / 22 worse | −0.31 (−1.71 to +1.13) | **−1.85 (−3.28 to −0.47)** |
+| At 256, all six languages (973) | +0.80 (−0.46 to +2.05) | +0.23 | −0.80 (−1.77 to +0.12) |
+| At 512, languages that ship with vectors | +0.90 (−0.66 to +2.52) | +0.18 | **−1.84 (−3.12 to −0.64)** |
+| At 768, languages that ship with vectors | +0.72 (−0.74 to +2.26) | +1.63 (+0.29 to +3.05) | +0.05 |
+
+**Not adopted.** At the width kept the gain on first lines holds zero, and on whole issue text it is lower with an interval clear of zero (JavaScript −2.0, −4.0 to −0.3). TypeScript alone gains on first lines (+5.3, +0.8 to +10.8, on 72 questions, 5 better and 1 worse), which by the rule decides nothing. Made in 3 hours 8 minutes (04:09 to 07:17), the chip at 78 °C at most, no waits.
+
 ## Split threshold: 256 tokens (provisional until 2026-10-13, final since: see the sweep on issue text below)
 
 `bench/spikes/cap_quality.py`, run on 2026-10-11. Corpus: every Python function in Flask, FastAPI and Django (35,851), with its docstring removed. Queries: the first sentence of the docstring for 1,500 functions: all 292 over 512 tokens that have one, plus a random sample of shorter ones (134 between 256 and 512 tokens, 1,074 at or under 256). A function over the threshold is split at statement boundaries into pieces under it, each carrying the file path, scope and signature as a header. A function is found when any piece is retrieved. 256-d vectors, Q8 weights on Metal.
