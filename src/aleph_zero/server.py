@@ -218,7 +218,8 @@ class _Background:
         self._wanted.put(cwd)
 
     def wake(self) -> None:
-        """The session has just begun: have the worker running and its model loaded before the first question."""
+        """The session has just begun and vectors take part: have the worker running and its model loaded before the
+        first question. Known by the caller, so this thread builds no view of its own for it."""
         self._wanted.put(_WAKE)
 
     def stop(self) -> None:
@@ -241,9 +242,9 @@ class _Background:
                 cwd = self._wanted.get()
                 wake = wake or cwd is _WAKE
             if wake and not self._stopping.is_set():
-                self._engine.wake(None)
+                self._engine.wake_worker()
             if cwd is _WAKE:
-                cwd = None                       # and then its chunks' vectors, as after a call
+                continue                         # nothing was asked of it but the wake
             while not self._stopping.is_set():
                 try:
                     if not self._engine.dense_enabled(cwd):
@@ -296,6 +297,10 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 engine.warm()
                 with state:
                     engine.resume()
+                if background is not None and engine.vectors_take_part():
+                    background.wake()
+                    if engine.vectors_wanted():
+                        background.note(None)
                 continue
             ident, name, arguments, stateless = item
             with state:
@@ -306,8 +311,13 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 running[0] = ident
             try:
                 result = _call(engine, name, arguments)
-                if background is not None:
-                    background.note(arguments.get("cwd") if isinstance(arguments, dict) else None)
+                asked_from = arguments.get("cwd") if isinstance(arguments, dict) else None
+                # The background thread has an engine and a view of its own: built after every answer, that was 70 MB
+                # of a session on a repository of 42,000 files and a slower next question, for nothing once every chunk
+                # has its vector. It works when something is missing, or when nothing is known yet (a first call that
+                # was not a search).
+                if background is not None and engine.vectors_wanted(asked_from) is not False:
+                    background.note(asked_from)
             except Cancelled:
                 result = None  # a cancelled request is not answered
             except BaseException as exc:  # noqa: BLE001 - nothing may end this thread: later calls would hang
@@ -325,9 +335,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     modern = stateless_enabled()
     worker = threading.Thread(target=work, name="aleph-calls", daemon=True)
     worker.start()
-    calls.put(_WARM)
-    if background is not None:
-        background.wake()
+    calls.put(_WARM)                    # and then, where vectors take part, the background thread wakes the worker
     for line in incoming:
         line = line.strip()
         if not line:

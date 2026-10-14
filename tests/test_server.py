@@ -491,3 +491,64 @@ def test_a_session_s_first_search_has_vectors_because_the_server_wakes_the_worke
     finally:
         run("embed", "stop")
         shutil.rmtree(cache, ignore_errors=True)
+
+
+def test_the_background_thread_works_only_when_a_vector_is_missing_or_the_worker_is_not_there(repo, fake_worker, monkeypatch):
+    # It has an engine of its own and built its own view of the worktree after every answer: on a repository of
+    # 42,000 files that was 70 MB of the session and a slower next question, for nothing once every chunk has a vector.
+    from aleph_zero.embed import worker
+    from aleph_zero.engine import Engine
+
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    Engine(repo.root, dense=True).embed()                         # every chunk has its vector
+    noted: list[object] = []
+
+    class Watched(server._Background):
+        def note(self, cwd) -> None:
+            noted.append("note")
+            super().note(cwd)
+
+        def wake(self) -> None:
+            noted.append("wake")
+            super().wake()
+
+    monkeypatch.setattr(server, "_Background", Watched)
+
+    def session(*queries):
+        # The input stays open until every answer has come, as a client's does: an input that ends is a client that left.
+        import os
+        import threading
+
+        into_read, into_write = os.pipe()
+        out_read, out_write = os.pipe()
+        incoming, outgoing = os.fdopen(into_read, "r"), os.fdopen(out_write, "w")
+        running = threading.Thread(target=server.serve, args=(Engine(repo.root, dense=True), incoming, outgoing))
+        running.start()
+        writer, reader = os.fdopen(into_write, "w"), os.fdopen(out_read, "r")
+        answers = []
+        for n, query in enumerate(queries, 1):
+            writer.write(json.dumps({"jsonrpc": "2.0", "id": n, "method": "tools/call",
+                                     "params": {"name": "search", "arguments": {"query": query}}}) + "\n")
+            writer.flush()
+            answers.append(json.loads(reader.readline()))
+        time.sleep(0.5)                                           # what the session does after its answers, before it ends
+        writer.close()
+        running.join(timeout=10)
+        outgoing.close()
+        reader.close()
+        return answers
+
+    answers = session("render_invoice", "refresh token", "how is an invoice rendered")
+    assert len(answers) == 3 and noted == ["wake"]                # woken at the start, and nothing more to do
+
+    noted.clear()
+    repo.write("src/billing/credit.py", "def credit_note(order):\n    return -order.total\n")   # a chunk without a vector
+    session("credit_note")
+    assert noted[0] == "wake" and "note" in noted                 # it goes to work for that chunk
+
+    noted.clear()
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker.parent / "gone.sock")       # the worker has exited
+    session("render_invoice")
+    assert "note" in noted                                        # and starts it again, as before

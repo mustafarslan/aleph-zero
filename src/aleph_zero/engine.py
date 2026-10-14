@@ -149,6 +149,7 @@ class Engine:
         self._decisions: dict[int, tuple] = {}
         self._embedder = None  # the connection to the worker used for queries
         self._with_vectors: dict[str, bool] = {}   # per directory asked from: whether its last question used vectors
+        self._vectors_wanted: dict[str, bool] = {}  # per directory asked from: whether the worker has something to do there
         self._vector_missed = float("-inf")        # when a question's vector last did not come in time
         self._indexes: dict[Path, Index] = {}   # one connection per worktree: each holds one view
         self._files: dict[Path, tuple[Path, int]] = {}  # per worktree: the index file and its inode when opened
@@ -275,6 +276,8 @@ class Engine:
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
         self._with_vectors[asked_from] = note == "used"
+        # Something for the worker: chunks without a vector, or a worker that is not there or did not answer.
+        self._vectors_wanted[asked_from] = bool(note) and (note != "used" or covered < chunks)
         if note.startswith("the worker did not answer"):
             self._vector_missed = time.monotonic()
         return render.Answer(query, hits, pending, late, _elapsed(started), note, covered, chunks)
@@ -815,10 +818,38 @@ class Engine:
         try:
             index, view, _, _ = self._ready(cwd, started, started + WARM_SECONDS)
             index.path_words(view)
-            covered = self._store(index, view).coverage(index)[0] if self._dense_decision(index)[0] else 0
+            covered, chunks = self._store(index, view).coverage(index) if self._dense_decision(index)[0] else (0, 0)
             # The first question is then not the one that finds out: its vector is asked for while git is asked.
-            self._with_vectors[str(self.default_cwd if cwd is None else cwd)] = covered > 0
+            asked_from = str(self.default_cwd if cwd is None else cwd)
+            self._with_vectors[asked_from] = covered > 0
+            self._vectors_wanted[asked_from] = covered < chunks
         except Exception:  # noqa: BLE001 - no repository, a locked index, out of time: the first question finds out itself
+            return False
+        return True
+
+    def vectors_take_part(self, cwd: Path | str | None = None) -> bool:
+        """Whether warming or the last question found that vectors take part for that directory."""
+        asked_from = str(self.default_cwd if cwd is None else cwd)
+        return bool(self._with_vectors.get(asked_from) or self._vectors_wanted.get(asked_from))
+
+    def vectors_wanted(self, cwd: Path | str | None = None) -> bool | None:
+        """Whether the worker has something to do for the directory a question was last asked from: chunks without a
+        vector, or the worker itself not there. None where nothing has been asked from there yet."""
+        return self._vectors_wanted.get(str(self.default_cwd if cwd is None else cwd))
+
+    def wake_worker(self) -> bool:
+        """Start the embedding worker and have it load its model, for a caller that knows vectors take part. Slow,
+        so for a thread that answers nobody. Never raises: whether the worker is awake."""
+        from .embed import worker
+        from .embed.client import EmbedClient, Unavailable
+
+        try:
+            client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=WAKE_SECONDS)
+            try:
+                client.embed(["awake"], kind="query")
+            finally:
+                client.close()
+        except Unavailable:
             return False
         return True
 
