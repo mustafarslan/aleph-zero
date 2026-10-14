@@ -34,7 +34,7 @@ from .lang.definitions import definitions
 from .store import transaction
 from .view import View
 
-GRAPH_VERSION = 6           # bump when what the readers extract changes: every row is then read again
+GRAPH_VERSION = 7           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 MENTION_LIMIT = 3000        # chunks taken from the text index for one name
 DEFINITION_LIMIT = 8        # definitions of one name that are answered for

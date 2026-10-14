@@ -235,7 +235,7 @@ def calls(profile: LanguageProfile, tree: Tree, data: bytes, found: list[Definit
     out: list[Call] = []
     for (name, owner, via, arity, chain), caller in zip(seen, inside):
         head, first = _head(name if owner is None else owner, via, chain, bound, receivers)
-        kind = _type_of(first, chain, bound, stated, generic) if head == "local" and owner is not None else ""
+        kind = _type_of(first, chain, bound, stated, generic, receivers) if head == "local" and owner is not None else ""
         lines: tuple[tuple[int, int], ...] = ()
         if head == "local" and owner is None and not via:
             # The nearest scope that binds the name, when every binding of it there is a function: a name also
@@ -303,8 +303,11 @@ def _innermost(found: list[Definition], positions: list[int]) -> list[int | None
     return answer
 
 
+SELF_BUILT = "^self"   # a type written as `^self.make()`: what the method's own object's `make` returns
+
+
 def _type_of(name: str, chain: tuple[int, ...], bound: dict[int, dict[str, set[int]]],
-             stated: dict[int, dict[str, list[str]]], generic: set[str]) -> str:
+             stated: dict[int, dict[str, list[str]]], generic: set[str], receivers: dict[int, str] | None = None) -> str:
     """The one type the scope that binds `name` states for it. '' when it states none, states two, binds
     the name again without saying (a loop over it, an unpacking), names a type parameter, or builds it
     with something the function binds itself (a factory passed in is not the file's function of that name)."""
@@ -319,7 +322,10 @@ def _type_of(name: str, chain: tuple[int, ...], bound: dict[int, dict[str, set[i
         return ""
     if kind.endswith("()"):
         builder = re.split(r"\.|::", kind[:-2])[0]
-        if any(builder in bound[each] for each in chain):
+        binder = next((each for each in reversed(chain) if builder in bound[each]), None)
+        if binder is not None and receivers and receivers.get(binder) == builder:
+            return SELF_BUILT + kind[len(builder):]      # `x = self.make()`: the method's own object, not a factory passed in
+        if binder is not None:
             return ""
     return kind
 

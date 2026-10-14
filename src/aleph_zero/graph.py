@@ -34,7 +34,7 @@ from pathlib import PurePosixPath
 from typing import NamedTuple
 
 from .lang.bindings import Binding, named_type
-from .lang.calls import Call
+from .lang.calls import SELF_BUILT, Call
 from .lang.definitions import Definition
 
 CANDIDATE_LIMIT = 20
@@ -923,6 +923,21 @@ class Graph:
         None when it cannot be told (the result of a call that is not certainly a constructor of these files)."""
         if not written.endswith("()"):
             return self._type(path, written)
+        if written.startswith(SELF_BUILT + "."):
+            # `x = self.make()`: the method of the class the call sits in, as `self.make()` itself is resolved.
+            name = written[len(SELF_BUILT) + 1:-2]
+            if not name.isidentifier():
+                return None                     # `self.store.make()`: not followed
+            built = self.resolve(path, Call(name, "self", 0, 0, caller, "member", "self"))
+            if built is None or not built.certain:
+                return None
+            target = built.targets[0]
+            returned = self._returned(target)
+            if not returned:
+                return None
+            if returned == "Self" and "." in target.qualified:
+                return [(target.path, target.qualified.rsplit(".", 1)[0])]
+            return self._type(target.path, returned)
         segments = _segments(written[:-2])
         if segments is None:
             return None

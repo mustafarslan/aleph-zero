@@ -707,3 +707,16 @@ def test_go_binds_the_first_name_of_a_call_that_also_returns_an_error():
     assert answers(GO_PAIRS, "app/app.go", "Query") == ("L1", "import-resolved", [("db/db.go", "Conn.Query")])
     # Not followed further: `row, err := conn.Query()` would need the method's own result read through `conn`'s type.
     assert answers(GO_PAIRS, "app/app.go", "Scan")[1] == "name"
+
+
+PY_SELF = {
+    "pkg/store.py": "class Store:\n    def save(self):\n        pass\n\nclass Cache:\n    def save(self):\n        pass\n",
+    "pkg/service.py": ("from .store import Store\n\nclass Service:\n    def make(self) -> Store:\n        return Store()\n\n"
+                       "    def run(self):\n        store = self.make()\n        store.save()\n"),
+}
+
+
+def test_python_takes_a_name_s_type_from_its_own_class_s_method_that_says_what_it_returns():
+    # `x = self.make()`: the method is the class's own and its signature says what it returns.
+    assert answers(PY_SELF, "pkg/service.py", "save") is not None
+    assert answers(PY_SELF, "pkg/service.py", "save")[2] == [("pkg/store.py", "Store.save")]
