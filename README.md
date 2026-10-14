@@ -1,121 +1,159 @@
 # Aleph Zero
 
 Local code search for coding agents. Aleph Zero (`aleph`) indexes a repository on your
-machine and answers "where is this handled?" with ranked file and line locations, for
-Claude Code (as an MCP server or a plugin) and on the command line.
+machine and answers the questions an agent asks before it edits code: where something is
+handled, where a name is defined, who calls it, and what the project has decided about it.
+It works as a Claude Code plugin, as an MCP server for any client, and on the command line.
 
-- **Always current.** Every answer reflects the working tree as it is now, uncommitted
-  edits included. There is no stale index to rebuild.
-- **Local.** Your code never leaves the machine. The network is used only when you ask:
-  to fetch grammars, the optional embedding model, or a repository you link by URL.
-- **Fast.** A question takes 25 to 160 ms on repositories of 4,000 to 90,000 chunks; a
-  cold index of Django takes about 3.5 seconds.
+- **Always current.** Every answer reflects the working tree as it is now, uncommitted edits
+  included. Nothing has to be rebuilt after a pull or a branch switch.
+- **Local.** Your code never leaves the machine. The network is used only when you ask: to
+  download grammars, the optional embedding model, or a repository you link by URL.
+- **Fast.** 25 to 160 ms a question on repositories of 4,000 to 90,000 chunks.
 
-## Features
+## What it does
 
-- **Ranked search** by words, identifiers (split from `camelCase` and `snake_case`) and
-  paths, fused into one ranking, with optional search by meaning from a local embedding model.
-- **Definitions and outlines**: where a name is defined; what a file defines, with line ranges.
-- **Call graph**: who calls a function and what it calls, each answer marked certain or
-  candidate; exact answers from a compiler's [SCIP](https://github.com/sourcegraph/scip)
-  index when you import one.
-- **Facts the code states**: routes, models and tables, environment variables, tasks,
-  queues and gRPC services, each with its file and line.
-- **Decision records**: the ADRs that govern a task or a file.
-- **Linked sources**: search documentation or code from another repository beside your own.
-- **Memory across sessions**: answers and notes kept per repository, recalled later with
-  a check of whether the code they cite has changed.
-- **Claude Code integration**: an MCP server, and a plugin that steers the agent to search
-  before it greps.
-- **Languages**: Python, TypeScript, JavaScript, Go, Rust, Java, C++ and C, plus Markdown
-  and reStructuredText. Other text files are searched as plain text.
+**Search.** Hybrid retrieval over code and documentation: full-text search (BM25) with
+identifiers split from `camelCase` and `snake_case`, a lookup of definitions by name, a
+match on file paths and, optionally, search by meaning with a local embedding model
+(EmbeddingGemma). The four are fused into one ranking. Results are file and line ranges with
+the definition's signature, sized to a token budget.
+
+**Code structure.** Definitions and file outlines for Python, TypeScript, JavaScript, Go,
+Rust, Java, C++ and C, read with tree-sitter. Markdown is split by heading; other text
+files, reStructuredText included, are searched in windows of lines.
+
+**Code graph.** Who calls a function and what it calls, resolved through imports, classes,
+inheritance and stated types. Each edge is marked certain or candidate. When you import a
+compiler's [SCIP](https://github.com/sourcegraph/scip) index, its exact answers are used for
+the files it still matches.
+
+**Architecture facts.** What the code states about the system: HTTP routes and where routers
+are mounted, models and tables, environment variables, background tasks, queues and gRPC
+services, each with its file and line. With an [oxn](docs/adr/ADR-007-relationship-to-oxn.md)
+`oxn.yaml`, the layer a file belongs to and what that layer may depend on.
+
+**Decision records.** Ranks a repository's ADRs for a task, or lists those that apply to a
+file, so the agent sees what was already decided.
+
+**Memory across sessions.** Answers and notes are kept per repository and recalled later.
+Each memory cites code by content, so a recall says whether that code has changed since. It
+is recalled by words and recency, and also by meaning when [Aeon](docs/adr/ADR-006-memory-layer.md)'s
+store is available.
+
+**Linked sources.** Documentation or code from another repository, searched beside your own
+and cited as `name:path`.
+
+**Claude Code plugin.** Starts the engine and steers the agent to search before it greps,
+in levels you choose: tool descriptions, ranked locations with the first prompt, and
+suggestions after a grep that found nothing. `/aleph` opens a side chat about the
+repository whose answers cite `path:line`.
 
 ## Requirements
 
-- Python 3.13, git, and [uv](https://docs.astral.sh/uv/). Developed and measured on macOS (Apple
-  Silicon); Linux is expected to work but has not been measured.
-- Optional, for search by meaning: cmake, ninja and a C++ compiler (the embedding server is
-  built locally), and 310 MB for the model. On Apple Silicon it runs on the GPU.
+- macOS on Apple Silicon (where it is developed and measured; Linux is expected to work but
+  has not been tested), git, [uv](https://docs.astral.sh/uv/), and Claude Code for the plugin.
+- For search by meaning: cmake, ninja and Xcode's command-line tools (the embedding server is
+  built locally from llama.cpp), and 310 MB for the model.
 
-## Install
+## Install with Claude Code
+
+### Once per machine
 
 ```sh
-git clone https://github.com/mustafarslan/aleph-zero.git
-cd aleph-zero
-uv tool install .            # puts `aleph` on your PATH
-aleph doctor                 # checks that everything is in place
+brew install uv cmake ninja
+xcode-select --install                      # the C++ compiler, if not installed yet
+
+git clone https://github.com/mustafarslan/aleph-zero.git ~/aleph-zero
+cd ~/aleph-zero
+uv tool install .                           # the `aleph` command
+uv tool update-shell                        # puts uv's tool directory on PATH (open a new terminal after)
+aleph setup --worker                        # builds the embedding server, downloads the model
+
+claude plugin marketplace add ~/aleph-zero
+claude plugin install aleph-zero@aleph-zero --config rung=3 --config graph=on
 ```
 
-For development, `uv sync` instead, then run commands as `uv run aleph …`. Keep the
-checkout: the Claude Code plugin is loaded from its `plugin/` directory and is not part of
-the installed package.
+Then allow the plugin to call the engine itself, which the higher steering levels and the
+side chat need. Add this to `~/.claude/settings.json` (merge it into what is there):
 
-Language grammars are downloaded the first time a file of that language is read
-(`aleph doctor --fetch-grammars` gets them all at once).
-
-## Quick start
-
-```sh
-cd your/project
-aleph search "where are refresh tokens rotated"
-aleph symbol refresh_token          # where a name is defined
-aleph outline src/auth/store.py     # what a file defines
-aleph status                        # what the index holds, and what is switched on
-aleph setup                         # the optional parts, asked once (see below)
+```json
+{ "permissions": { "allow": ["mcp__plugin_aleph-zero_aleph__*"] } }
 ```
 
-The first search indexes the repository. Later searches read only what changed.
-
-## Use with Claude Code
-
-**As an MCP server**, for every project:
+### Once per project
 
 ```sh
-claude mcp add --scope user aleph-zero -- "$(which aleph)" serve
+cd ~/code/your-project
+aleph setup --source ~/code/your-docs --embed --untracked-cache
+aleph status
+```
+
+- `--source` links a documentation (or code) repository: a path is read in place and
+  follows that checkout; a URL is cloned once (`aleph update` fetches it again). Repeat it
+  for each repository to link.
+- `--embed` makes vectors for the project and its linked sources, and switches search by
+  meaning on for this project. Do it for every project where you want it: by default it is
+  on only where the main language is JavaScript, TypeScript, C, C++ or Rust (see below).
+  Each project keeps its own vectors, so docs linked to three projects are embedded three
+  times (about 90 chunks a second).
+- `--untracked-cache` turns on git's untracked cache, which makes git's look at a large
+  worktree several times faster.
+- `aleph status` shows the main language, whether vectors are on and why, and the linked
+  sources. In Claude Code, `/aleph check` tests the plugin's connection to the engine.
+
+Nothing else is needed afterwards. Edits, pulls and branch switches are picked up at the
+next question, in the docs too, and missing vectors are made in the background.
+
+### Updating
+
+```sh
+cd ~/aleph-zero && git pull
+uv tool install --reinstall .               # the engine
+```
+
+The plugin is read from the checkout, so `git pull` updates it at the next session.
+
+### Plugin options
+
+Set at install (`--config KEY=VALUE`), with `claude plugin configure aleph-zero@aleph-zero`,
+or with `/plugin` in Claude Code.
+
+| Option | Values | What it does |
+|---|---|---|
+| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. |
+| `graph` | `off`/`on` (default `off`) | Also offer the agent the code-graph, architecture-facts and decision-record tools. Whether they help an agent has not been measured yet. |
+| `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
+| `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |
+
+### Other MCP clients
+
+The engine is a standard MCP server on standard input and output:
+
+```sh
+claude mcp add --scope user aleph-zero -- "$(which aleph)" serve     # Claude Code, without the plugin
 ```
 
 The agent gets `search` (always loaded), and `symbol`, `outline`, `status`, `recall` and
-`remember` on demand. Each tool takes the working directory, so one server answers for
-any worktree.
+`remember` on demand; with `ALEPH_GRAPH=1` also `references`, `facts` and `decisions`. Each
+tool takes the working directory, so one server answers for any worktree.
 
-**As a plugin**, which adds steering towards search:
+## Command line
 
 ```sh
-claude --plugin-dir /path/to/aleph-zero/plugin
+aleph search "where are refresh tokens rotated"
+aleph symbol refresh_token          # where a name is defined
+aleph outline src/auth/store.py     # what a file defines
+aleph callers TokenStore.get        # who calls it
+aleph facts route --like users      # routes the code declares
+aleph decisions "cache invoice totals in redis"
 ```
 
-The plugin's `rung` option (`/config`) sets how far it steers:
+The first search indexes the repository; later ones read only what changed. `aleph setup`
+on its own lists the optional parts and asks about each once on a terminal; without a
+terminal it only prints the list.
 
-| Rung | What it adds |
-|---|---|
-| 0 | The tools only |
-| 1 (default) | Tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions (`grep_pointer`: on/off) |
-| 2 | Ranked locations attached to the first prompt of a session, when the engine is confident (`lines`: `places`, or `signatures` to add each file's first signature) |
-| 3 | Ranked locations appended to a recursive `grep`, `rg`, `git grep` or `find` that found nothing |
-
-`/aleph` opens a side chat about the repository whose answers cite `path:line`;
-`/aleph check` tests the connection to the engine and `/aleph stats` shows the session's
-tool use. Rungs 2 and 3 and the side chat call the engine themselves, which Claude Code
-allows only when its tools are: add `"mcp__plugin_aleph-zero_aleph__*"` to
-`permissions.allow`.
-
-## Setup
-
-Search by words and names needs no setup. `aleph setup` lists the optional parts, says
-what each costs, and asks about each once on a terminal:
-
-| Part | What it does | Flag (for scripts) |
-|---|---|---|
-| Claude Code | Prints the `claude mcp add` command; never edits Claude Code's settings | — |
-| Embedding worker | Builds the local server and downloads the model (310 MB, network) | `--worker` |
-| Linked sources | Searches another repository beside this one | `--source PATH_OR_URL` |
-| Search by meaning | Uses it in this repository (`--dense`, vectors made in the background) or makes the vectors now (`--embed`) | `--embed`, `--dense`, `--no-dense` |
-| Git's untracked cache | Speeds up git's look at the worktree; suggested from 3,000 files | `--untracked-cache` |
-
-Answers are kept; `aleph setup --again` asks about declined parts again. Without a
-terminal it only prints the list (`--json` for data). `aleph doctor` names what is still open.
-
-## Commands
+### All commands
 
 | Command | What it does |
 |---|---|
@@ -165,8 +203,8 @@ model after ten idle minutes and exits after thirty.
 
 | Variable | Effect |
 |---|---|
-| `ALEPH_DENSE=1\|0` | Search by meaning on or off, overriding the language default |
-| `ALEPH_GRAPH=1` | Offer the agent the call-graph, facts and decisions tools as well |
+| `ALEPH_DENSE=1\|0` | Search by meaning on or off, overriding the project's setting |
+| `ALEPH_GRAPH=1` | Offer the code-graph, facts and decisions tools (the plugin's `graph` option sets it) |
 | `ALEPH_SCIP_MEMORY_MB` | Memory limit for `aleph scip run` (2,048 MB by default; JavaScript 3,072) |
 | `ALEPH_AEON_LIB` | Path to Aeon's core library, for recalling memories by meaning |
 | `XDG_CACHE_HOME` | Where the machine-wide cache lives (`~/.cache` by default) |
@@ -220,26 +258,28 @@ minified files are skipped.
 ## Uninstall
 
 ```sh
-aleph embed stop                                   # stop the embedding worker, if running
-claude mcp remove aleph-zero                       # if you added the MCP server
+claude plugin uninstall aleph-zero@aleph-zero
+claude plugin marketplace remove aleph-zero
+claude mcp remove aleph-zero                          # only if you added the server without the plugin
+aleph embed stop                                      # stop the embedding worker, if running
 uv tool uninstall aleph-zero
 ```
 
 Then remove what it kept:
 
 ```sh
-rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/aleph-zero" # worker, model, linked clones, settings
-rm -rf "/tmp/aleph-zero-$(id -u)"                   # the worker's socket, where the cache path was too long
-rm -f ~/.claude/plugins/store/aleph-zero_*.json     # the plugin's meter, if you used the plugin
-rm -rf "$(git rev-parse --git-common-dir)/aleph-zero"   # in each repository you used it in
-git update-index --no-untracked-cache               # optional: in each worktree where setup switched it on
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/aleph-zero"   # worker, model, URL clones, machine settings
+rm -rf "/tmp/aleph-zero-$(id -u)"                     # the worker's socket, if the cache path was too long for one
+rm -f ~/.claude/plugins/store/aleph-zero_*.json       # the plugin's session meter
+rm -rf "$(git rev-parse --git-common-dir)/aleph-zero" # in each project: its index, vectors, memories, settings
+git update-index --no-untracked-cache                 # optional, in each worktree where setup turned it on
+rm -rf ~/aleph-zero                                   # the checkout
 ```
 
-If you used the plugin, also remove the `--plugin-dir` flag, and the `permissions.allow`
-and `pluginConfigs` entries from your Claude Code settings. Remove any lines you added from
-`aleph update --print-hook` (git hooks, cron or launchd), then delete the checkout. The
-grammar cache is shared with other tools that use `tree-sitter-language-pack`; delete it
-only if nothing else needs it.
+Also remove the `permissions.allow` entry from your Claude Code settings, and any lines you
+added from `aleph update --print-hook` (git hooks, cron or launchd). The grammar cache
+(`tree-sitter-language-pack`) is shared with other tools; delete it only if nothing else
+uses it.
 
 ## Documentation
 
