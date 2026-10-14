@@ -1,7 +1,7 @@
 {
   "name": "aleph-zero",
   "displayName": "Aleph Zero",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local code search for coding agents: ranked code locations by meaning or by name, always matching the working tree, and steering that makes Claude Code use it before recursive grep",
   "author": {
     "name": "mustafarslan"
@@ -48,11 +48,7 @@
     "graph": {
       "type": "string",
       "title": "Call graph, facts and decision tools",
-      "description": "Also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Off until measured to help an agent.",
-      "options": [
-        "off",
-        "on"
-      ],
+      "description": "on or off (default off). On: also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Off until measured to help an agent.",
       "default": "off"
     }
   }

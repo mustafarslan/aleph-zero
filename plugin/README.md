@@ -45,6 +45,41 @@ Rungs 2 and 3 and the side chat need the engine's tools allowed: add
 - **Fetches** only when you ask the engine to: language grammars, the embedding model and
   llama.cpp source (`aleph-zero setup --worker`), and repositories you link by URL.
 
+## How the plugin works
+
+The plugin has one MCP server (`aleph`, the local engine) and one mod, `hooks/register.js`.
+These are all the mod's hooks, and everything each one does:
+
+| Hook | What it does |
+|---|---|
+| `session.start` | Registers the `/aleph` command and notes the session's working directory. |
+| `command.run` (`/aleph`) | Opens the side chat pane, or answers `/aleph stats`, `/aleph check` and `/aleph check model`. |
+| `ui.render` (the pane) | Draws the side chat. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
+| `tool.describe` (the engine's tools) | At rung 1 and above, replaces the descriptions of `search`, `symbol`, `outline` and `status` with tuned ones and loads them up front instead of on demand. |
+| `tool.describe` (Grep, Glob) | At rung 1 and above, with `grep_pointer` on, appends one sentence to their descriptions pointing to `search`. It changes nothing else about them. |
+| `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right. |
+| `prompt.submit` | At rung 2 and above, for the first prompt of a session that is a question, asks the engine's `search` with the prompt's first 2,000 characters and, when the top result is confident, attaches up to five file locations to that prompt as context. The prompt's own text is not changed. |
+| `tool.call` (Bash) | At rung 3, after a recursive `grep`, `rg`, `git grep` or `find` has run and found nothing, asks the engine's `search` with its pattern and appends up to five ranked locations to that command's output. The command and its input are not changed, and nothing is done for any other command. |
+| `tool.call` (all tools) | Counts tool calls for `/aleph stats`; passes every call on unchanged. |
+| `turn.step`, `turn.complete` | Add up the session's token counts for `/aleph stats` and keep the last session's figures in the plugin store. |
+| `session.end` | Resets the one-prompt allowance of rung 2 after `/clear`. |
+
+**Tools the mod calls itself:** the engine's own `search` and `symbol` (prompt context at rung 2,
+suggestions at rung 3, excerpts for the side chat), `remember` (to keep a side-chat answer in
+the repository's memory); `/aleph check` sends one test `search`. It calls no other tool, runs no
+shell command, and never stands in for a tool: every tool call goes on to Claude Code and its
+real result is returned, with the rung 3 addition above.
+
+**What the mod sends, and where:**
+
+- To the local engine (`aleph-zero serve`, on this machine): search queries made from your
+  prompt or a grep pattern, and side-chat answers to keep.
+- To Claude, through Claude Code's own model connection (as any Claude Code request): your
+  side-chat question with excerpts of the matching code, and for `/aleph check model` one short
+  test request. Nothing is sent when you do not use the side chat.
+- To Claude Code's plugin store, on this machine: the session meter and the side chat's model
+  and effort setting.
+
 ## License
 
 MIT

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- The plugin's `graph` option is free text (`on` or `off`), as Anthropic's plugin directory requires for an option passed
+  to the MCP server.
+- The plugin folder has an icon, and its README describes each hook, the tools the plugin calls and what it sends where.
+
 ## 0.1.0
 
 First public release.
