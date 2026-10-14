@@ -16,7 +16,9 @@ from pathlib import Path
 from . import filters, gitio, plain
 
 _TREE_CACHE: dict[tuple[str, str], tuple[dict[str, str], tuple[str, ...]]] = {}
-_TREE_CACHE_SIZE = 8
+# Trees of the commits asked about, the one asked for last kept longest. Few: a tree of a repository of 42,000 files is
+# 8.6 MB here, and a session needs its worktree's and its linked sources' (agy, round 2 of the improvements).
+_TREE_CACHE_SIZE = 4
 _CACHE_LOCK = threading.Lock()
 # Per worktree with a sparse checkout: what its files were filtered from, and the result.
 _SPARSE_CACHE: dict[Path, tuple[tuple, dict[str, str], int]] = {}
@@ -102,7 +104,9 @@ def forget_trees() -> None:
 def _tree(root: Path, common_dir: Path, tree: str) -> tuple[dict[str, str], tuple[str, ...]]:
     key = (str(common_dir), tree)
     with _CACHE_LOCK:  # the server's call thread and its embedding thread both come here
-        found = _TREE_CACHE.get(key)
+        found = _TREE_CACHE.pop(key, None)
+        if found is not None:
+            _TREE_CACHE[key] = found        # asked for again: the last to be dropped
     if found is None:
         found = gitio.read_tree(root, tree)
         with _CACHE_LOCK:

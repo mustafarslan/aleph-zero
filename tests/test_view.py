@@ -173,3 +173,25 @@ def test_a_directory_that_is_no_repository_leaves_no_git_process_behind_and_is_r
     assert "notes.py" in view.files and view.plain
     running = subprocess.run(["pgrep", "-f", f"git -C {plain} status"], capture_output=True, text=True).stdout.split()
     assert running == []
+
+
+def test_the_trees_remembered_are_the_ones_in_use_and_few(repo, monkeypatch):
+    # A tree of a repository of 42,000 files is 8.6 MB in memory; a session that saw eight commits kept eight, and the
+    # first one remembered was dropped first even when it was the one asked for at every question.
+    from aleph_zero import gitio, view as views
+
+    read: list[str] = []
+    real = gitio.read_tree
+    monkeypatch.setattr(gitio, "read_tree", lambda root, tree: read.append(tree) or real(root, tree))
+    views.forget_trees()
+    trees = []
+    for n in range(6):
+        repo.write("src/counter.py", f"N = {n}\n")
+        repo.commit(f"commit {n}")
+        trees.append(repo.git("rev-parse", "HEAD^{tree}").strip())
+    info = gitio.repo_info(repo.root)
+    for tree in trees:
+        views._tree(repo.root, info.common_dir, tree)
+        views._tree(repo.root, info.common_dir, trees[0])     # the tree in use is asked for between the others
+    assert len(views._TREE_CACHE) == views._TREE_CACHE_SIZE == 4
+    assert read.count(trees[0]) == 1                          # never dropped while in use
