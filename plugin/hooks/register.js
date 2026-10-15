@@ -321,6 +321,18 @@ export function register(on, options) {
         ? [Text({ dimColor: true, children: [turn.tokens + ' tokens · ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited')] })]
         : []),
     ])
+    // The pane's own keys, pressed while the pane (not the question field) has the keyboard.
+    const step = (list, value) => list[(list.findIndex((item) => item.value === value) + 1) % list.length].value
+    const choose = async (what, value) => {
+      chat[what] = value
+      $.ui.invalidate('ui.render')
+      await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
+    }
+    const keys = [
+      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: () => choose('model', step(MODELS, chat.model)) }),
+      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: () => choose('effort', step(EFFORTS, chat.effort)) }),
+      Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
+    ]
     const controls = []
     if (chat.busy) {
       controls.push(Button({
@@ -352,6 +364,9 @@ export function register(on, options) {
         ...turns,
         ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
         ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
+        Box({ flexDirection: 'row', columnGap: 3, children: keys }),
+        Text({ dimColor: true, children: ['Esc leaves the question field; then c closes (or Esc again), m and e change model and effort. '
+          + 'ctrl+x tab comes back here; /aleph opens it again. How far the plugin steers: /plugin, then aleph-zero.'] }),
         // Said in the pane itself: this is the user's conversation being kept on disk.
         Text({ dimColor: true, children: ['Answers and inserted notes are remembered for later sessions: `aleph-zero memory list`, `aleph-zero memory forget`.'] }),
         Input({

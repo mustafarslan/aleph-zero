@@ -11,7 +11,7 @@ const usage = { input_tokens: 900, output_tokens: 60, cache_read_input_tokens: 0
 
 // Everything Claude Code would answer, with counters for what must stay untouched.
 function world(on: any, options: { answer?: string, model?: () => any } = {}) {
-  const seen = { fills: [] as any[], appends: 0, submits: 0, models: [] as any[], engine: [] as any[], opened: [] as any[] }
+  const seen = { fills: [] as any[], appends: 0, submits: 0, models: [] as any[], engine: [] as any[], opened: [] as any[], closed: [] as any[] }
   const saved = new Map<string, any>()
   const clock = mock.clock(on)
   on('store.get', ($: any, e: any) => ({ value: saved.get(e.key) }))
@@ -22,6 +22,10 @@ function world(on: any, options: { answer?: string, model?: () => any } = {}) {
   on('ui.open', ($: any, e: any) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
+  })
+  on('ui.close', ($: any, e: any) => {
+    seen.closed.push(e)
+    return { value: undefined }
   })
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['not ours'] }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: FULL_NAME } }))
@@ -75,7 +79,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(seen.models.length).toBe(1)
     const sent = JSON.stringify(seen.models[0])
     expect(sent).toContain('You have no tools')
-    expect(sent).toContain('### src/auth/token_store.py:4-6')
+    expect(sent).toContain('<source location=\\"src/auth/token_store.py:4-6\\"')
     expect(sent).toContain('haiku')
     await ui.unmount()
   })
@@ -139,4 +143,18 @@ test('/aleph check model says whether the side chat can call the model, without 
   expect(fine).not.toContain('SECRET')
   mode = 'refused'
   expect((await $.command.run({ command: 'aleph', args: 'check model' })).text).toContain('refused')
+})
+
+
+test('the pane says how to close it and how to change its settings, and has keys for both', async ($, on) => {
+  const { seen, saved } = world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Esc/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\/plugin/ })).toBeDefined()
+  await ui.press({ key: 'model-next' })
+  await ui.press({ key: 'effort-next' })
+  expect(saved.get('aleph-zero.chat-settings')).toEqual({ model: 'sonnet', effort: 'high' })
+  await ui.press({ key: 'close' })
+  expect(JSON.stringify(seen.closed[0])).toContain('aleph-chat')
 })
