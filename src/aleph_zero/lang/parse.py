@@ -50,6 +50,10 @@ def fetch_missing(grammars: set[str]) -> None:
     try:
         pack.download(sorted(wanted))
     except Exception as exc:  # noqa: BLE001 - offline, a proxy: the files are read by windows and read again later
+        try:
+            wanted -= set(pack.downloaded_languages())      # those that came before it failed are not failures
+        except Exception:  # noqa: BLE001
+            pass
         for name in wanted:
             _FAILED[name] = (time.monotonic(), exc)
 

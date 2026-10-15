@@ -211,3 +211,37 @@ def test_a_whole_part_left_by_an_earlier_try_is_checked_without_asking_for_more(
     part.parent.mkdir(parents=True, exist_ok=True)
     part.write_bytes(CONTENT)
     assert embed_setup.install_model().read_bytes() == CONTENT
+
+
+def test_a_connection_that_drops_early_is_resumed_and_what_came_is_never_thrown_away(home, monkeypatch):
+    # http.client returns an empty read when the peer closes early: that is not the end of the file.
+    asked = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            start = int(self.headers["Range"].removeprefix("bytes=").rstrip("-")) if self.headers.get("Range") else 0
+            asked.append(start)
+            body = CONTENT[start:]
+            self.send_response(206 if start else 200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body if start else body[:len(body) // 2])      # the first connection drops halfway
+            self.close_connection = True
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(embed_setup, "MODEL_URL", f"http://127.0.0.1:{server.server_port}/model.gguf")
+    try:
+        assert embed_setup.install_model().read_bytes() == CONTENT
+        assert asked == [0, len(CONTENT) // 2]
+        worker.model().unlink()
+        asked.clear()
+        monkeypatch.setattr(embed_setup, "RECONNECTS", 0)                  # no second connection allowed
+        with pytest.raises(embed_setup.SetupError, match="again"):
+            embed_setup.install_model()
+        assert worker.model().with_suffix(".part").stat().st_size == len(CONTENT) // 2      # kept for the next try
+    finally:
+        server.shutdown()

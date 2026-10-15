@@ -147,7 +147,7 @@ def test_the_hook_lines_are_printed_and_nothing_is_installed(repo, capsys):
 
     assert _update(repo, "--print-hook") == 0
     out = capsys.readouterr().out
-    engine = Path(sys.executable).with_name("aleph")
+    engine = Path(sys.executable).with_name("aleph-zero")
     assert f"{engine} update --quiet" in out and "--minutes" in out and "post-merge" in out and "post-checkout" in out
     assert '[ "$3" = "1" ] || exit 0' in out and "& )" in out and "--no-fetch" in out   # a change of branch only, detached, and no network from a hook
     hooks = Path(gitio.git(repo.root, "rev-parse", "--path-format=absolute", "--git-path", "hooks").decode().strip())
@@ -206,9 +206,9 @@ def test_the_engine_s_path_is_quoted_in_the_printed_lines(tmp_path, monkeypatch)
 
     tools = tmp_path / "some one" / "venv" / "bin"
     tools.mkdir(parents=True)
-    (tools / "aleph").write_text("#!/bin/sh\n")
+    (tools / "aleph-zero").write_text("#!/bin/sh\n")
     monkeypatch.setattr(sys, "executable", str(tools / "python"))
-    assert f"'{tools / 'aleph'}' update" in update.hook_lines()
+    assert f"'{tools / 'aleph-zero'}' update" in update.hook_lines()
 
 
 def test_a_fetch_nobody_watches_does_not_ask_and_does_not_carry_the_caller_s_options(monkeypatch):
@@ -341,12 +341,12 @@ def test_the_printed_hook_stays_out_of_a_rebase_and_a_bisect(tmp_path, repo):
 def test_the_engine_is_named_by_where_it_is_or_by_where_the_shell_finds_it(tmp_path, monkeypatch):
     import sys
 
-    assert firstrun.engine_path().endswith("/aleph")               # here: beside the Python this runs under
+    assert firstrun.engine_path().endswith("/aleph-zero")          # here: beside the Python this runs under; never `aleph`, TeX's
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Python.app" / "Contents" / "MacOS" / "Python"))      # a Python that is an application
     monkeypatch.setattr("shutil.which", lambda name: f"/opt/tools/bin/{name}")
-    assert firstrun.engine_path() == "/opt/tools/bin/aleph"        # nothing beside that Python: what the shell would run
+    assert firstrun.engine_path() == "/opt/tools/bin/aleph-zero"   # nothing beside that Python: what the shell would run
     monkeypatch.setattr("shutil.which", lambda name: None)
-    assert firstrun.engine_path() == "aleph"                       # and failing that, its name, which at least says what is missing
+    assert firstrun.engine_path() == "aleph-zero"                  # and failing that, its name, which at least says what is missing
 
 
 def test_an_update_also_does_the_daily_collection_a_query_would_have_done(repo, capsys):

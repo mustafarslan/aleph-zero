@@ -267,7 +267,7 @@ def test_the_command_for_claude_code_names_an_engine_that_can_be_started(repo, c
 
     # Under `uv run` the checkout's `aleph` is on PATH, and in Claude Code's own environment it is not: the name
     # alone would not start there. Where this engine is, is always right.
-    here = Path(sys.executable).with_name("aleph")
+    here = Path(sys.executable).with_name("aleph-zero")         # never `aleph`, which TeX Live also installs
     for found in (lambda name: None, lambda name: f"/somewhere/else/{name}"):
         monkeypatch.setattr("shutil.which", found)
         assert _setup(repo) == 0
@@ -360,3 +360,24 @@ def test_a_no_to_git_s_untracked_cache_is_not_answered_with_advice_to_change_git
     _terminal(monkeypatch, "y", "n", "", "n")
     assert _setup(repo) == 0
     assert "git config --global" not in capsys.readouterr().out
+
+
+def test_the_worker_alone_does_not_index_a_directory_that_is_not_a_project(tmp_path, capsys, monkeypatch):
+    # `aleph setup --worker` in ~/Downloads must not walk thousands of files into the cache.
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "notes.py").write_text("def later():\n    return 1\n")
+    monkeypatch.setattr(embed_setup, "install_binary", lambda source=None, report=None: "worker")
+    monkeypatch.setattr(embed_setup, "install_model", lambda local=None, report=None: "model")
+    assert cli.main(["--cwd", str(downloads), "setup", "--worker"]) == 0
+    assert "installed worker and model" in capsys.readouterr().out
+    assert not list((settings.machine_file().parent / "index").glob("*"))      # nothing indexed for it
+
+
+def test_a_yes_in_the_menu_says_what_it_installed(repo, capsys, monkeypatch):
+    monkeypatch.setattr(embed_setup, "install_binary", lambda source=None, report=None: "the-worker")
+    monkeypatch.setattr(embed_setup, "install_model", lambda local=None, report=None: "the-model")
+    _terminal(monkeypatch, "y", "y", "", "y")                      # Claude Code, worker: yes, no sources, git's cache: yes
+    assert _setup(repo) == 0
+    out = capsys.readouterr().out
+    assert "installed the-worker and the-model" in out and "untracked cache is on" in out

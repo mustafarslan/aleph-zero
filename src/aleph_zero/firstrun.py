@@ -150,10 +150,10 @@ def engine_path() -> str:
     the `aleph` beside the Python it runs under. Under `uv run` the name alone is on PATH and elsewhere it is
     not. A Python that is an application bundle has nothing beside it: then what the shell finds, and failing
     that the name, which at least says what is missing."""
-    beside = Path(sys.executable).with_name("aleph")
+    beside = Path(sys.executable).with_name("aleph-zero")     # never `aleph`: TeX Live installs a program of that name
     if beside.exists():
         return str(beside)
-    return shutil.which("aleph") or "aleph"
+    return shutil.which("aleph-zero") or "aleph-zero"
 
 
 # From how many files git's untracked cache is suggested (the owner's yes, 2026-10-14): it took a question's look at
@@ -277,7 +277,7 @@ class Menu:
         elif step.key == "worker":
             if self._yes("Install the embedding worker and its model?", step.suggested):
                 settings.answer(kept, "worker", None)  # what was declined before is wanted now; done is what is then found
-                self.act("worker")
+                self.say(f"  {self.act('worker')}")
             else:
                 settings.answer(kept, "worker", "declined" if step.suggested else "not-needed")
         elif step.key == "sources":
@@ -304,6 +304,6 @@ class Menu:
         elif step.key == "untracked_cache":
             if self._yes("Switch git's untracked cache on for this worktree (in its index; no configuration is changed)?", step.suggested):
                 settings.answer(kept, "untracked_cache", None)
-                self.act("untracked_cache")
+                self.say(f"  {self.act('untracked_cache')}")
             else:
                 settings.answer(kept, "untracked_cache", "declined")

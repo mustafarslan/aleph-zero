@@ -719,6 +719,11 @@ def test_files_read_while_their_grammar_could_not_load_are_read_again_once_it_lo
     assert again.indexed == 0                                           # still offline: not read again on every query
 
     monkeypatch.setattr(parse.pack, "get_parser", real)               # the grammar arrives
+    chunks = _total(index, "blob_chunks")
+    status_like = index.sync(build_view(repo.root), budget_seconds=0.0)   # `status` and `doctor` give no time
+    assert (status_like.indexed, status_like.pending) == (0, 0)
+    assert _total(index, "blob_chunks") == chunks                      # nothing taken away before its replacement
+    assert search(index, build_view(repo.root), "revokeAllSessions")   # still found by words meanwhile
     report = index.sync(build_view(repo.root))
     assert report.indexed == 2                                          # the two Python files, not the Markdown
     assert _total(index, "symbols") > 0

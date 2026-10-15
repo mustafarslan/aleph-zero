@@ -281,16 +281,15 @@ def _setup(args) -> int:
     # home directory, which is not walked, and that is where the README's first step runs `setup --worker`.
     if args.worker:
         flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
-    try:
-        status, found, steps = now()
-    except plain.Refused:
-        if not args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense:
-            raise                                               # a project's flag needs a project
+    project_flags = bool(args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
+    if args.worker and not project_flags and not _in_repository(args.cwd):
+        # Not a project (the home directory, ~/Downloads): nothing of it is walked for a list that is a project's.
         if args.json:
             print(json.dumps(firstrun.as_json([]), indent=2))
         else:
             say(f"\nThe rest of the list is a project's: run `{COMMAND} setup` in one.")
         return 2 if failed else 0
+    status, found, steps = now()
     repo_file = Path(status["index"]).parent / "settings.json"
     flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
 
@@ -600,6 +599,14 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
+
+
+def _in_repository(cwd: Path) -> bool:
+    try:
+        gitio.common_dir(cwd)
+    except gitio.GitError:
+        return False
+    return True
 
 
 def _cwd_after_the_command_too(parser: argparse.ArgumentParser) -> None:

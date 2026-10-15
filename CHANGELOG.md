@@ -7,12 +7,14 @@ From an end-to-end run as a new user (install from GitHub, every command, offlin
 - `aleph setup --worker` works from any directory. In a new terminal, which starts in the home directory,
   it refused the home directory and installed nothing: the first command of the install failed.
 - Files read while their grammar could not load (offline, behind a proxy) are read again once it loads.
-  Before, they kept no definitions until each file changed: `symbol` and `callers` stayed empty.
+  Before, they kept no definitions until each file changed: `symbol` and `callers` stayed empty. They
+  stay searchable by words until their new rows are stored.
   A command on a terminal says when a grammar could not load, and says before it fetches one; only the
   grammars a repository needs are fetched.
 - The model download names its source and size, shows percent, speed and time left, replaces a
   connection that stays slow (the CDN's speed differs between connections: 40 KB/s and 2.9 MB/s were
-  measured for the same bytes), and resumes a part left whole. Two installs at once wait for each other.
+  measured for the same bytes) or ends early, never throws away what came, and resumes a part left
+  whole. Two installs at once wait for each other. A yes in the menu says what it installed.
 - `aleph setup`: a no to the worker where vectors do not help no longer silences it in repositories
   where they do; with the plugin installed, Claude Code counts as connected and no second server is
   suggested; the plugin is offered first.
@@ -20,7 +22,11 @@ From an end-to-end run as a new user (install from GitHub, every command, offlin
 - Ctrl-C, a closed pipe and file errors end in one line instead of a traceback; `--cwd` is also taken
   after the command; empty answers say so; `embed setup --model-file` checks the file before building.
 - The plugin's `graph` option is on with `true` or `yes` as well as `on`.
-- When the cache path is too deep for a socket, each cache gets its own worker socket under /tmp.
+- When the cache path is too deep for a socket, each cache gets its own worker socket under /tmp. A worker
+  of 0.1.1 still running there on update is not seen by 0.1.2: a second one starts, and the old one stops
+  by itself after thirty idle minutes.
+- The engine named in printed `claude mcp add` and git-hook lines is `aleph-zero`, never `aleph`.
+- `aleph setup --worker` outside a git repository installs the worker without walking the directory.
 - Dependencies locked at the versions a new install resolves (apsw 3.54, tree-sitter-language-pack 1.22.1).
 
 ## 0.1.1

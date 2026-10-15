@@ -117,9 +117,15 @@ def _download(part: Path, report) -> None:
                                 slow = True     # this connection crawls: a new one continues from here
                                 break
                             window_at, window = now, 0
-            if not slow:
-                break
-        _progress(report, live, part.stat().st_size, total or 0, got / max(time.monotonic() - (started or 0), 1e-6), last=True)
+            if not slow and (total is None or done >= total):
+                break               # the whole file; a connection that ended early is continued like a slow one
+        else:
+            have = part.stat().st_size if part.exists() else 0
+            if total is not None and have < total:
+                raise SetupError(f"the download stopped at {have / 1e6:.0f} of {total / 1e6:.0f} MB; run setup again "
+                                 f"to continue from there")
+        if total is not None:
+            _progress(report, live, part.stat().st_size, total, got / max(time.monotonic() - started, 1e-6), last=True)
     except (urllib.error.URLError, OSError) as exc:
         raise SetupError(f"the model could not be downloaded from {MODEL_URL}: {exc}; run setup again to resume") from exc
 
