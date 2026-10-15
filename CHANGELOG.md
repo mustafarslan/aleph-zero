@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.12
+
+- `/aleph configure`: Esc in the source field leaves the field and keeps the pane (what was typed stays); a second
+  Esc closes it. Before, Esc there closed the whole pane.
+- The vectors line paces itself: its next look at the engine waits at least 30 times what the last one took, so on a
+  very large worktree it never takes much of the server's time.
+- Documentation answers measured on 60 new questions (36 on six repositories' own docs, 24 on Vue's docs linked to
+  vue/core), made so that nobody who built Aleph wrote or answered one: Aleph finds 81 to 83% of the answering
+  documents in ten results, against 96 to 98% for whole-file BM25. Three ways of arranging code and documentation were
+  measured by a rule written first; none passed its second draw, so the arrangement is unchanged (DEFERRED, entry 2).
+
 ## 0.1.11
 
 - How far vectors are made is shown while they are being made, wherever you are: one short line under the prompt

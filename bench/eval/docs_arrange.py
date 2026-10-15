@@ -97,7 +97,9 @@ def score_rows(rows, view_of, client, form="full") -> list[dict]:
         index.conn.close()
         results.append({"instance": row["instance_id"], "repo": row["repo"], "category": row.get("category"),
                         "draw": row.get("draw"), "gold": row["gold"], "files": found,
-                        "scores": {arr: {arm: bench.score(row["gold"], files)["recall@10"] for arm, files in arms.items() if files}
+                        # An arm that ran and named no file scores 0; the with-vectors arm is left out only where it did not run.
+                        "scores": {arr: {arm: bench.score(row["gold"], files)["recall@10"] for arm, files in arms.items()
+                                         if arm == "lexical" or nearest}
                                    for arr, arms in found.items()}})
         print(f"{number:4}/{len(rows)} {row['instance_id']:32} " + " ".join(
             f"{arr}:{results[-1]['scores'][arr].get('lexical', 0):.2f}" for arr in ARRANGEMENTS), file=sys.stderr, flush=True)
