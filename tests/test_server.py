@@ -562,3 +562,16 @@ def test_the_graph_switch_takes_the_plugin_option_s_words_as_well(monkeypatch):
                            ("true", True), ("ON", True), ("yes", True), ("false", False), ("no", False)):
         monkeypatch.setenv("ALEPH_GRAPH", value)
         assert server.graph_enabled() is enabled, value
+
+
+def test_the_status_from_the_server_says_whether_vectors_are_being_made_now(repo, monkeypatch):
+    # The plugin's status line reads this: making, waiting (and why) or idle, and the rate of the last round.
+    from types import SimpleNamespace
+
+    from aleph_zero.engine import Engine
+
+    monkeypatch.setattr(server, "_BACKGROUND", SimpleNamespace(state="waiting", reason="the worker did not answer", rate=88.5))
+    status = json.loads(server._run(Engine(repo.root), "status", {"format": "json"}))
+    assert status["vectors"]["making"] == {"state": "waiting", "reason": "the worker did not answer", "chunks_per_second": 88.5}
+    monkeypatch.setattr(server, "_BACKGROUND", None)
+    assert "making" not in json.loads(server._run(Engine(repo.root), "status", {"format": "json"}))["vectors"]

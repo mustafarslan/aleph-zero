@@ -225,6 +225,9 @@ class _Background:
         self._wanted: queue.Queue = queue.Queue()
         self._stopping = threading.Event()
         self.rounds = 0  # times the thread has finished with a worktree
+        # What it is doing, for `status` (a person watching vectors being made): "making", "waiting" (with why) or
+        # "idle"; and the rate of its last round that made any, in chunks a second.
+        self.state, self.reason, self.rate = "idle", "", 0.0
         self._thread = threading.Thread(target=self._work, name="aleph-embed", daemon=True)
         self._thread.start()
 
@@ -264,20 +267,31 @@ class _Background:
                 try:
                     if not self._engine.dense_enabled(cwd):
                         break  # this worktree's language has no verdict in favour of vectors
+                    self.state, self.reason = "making", ""
                     report = self._engine.embed(cwd, budget_seconds=self.ROUND_SECONDS, stop=self._stopping.is_set,
                                                 sync_seconds=0.0)  # indexing is the foreground's job
                 except Exception:  # noqa: BLE001 - not a repository any more, a locked index: try again on the next call
                     break
+                if report.embedded and report.seconds > 0:
+                    self.rate = round(report.embedded / report.seconds, 1)
                 if report.remaining == 0 or not self._wanted.empty():
                     break
-                if report.reason and self._stopping.wait(self.RETRY_SECONDS):
-                    break
+                if report.reason:
+                    self.state, self.reason = "waiting", report.reason
+                    if self._stopping.wait(self.RETRY_SECONDS):
+                        break
+            self.state, self.reason = "idle", ""
             self.rounds += 1
+
+
+_BACKGROUND: _Background | None = None     # this process's, for `status` to say what it is doing
 
 
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     """Answer requests from `incoming` on `outgoing` until the input closes."""
+    global _BACKGROUND
     background = _Background(engine.default_cwd, engine.dense) if engine.dense is not False else None
+    _BACKGROUND = background
     write_lock = threading.Lock()
     state = threading.Lock()      # guards the three names below
     calls: queue.Queue = queue.Queue()
@@ -419,6 +433,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     worker.join(timeout=5)
     if background is not None:
         background.stop()
+    _BACKGROUND = None
     return 0
 
 
@@ -539,6 +554,9 @@ def _run(engine: Engine, name: str, args: dict) -> str:
         result = engine.outline(args["path"], cwd=cwd, timeout_ms=args.get("timeout_ms"))
         return json.dumps(asdict(result)) if as_json else outline.text(result)
     status = engine.status(cwd=cwd, timeout_ms=args.get("timeout_ms"))
+    if _BACKGROUND is not None and isinstance(status.get("vectors"), dict):
+        status["vectors"]["making"] = {"state": _BACKGROUND.state, "reason": _BACKGROUND.reason,
+                                       "chunks_per_second": _BACKGROUND.rate}
     return json.dumps(status) if as_json else "\n".join(f"{key}: {value}" for key, value in status.items())
 
 

@@ -91,6 +91,7 @@ class VectorStore:
         self._index_inode = _inode(self._index_file)
         self._cache: tuple | None = None    # (key, chunk ids, rows) of the view last searched
         self._coverage: tuple | None = None  # (key, (with a vector, should have one))
+        self._parts: tuple | None = None     # (key, the coverage by part)
         self._recover()
 
     # ---- writing ---------------------------------------------------------------------------
@@ -169,6 +170,33 @@ class VectorStore:
             self._coverage = (key, counted)
         return self._coverage[1]
 
+    def parts(self, index: Index, view) -> list[dict]:
+        """The coverage by part, for a person watching vectors being made: the worktree's code, its documentation, and
+        each linked source (its paths are `name:path`). A blob found in several parts counts in the first of its paths.
+        Counted once per state of the view and of the stored vectors, as `coverage` is."""
+        key = (index._view_epoch, self._stored(), id(view))
+        if self._parts is not None and self._parts[0] == key:
+            return self._parts[1]
+        counts: dict[tuple[str, str], list[int]] = {}
+        rows = index.conn.execute(
+            "SELECT bc.blob_oid, c.kind = 'doc', count(cv.chunk_id), count(*) FROM temp.view_blobs v "
+            "JOIN blob_chunks bc ON bc.blob_oid = v.blob_oid AND bc.family = v.family JOIN chunks c ON c.chunk_id = bc.chunk_id "
+            f"LEFT JOIN chunk_vectors cv ON cv.chunk_id = bc.chunk_id AND cv.kind = ? WHERE {EMBEDDED} "
+            "GROUP BY bc.blob_oid, c.kind = 'doc'", (self.kind,))
+        for oid, is_doc, have, total in rows:
+            paths = view.paths_for(oid)
+            mounted = [path for path in paths if path in view.mounted]
+            part = (mounted[0].partition(":")[0], "source") if paths and len(mounted) == len(paths) else \
+                ("docs", "docs") if is_doc else ("code", "code")
+            tally = counts.setdefault(part, [0, 0])
+            tally[0] += have
+            tally[1] += total
+        order = {"code": 0, "docs": 1, "source": 2}
+        found = [{"name": name, "kind": kind, "with_vector": have, "chunks": total}
+                 for (name, kind), (have, total) in sorted(counts.items(), key=lambda item: (order[item[0][1]], item[0][0]))]
+        self._parts = (key, found)
+        return found
+
     def _stored(self) -> int:
         """Changes whenever a vector of this kind is added, in a new row or a used-again one."""
         found = self.conn.execute("SELECT writes FROM vector_files WHERE kind = ?", (self.kind,)).fetchall()
@@ -183,6 +211,7 @@ class VectorStore:
         self._map = None
         self._cache = None
         self._coverage = None
+        self._parts = None
 
     def rows(self) -> dict[str, int]:
         """The file in numbers: its rows, how many belong to no chunk, and its size."""

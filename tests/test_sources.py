@@ -352,3 +352,19 @@ def test_a_url_that_asks_for_a_login_is_said_to_be_missing_or_private():
                                   "'https://github.com': terminal prompts disabled")
     assert "does not exist" in said and "private" in said and "Username" not in said
     assert "timed out" in sources.why_not_cloned("u", "git timed out")      # anything else is passed on
+
+
+def test_the_status_says_how_far_vectors_are_made_for_the_code_the_docs_and_each_linked_source(repo, docs_repo):
+    # For a person watching vectors being made (the plugin's status line, /aleph configure): one count is not enough
+    # when documentation is linked.
+    repo.write("README.md", "# Shop\n\nHow to run the shop.\n")
+    repo.commit("readme")
+    sources.add(repo.root, str(docs_repo.root), name="team")
+    engine = Engine(repo.root)
+    engine.search("wombat_rotator")                                      # indexed
+    vectors = engine.status()["vectors"]
+    parts = {part["name"]: part for part in vectors["parts"]}
+    assert [part["kind"] for part in vectors["parts"]] == ["code", "docs", "source"]
+    assert set(parts) == {"code", "docs", "team"}
+    assert sum(part["chunks"] for part in vectors["parts"]) == vectors["chunks"]
+    assert all(part["with_vector"] == 0 and part["chunks"] > 0 for part in vectors["parts"])

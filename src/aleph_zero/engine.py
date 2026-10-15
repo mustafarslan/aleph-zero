@@ -847,7 +847,11 @@ class Engine:
             worker_there, worker_current = setup.installed(), setup.current()
         except OSError:
             worker_there = worker_current = None     # the cache directory cannot be read: the status still answers
-        return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total,
+        try:
+            parts = store.parts(index, view)        # the worktree's code and docs, and each linked source
+        except Exception:  # noqa: BLE001 - a breakdown is not worth a failed status
+            parts = []
+        return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total, "parts": parts,
                 "chosen": chosen if isinstance(chosen, bool) else None, "verdict": {"helps": helps, "why": verdict_why},
                 "worker_installed": worker_there, "worker_current": worker_current, **store.rows()}
 
