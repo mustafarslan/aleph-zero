@@ -1,4 +1,5 @@
 from aleph_zero import lexical
+from timing import budget  # noqa: E402
 
 
 def test_identifiers_split_on_case_underscores_and_digits():
@@ -75,7 +76,7 @@ def test_bare_numbers_are_not_the_rarest_words_of_a_long_query_and_huge_queries_
     assert "queryset" in kept and not any(term.isdigit() for term in kept)
     started = time.perf_counter()
     lexical.search(conn, " ".join(f"unknownword{i}" for i in range(5000)), 10)
-    assert time.perf_counter() - started < 0.1
+    assert time.perf_counter() - started < budget(0.1)
 
 
 def test_an_identifier_is_split_once_however_often_it_is_written(monkeypatch):

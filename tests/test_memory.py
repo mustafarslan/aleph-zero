@@ -4,6 +4,7 @@ import time
 
 from aleph_zero import memstat
 from aleph_zero.engine import Engine
+from timing import budget  # noqa: E402
 
 
 def test_this_process_reads_its_own_private_memory_without_starting_another(monkeypatch):
@@ -21,7 +22,7 @@ def test_this_process_reads_its_own_private_memory_without_starting_another(monk
     started = time.perf_counter()
     for _ in range(200):
         memstat.private_bytes()
-    assert (time.perf_counter() - started) / 200 < 0.001   # cheap enough to do after every call
+    assert (time.perf_counter() - started) / 200 < budget(0.001)   # cheap enough to do after every call
     del ballast
 
 

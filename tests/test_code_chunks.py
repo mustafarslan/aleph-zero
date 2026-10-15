@@ -5,6 +5,7 @@ import pytest
 
 from aleph_zero import lang
 from aleph_zero.chunking import SPLIT_TOKENS, code_chunks, estimate_tokens
+from timing import budget  # noqa: E402
 
 SAMPLES = Path(__file__).parent / "samples"
 FILES = {"python": "sample.py", "typescript": "sample.ts", "javascript": "sample.js", "go": "sample.go",
@@ -104,7 +105,7 @@ def test_a_twenty_thousand_line_function_is_chunked_quickly():
     source = "def huge():\n" + "".join(f"    value_{i} = {i}\n" for i in range(20_000)) + "    return 0\n"
     started = time.perf_counter()
     chunks = chunked("python", source).chunks
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < budget(1.0)
     assert sum(chunk.text.count("\n") + 1 for chunk in chunks) == 20_002
 
 

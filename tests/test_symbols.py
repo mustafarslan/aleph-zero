@@ -8,6 +8,7 @@ from aleph_zero.indexer import Index
 from aleph_zero.search import search
 from aleph_zero.store import index_path, open_db
 from aleph_zero.view import build_view
+from timing import budget  # noqa: E402
 
 SAMPLES = Path(__file__).parent / "samples"
 
@@ -113,7 +114,7 @@ def test_a_name_defined_two_thousand_times_is_looked_up_quickly(repo):
     symbols.lookup(index, view, "handle", limit=20)
     started = time.perf_counter()
     hits = symbols.lookup(index, view, "handle", limit=20)
-    assert time.perf_counter() - started < 0.02
+    assert time.perf_counter() - started < budget(0.02)
     assert len(hits) == 20
 
 

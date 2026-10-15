@@ -8,6 +8,7 @@ import pytest
 from aleph_zero import engine as engine_module
 from aleph_zero import gitio
 from aleph_zero.engine import Engine
+from timing import budget  # noqa: E402
 
 SAMPLES = Path(__file__).parent / "samples"
 
@@ -116,7 +117,7 @@ def test_a_time_limit_is_kept_within_a_file_or_two_while_indexing(repo):
     answer = engine.search("function_5_5", timeout_ms=300)
     took = time.monotonic() - started
     assert answer.timed_out and answer.pending > 0
-    assert took < 0.45, f"a 300 ms limit took {took * 1000:.0f} ms"
+    assert took < budget(0.45), f"a 300 ms limit took {took * 1000:.0f} ms"
 
 
 def test_a_cancellation_stops_indexing_promptly(repo):

@@ -8,6 +8,7 @@ from aleph_zero.indexer import Index, collect_garbage
 from aleph_zero.store import index_path, open_db
 from aleph_zero.vectors import VectorStore
 from aleph_zero.view import build_view
+from timing import budget  # noqa: E402
 
 KIND = "test-model/p1/256"
 
@@ -141,7 +142,7 @@ def test_three_hundred_thousand_vectors_are_scanned_quickly(tmp_path):
     store.search(index, matrix[0], limit=10)
     started = time.perf_counter()
     found = store.search(index, matrix[5], limit=10)
-    assert time.perf_counter() - started < 0.03 and len(found) == 10 and found[0][1] > 0.99
+    assert time.perf_counter() - started < budget(0.03) and len(found) == 10 and found[0][1] > 0.99
 
 
 def test_files_with_no_language_get_no_vectors_and_are_not_counted_as_missing(repo):
