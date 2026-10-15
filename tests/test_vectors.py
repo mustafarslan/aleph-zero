@@ -370,7 +370,10 @@ def test_the_scan_gives_the_same_scores_however_the_rows_lie_and_however_many_th
             if threaded_from > 1:
                 assert np.array_equal(found, plain(rows))                 # a slice or a gather: the same to the last bit
             else:       # split otherwise among threads, a few products round their last bit the other way
-                assert np.allclose(found, plain(rows), rtol=1e-5, atol=0)
+                # An error relative to the scores' size, not to each score: one near zero would fail any relative
+                # bound by the rounding of its terms (CI, 2026-10-15: 2.2178793 against 2.2178786 among scores of 18).
+                expected = plain(rows)
+                assert np.allclose(found, expected, rtol=0, atol=1e-5 * float(np.abs(expected).max()))
                 assert list(np.argsort(-found, kind="stable")[:20]) == list(np.argsort(-plain(rows), kind="stable")[:20])
 
 
