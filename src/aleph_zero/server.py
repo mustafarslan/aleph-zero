@@ -42,7 +42,7 @@ def stateless_enabled() -> bool:
     `initialize` on the wire (2.1.296, 2026-10-13). Switched off, the server says "method not found" to that first
     question and the client falls back to the handshake, as every session did before."""
     return os.environ.get("ALEPH_MCP_STATELESS", "") != "0"
-SERVER_INFO = {"name": "aleph-zero", "version": "0.1.7"}
+SERVER_INFO = {"name": "aleph-zero", "version": "0.1.8"}
 
 INSTRUCTIONS = """\
 Aleph Zero is a local index of this repository's code and documentation. It always \

@@ -88,8 +88,19 @@ Each finding of the directory's validation, answered:
 - **MOD_CALLS_TOOLS, MOD_CAN_FETCH_AND_RUN** (`mcp.call`, line 43): the mod's only outbound call is
   `$.mcp.call` to this plugin's own server, `aleph`, which runs on the user's machine. It calls
   `search`, `symbol` and `remember` there, at the times listed above, with arguments it builds
-  itself; nothing it receives is run as a command. It runs no shell command. Its only network
-  traffic is the side chat's request to Claude, made through Claude Code's own `model.complete`.
+  itself; nothing it receives is run as a command. The commands it runs on the user's machine are
+  `/aleph configure`'s, below. Its own network traffic is the side chat's request to Claude, made
+  through Claude Code's own `model.complete`.
+- **`/aleph configure`** (`process.run`, `process.spawn`, `config.set`, `ui.copy`, `state.set`): only when
+  the person opens the pane and presses a key. It runs the engine's own commands through
+  `scripts/engine.sh` with the session's directory (`status` when it opens; `setup --dense`,
+  `--no-dense` or `--auto-dense`; `source add` with the path or URL the person typed; `source remove`
+  after a yes), and `git update-index --untracked-cache` or `--no-untracked-cache` in that
+  directory. The only network use is a source the person links by URL, which the engine clones. A
+  plugin option is changed through Claude Code's settings (`config.set`), as `/plugin` does. The
+  build commands (`setup --worker`, `setup --memory`) are never run: their key copies the command to
+  the clipboard for the person to run in a terminal. `state.set` keeps the session's meter and the
+  side chat's conversation for the session, in Claude Code.
 - **MOD_SESSION_DATA_LEAVES** (`prompt.submit`): at rung 2 the first 2,000 characters of the
   session's first question go to the local engine's `search`, and nowhere else.
 - **MOD_LOCAL_DATA_LEAVES** (`session.model`): the session's model name is read only when the side
@@ -104,11 +115,13 @@ Each finding of the directory's validation, answered:
 - **MOD_HOOKS_OPERATION** (`command.run`): the hooks answer only the plugin's own `/aleph` command.
 - **MOD_HOOKS_POLICY_EVENT** (`tool.describe`): the changes are the ones in the table above: tuned
   descriptions of the engine's four search tools, and one sentence added to Grep's and Glob's.
-- **COMMAND_SCRIPT_NOT_FOLLOWED** (`scripts/serve.sh`): it starts the separately installed engine.
-  It looks, in order, for `aleph-zero` in a checkout's `.venv` (when the plugin is loaded from a
-  clone of this repository), on `PATH`, and in uv's tool directory (`$UV_TOOL_BIN_DIR`,
-  `$XDG_BIN_HOME` or `~/.local/bin`), and runs `aleph-zero serve`. It never runs a program called
-  `aleph`, because TeX Live installs one. It installs nothing and downloads nothing.
+- **COMMAND_SCRIPT_NOT_FOLLOWED** (`scripts/serve.sh`, `scripts/engine.sh`): they start the
+  separately installed engine. `engine.sh` looks, in order, for `aleph-zero` in a checkout's `.venv`
+  (when the plugin is loaded from a clone of this repository), on `PATH`, and in uv's tool directory
+  (`$UV_TOOL_BIN_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`), and runs it with the arguments it was
+  given (`engine.sh --path` prints which one it found); `serve.sh` runs `engine.sh serve`. Neither
+  runs a program called `aleph`, because TeX Live installs one. They install nothing and download
+  nothing.
 
 ## License
 

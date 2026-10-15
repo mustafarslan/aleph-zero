@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.8
+
+- `aleph-zero status` in a directory Aleph refuses (a home directory, more than 20,000 files) still refuses, and
+  now says what is built on this machine beside the refusal: `/aleph configure` keeps its Machine rows there.
+- `status` no longer looks for or fetches tree-sitter grammars on a repository not indexed yet: it reads nothing,
+  so the download bought nothing.
+- `status` says where git's untracked cache comes from. Kept by git's configuration (`core.untrackedCache`),
+  `/aleph configure` shows it with no key, since only a change of that configuration turns it off.
+- `aleph-zero setup` run again on a terminal with every step answered says the list once and names
+  `setup --again`, which asks again about what was declined.
+- Two kept tests: `setup`'s menu on a real pseudo-terminal, and the wheel installed with `uv tool install` and used.
+
 ## 0.1.7
 
 - Changing a plugin option in `/aleph configure` no longer clears the side chat's conversation or this session's
