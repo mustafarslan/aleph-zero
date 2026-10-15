@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
-  confident, foundNothing, hitsOf, isSearchCommand, locations, promptContext, resultText, searchPattern, worthAsking,
+  confident, foundNothing, grepNote, grepToolFoundNothing, hitsOf, isSearchCommand, locations, promptContext, readGrepTool, resultText, searchPattern, worthAsking,
 } from '../hooks/logic.js'
 
 const hit = (path: string, sources: string[], symbol = 'f') =>
@@ -107,4 +107,24 @@ test('with signatures, each location line is followed by the signature of the fi
   expect(plain).not.toContain('def rotate')
   expect(signed).toContain('a.py:3-9, 40-46  function  f\n    def rotate(self, token):')
   expect(signed.split('\n').filter((line) => line.startsWith('    ')).length).toBe(1)        // b.py has none to show
+})
+
+test('a Grep tool search is read as words, from the repository and not from one file or outside it', () => {
+  expect(readGrepTool({ pattern: 'trackReactiveGetter' }, '/r')).toEqual({ query: 'trackReactiveGetter' })
+  expect(readGrepTool({ pattern: 'def\\s+refresh_token\\(', path: '/r/src' }, '/r')).toEqual({ query: 'def refresh_token' })
+  expect(readGrepTool({ pattern: 'refresh_token', path: 'src/auth' }, '/r')).toEqual({ query: 'refresh_token' })
+  expect(readGrepTool({ pattern: 'refresh_token', path: '/r/src/auth/store.py' }, '/r')).toBe(null)   // one file
+  expect(readGrepTool({ pattern: 'refresh_token', path: '/elsewhere' }, '/r')).toBe(null)             // not this repository
+  expect(readGrepTool({ pattern: 'a.b' }, '/r')).toBe(null)                                           // no word to ask about
+})
+
+test('a Grep tool result that found nothing, in each of its modes', () => {
+  const ran = (result: object, extra: object = {}) => ({ result, text: '', ...extra })
+  expect(grepToolFoundNothing(ran({ mode: 'files_with_matches', filenames: [], numFiles: 0 }))).toBe(true)
+  expect(grepToolFoundNothing(ran({ mode: 'files_with_matches', filenames: ['a.py'], numFiles: 1 }))).toBe(false)
+  expect(grepToolFoundNothing(ran({ mode: 'content', content: '', numLines: 0 }))).toBe(true)
+  expect(grepToolFoundNothing(ran({ mode: 'content', content: 'a.py:3:x', numLines: 1 }))).toBe(false)
+  expect(grepToolFoundNothing(ran({ mode: 'files_with_matches', numFiles: 0 }, { isError: true }))).toBe(false)
+  expect(grepToolFoundNothing({ deny: 'no' })).toBe(false)
+  expect(grepNote('x_y', [], 'search')).toContain('The search matched nothing')
 })

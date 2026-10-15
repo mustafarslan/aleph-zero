@@ -1,7 +1,7 @@
 {
   "name": "aleph-zero",
   "displayName": "Aleph Zero",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Local code search for coding agents: ranked code locations by meaning or by name, always matching the working tree, and steering that makes Claude Code use it before recursive grep",
   "author": {
     "name": "mustafarslan"
@@ -21,7 +21,7 @@
     "rung": {
       "type": "string",
       "title": "Steering rung",
-      "description": "How far the plugin steers Claude Code towards Aleph's search. 0: the tools only. 1 (default): the search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. 2: also ranked locations with the first question of a session. 3: also ranked locations after a recursive grep that found nothing.",
+      "description": "How far the plugin steers Claude Code towards Aleph's search. 0: the tools only. 1 (default): the search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. 2: also ranked locations with the first question of a session. 3: also ranked locations after a Grep tool search or a recursive grep that found nothing.",
       "options": [
         "0",
         "1",

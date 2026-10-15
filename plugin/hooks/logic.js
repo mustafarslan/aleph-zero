@@ -223,15 +223,40 @@ export function readSearch(command) {
     return null
   }
   if (targets.some(outside)) return null
-  // A pattern is a regular expression or a glob; the engine is asked in words.
-  const asWords = patterns.join(' ')
+  const query = asWords(patterns)
+  return query === null ? null : { program: kind, query }
+}
+
+// A pattern is a regular expression or a glob; the engine is asked in words. null when no word is left to ask about.
+function asWords(patterns) {
+  const words = patterns.join(' ')
     .replace(/\\[bBwWsSdD]/g, ' ')
     .replace(/\[[^\]]*\]/g, ' ')
     .replace(/[\\^$.*+?(){}|]/g, ' ')
     .split(/\s+/)
     .filter((word) => /[A-Za-z0-9]/.test(word))
-  if (!asWords.some((word) => word.replace(/[^A-Za-z0-9]/g, '').length >= 3)) return null
-  return { program: kind, query: asWords.join(' ') }
+  if (!words.some((word) => word.replace(/[^A-Za-z0-9]/g, '').length >= 3)) return null
+  return words.join(' ')
+}
+
+// The Grep tool's search, read as { query } when it is of the repository: not of one file, and not of a directory
+// outside it. Its path is often absolute; one inside the session's directory is read as relative to it.
+export function readGrepTool(input, cwd) {
+  let path = String((input && input.path) || '')
+  if (path && cwd && (path === cwd || path.startsWith(cwd.replace(/\/$/, '') + '/'))) path = path.slice(cwd.length).replace(/^\//, '')
+  if (path && outside(path)) return null
+  if (path && /\.[A-Za-z0-9]{1,5}$/.test(path) && !path.endsWith('/')) return null
+  const query = asWords([String((input && input.pattern) || '')])
+  return query === null ? null : { query }
+}
+
+// Whether a Grep tool result is "ran, and found nothing": no file in its file modes, no line in its content mode.
+export function grepToolFoundNothing(result) {
+  if (!result || result.deny || result.isError) return false
+  const inner = result.result
+  if (!inner || typeof inner !== 'object') return false
+  if (inner.mode === 'content') return String(inner.content ?? '').trim() === ''
+  return inner.numFiles === 0
 }
 
 export function searchPattern(command) {
@@ -252,8 +277,8 @@ export function foundNothing(result, program) {
   return program === 'find' || inner.returnCodeInterpretation === 'No matches found'
 }
 
-export function grepNote(pattern, hits) {
-  return '\n\n[aleph-zero] The command matched nothing. This is not a list of occurrences of that string: '
+export function grepNote(pattern, hits, what = 'command') {
+  return '\n\n[aleph-zero] The ' + what + ' matched nothing. This is not a list of occurrences of that string: '
     + 'it is where code search by meaning, asked for "' + pattern + '", ranks related code. '
     + 'If you were checking that the string is gone, it is gone.\n' + locations(hits, 5)
 }

@@ -149,7 +149,7 @@ Set at install (`--config KEY=VALUE`), later with
 
 | Option | Values | What it does |
 |---|---|---|
-| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: the four search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a recursive `grep`, `rg`, `git grep` or `find` that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
+| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: the four search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a search with Claude Code's Grep tool, or a recursive `grep`, `rg`, `git grep` or `find`, that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
 | `graph` | `off`/`on` (default `off`) | Also offer the agent the code-graph, architecture-facts and decision-record tools. Whether they help an agent has not been measured yet. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |

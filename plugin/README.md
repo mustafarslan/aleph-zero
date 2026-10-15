@@ -24,7 +24,7 @@ Then, optionally: `aleph-zero setup --worker` once (the embedding server and mod
   the `graph` option `references`, `facts` and `decisions`.
 - Steering, by the `rung` option (default `1`): tool descriptions and a short instruction to
   search before a recursive grep; at `2`, ranked locations with the first prompt of a
-  session; at `3`, ranked locations after a grep that found nothing. No rung has yet been
+  session; at `3`, ranked locations after a grep (the Grep tool's or a shell's) that found nothing. No rung has yet been
   shown to save tokens in measured sessions.
 - `/aleph`: a side chat about the repository whose answers cite `path:line`;
   `/aleph check` and `/aleph stats`.
@@ -60,6 +60,7 @@ These are all the mod's hooks, and everything each one does:
 | `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right. |
 | `prompt.submit` | At rung 2 and above, for the first prompt of a session that is a question, asks the engine's `search` with the prompt's first 2,000 characters and, when the top result is confident, attaches up to five file locations to that prompt as context. The prompt's own text is not changed. |
 | `tool.call` (Bash) | At rung 3, after a recursive `grep`, `rg`, `git grep` or `find` has run and found nothing, asks the engine's `search` with its pattern and appends up to five ranked locations to that command's output. The command and its input are not changed, and nothing is done for any other command. |
+| `tool.call` (Grep) | At rung 3, after a Grep tool search of the repository has found nothing, asks the engine's `search` with its pattern and gives up to five ranked locations to the model as context after the result. The search, its input and its result are not changed. |
 | `tool.call` (all tools) | Counts tool calls for `/aleph stats`; passes every call on unchanged. |
 | `turn.step`, `turn.complete` | Add up the session's token counts for `/aleph stats` and keep the last session's figures in the plugin store. |
 | `session.end` | Resets the one-prompt allowance of rung 2 after `/clear`. |

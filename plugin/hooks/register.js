@@ -8,7 +8,7 @@
 // The meter runs on every rung.
 import {
   DESCRIPTIONS, ENGINE_TOOL, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  promptContext, readSearch, resultText, worthAsking,
+  grepToolFoundNothing, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 
@@ -264,10 +264,16 @@ export function register(on, options) {
       // Can the mod reach the engine at all? Says what came back, or why nothing did.
       try {
         const answer = await reach($, 'search', { query: 'check', k: 1, format: 'json', timeout_ms: 2000 })
-        if (answer === null) return { text: 'the engine is not connected: Claude Code did not start the plugin\'s MCP server' }
+        if (answer === null) {
+          return {
+            text: 'the engine is not connected: Claude Code did not start the plugin\'s MCP server. Most often the engine '
+              + 'is not installed: `uv tool install git+https://github.com/mustafarslan/aleph-zero.git`, then restart '
+              + 'Claude Code. `/mcp` shows the server\'s own error.',
+          }
+        }
         return { text: 'the engine answers the mod (' + hitsOf(answer).length + ' hits for a test query), as ' + server }
       } catch (error) {
-        const why = error && error.message ? error.message : String(error)
+        const why = (error && error.message ? error.message : String(error)).replace(/\.+$/, '')
         return {
           text: 'the mod cannot use the engine: ' + why + '. Rungs 2 and 3 need the engine\'s tools to be allowed: '
             + 'add "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in your settings.',
@@ -459,5 +465,18 @@ export function register(on, options) {
     meter.added.grep += 1
     const note = grepNote(pattern, hits)
     return { ...result, text: (result.text || '') + note, result: { ...result.result, stdout: (result.result.stdout || '') + note } }
+  }).catch(async ($, e, next) => next(e))
+
+  // The Grep tool is the recursive search an agent uses most; its result keeps its own shape, and the note
+  // reaches the model as the call's context, after the result.
+  on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
+    const result = await next(e)
+    if (rung < 3) return result
+    const read = readGrepTool(e, sessionCwd)
+    if (!read || !grepToolFoundNothing(result)) return result
+    const hits = hitsOf(await ask($, 'search', { query: read.query, k: 5 }))
+    if (!hits.length) return result
+    meter.added.grep += 1
+    return { ...result, context: [...(result.context ?? []), grepNote(read.query, hits, 'search').trim()] }
   }).catch(async ($, e, next) => next(e))
 }

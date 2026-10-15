@@ -40,6 +40,31 @@ test('L3: a recursive grep that found nothing gets ranked locations, worded as n
   expect(JSON.stringify(asked[0])).toContain(FULL_NAME)              // called by the name connect gave, not the manifest's
 })
 
+// A Grep tool result as Claude Code records it (from a real session, 2.1.300): no file in its default mode.
+const grep = (files: string[]) => ({ ref: 2, result: { mode: 'files_with_matches', filenames: files, numFiles: files.length, totalFiles: files.length }, text: files.length ? files.join('\n') : 'No files found' })
+
+test('L3: a Grep tool search that found nothing gets the locations as context after its own result', rung('3'), async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  const asked: any[] = []
+  on('mcp.call', ($, e) => {
+    asked.push(e)
+    return engine([hit('src/auth/token_store.py', ['lexical', 'symbol'])])
+  })
+  let next = grep([])
+  on('tool.call', () => next)
+  const out = await $.tool.call({ tool: 'Grep', pattern: 'refresh\\s*Token' })
+  expect(out.result).toEqual(grep([]).result)                          // the tool's own result is left as it is
+  expect(out.context?.join('\n')).toContain('src/auth/token_store.py:4-6  function  refresh_token')
+  expect(out.context?.join('\n')).toContain('The search matched nothing')
+  expect(JSON.stringify(asked[0])).toContain('refresh Token')
+  next = grep(['src/a.py'])
+  expect(await $.tool.call({ tool: 'Grep', pattern: 'refreshToken' })).toEqual(grep(['src/a.py']))   // it found something
+  next = grep([])
+  expect(await $.tool.call({ tool: 'Grep', pattern: 'refreshToken', path: 'src/a.py' })).toEqual(grep([]))   // one file
+  expect(asked.length).toBe(1)
+})
+
 test('an engine that is not connected, or whose tools the user has not allowed, changes nothing', rung('3'), async ($, on) => {
   mock.clock(on)
   let state = 'unlisted'
