@@ -7,7 +7,7 @@
 //   3  a recursive grep that found nothing gets ranked locations appended
 // The meter runs on every rung.
 import {
-  DESCRIPTIONS, ENGINE_TOOL, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
+  DESCRIPTIONS, ENGINE_TOOL, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
   grepToolFoundNothing, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
@@ -330,6 +330,9 @@ export function register(on, options) {
   const pointer = !(options && options.grep_pointer === 'off')
   // Rung 2's lines: places only, or with the signature of each file's first result (an option, for a paid comparison).
   const signatures = Boolean(options && options.lines === 'signatures')
+  // The graph tools are offered unless switched off (the manifest's default is on; the engine reads the same option).
+  const graph = !(options && /^(off|0|false|no)$/i.test(String(options.graph || '').trim()))
+  const section = graph ? SECTION + '\n' + GRAPH_LINE : SECTION
 
   on('session.start', async ($, e, next) => {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
@@ -759,7 +762,7 @@ export function register(on, options) {
     const composed = await next(e)
     if (rung < 1 || !composed || !Array.isArray(composed.sections)) return composed
     // The same text in every request of every session: it must not break the prompt cache.
-    return { ...composed, sections: [...composed.sections, { id: SECTION_ID, text: SECTION, scope: 'session' }] }
+    return { ...composed, sections: [...composed.sections, { id: SECTION_ID, text: section, scope: 'session' }] }
   })
 
   // ---- L2: ranked locations with the first prompt of a session ------------------------------

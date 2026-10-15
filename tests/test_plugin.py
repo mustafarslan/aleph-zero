@@ -91,7 +91,7 @@ def test_an_installed_plugin_says_how_to_install_the_engine_when_there_is_none(t
 def test_the_graph_tools_are_a_plugin_option_passed_to_the_engine():
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
     # Free text, not a list of options: Anthropic's directory refuses a ${user_config.KEY} reference to a key with options.
-    assert "options" not in manifest["userConfig"]["graph"] and manifest["userConfig"]["graph"]["default"] == "off"
+    assert "options" not in manifest["userConfig"]["graph"] and manifest["userConfig"]["graph"]["default"] == "on"     # switched on by the owner, 2026-10-15
     server = json.loads((PLUGIN / ".mcp.json").read_text())["mcpServers"]["aleph"]
     assert server["env"] == {"ALEPH_GRAPH": "${user_config.graph}"}
 

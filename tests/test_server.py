@@ -277,6 +277,7 @@ def test_the_server_module_needs_no_sdk():
     code = "import sys, aleph_zero.server; sys.exit(int('mcp' in sys.modules or 'pydantic' in sys.modules))"
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
     assert len(server.INSTRUCTIONS) <= 2048
+    assert len(server.INSTRUCTIONS + server.GRAPH_INSTRUCTIONS) <= 2048
 
 
 def test_the_sdk_client_can_list_and_call_our_tools(repo):

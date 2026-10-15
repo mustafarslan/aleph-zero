@@ -40,6 +40,11 @@ export const SECTION = [
     + 'discussion or decision, call `recall` before working it out again.',
 ].join('\n')
 
+// Added to the section when the graph tools are offered (the `graph` option, on by default).
+export const GRAPH_LINE = '- To find who calls a function or what it calls, call `references`; for the decision records that govern a '
+  + 'change, `decisions`; for routes, data models and environment names, `facts`.'
+
+
 // ---- what the engine answered --------------------------------------------------------------
 
 // The text of an MCP tool result, whichever of the shapes it arrives in.

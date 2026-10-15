@@ -69,6 +69,20 @@ detail="full" to see it again. A note that files are "not indexed yet" means the
 index is still being built: results are partial and a retry soon will be complete.
 """
 
+# Said beside the instructions when the graph tools are offered: when each one is the right question.
+GRAPH_INSTRUCTIONS = """
+Also offered here:
+
+- references(name): who calls a function and what it calls; each answer says whether it is certain.
+- facts(): the routes, data models, environment names and queues the repository states.
+- decisions(task): the decision records (ADRs) that govern a change, best first.
+"""
+
+
+def instructions() -> str:
+    return INSTRUCTIONS + (GRAPH_INSTRUCTIONS if graph_enabled() else "")
+
+
 _COMMON = {
     "format": {"type": "string", "enum": ["text", "json"], "default": "text"},
     "cwd": {"type": "string", "description": "A directory inside the worktree to ask about. Default: the session's."},
@@ -379,13 +393,13 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
             continue
         if method == "server/discover" and modern:
             answer(ident, {"supportedVersions": [*STATELESS_VERSIONS, *PROTOCOL_VERSIONS],
-                           "capabilities": {"tools": {"listChanged": False}}, "instructions": INSTRUCTIONS}, True, listed=True)
+                           "capabilities": {"tools": {"listChanged": False}}, "instructions": instructions()}, True, listed=True)
         elif method == "initialize":
             proposed = params.get("protocolVersion")
             send({"jsonrpc": "2.0", "id": ident, "result": {
                 "protocolVersion": proposed if proposed in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": SERVER_INFO, "instructions": INSTRUCTIONS}})
+                "serverInfo": SERVER_INFO, "instructions": instructions()}})
         elif method == "ping":
             send({"jsonrpc": "2.0", "id": ident, "result": {}})
         elif method == "tools/list":

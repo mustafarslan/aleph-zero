@@ -92,7 +92,7 @@ test('a plugin option is changed through Claude Code\'s settings, to the next va
   expect(await ui.find({ type: 'Text', text: /first prompt/ })).toBeDefined()
   await ui.press({ key: 'b-rung' })
   await ui.press({ key: 'b-graph' })
-  expect(seen.sets.map((set: any) => [set.key, set.value])).toEqual([['aleph-zero.rung', '3'], ['aleph-zero.graph', 'on']])
+  expect(seen.sets.map((set: any) => [set.key, set.value])).toEqual([['aleph-zero.rung', '3'], ['aleph-zero.graph', 'off']])
 })
 
 test('a refused change says why', async ($, on) => {

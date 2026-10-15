@@ -54,8 +54,8 @@
     "graph": {
       "type": "string",
       "title": "Call graph, facts and decision tools",
-      "description": "on or off (default off). On: also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Off until measured to help an agent.",
-      "default": "off"
+      "description": "on or off (default on). On: also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Whether they help an agent has not been measured yet.",
+      "default": "on"
     }
   }
 }

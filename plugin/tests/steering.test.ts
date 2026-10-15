@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { SECTION, SECTION_ID } from '../hooks/logic.js'
+import { GRAPH_LINE, SECTION, SECTION_ID } from '../hooks/logic.js'
 
 const SEARCH = 'mcp__plugin_aleph-zero_aleph__search'
 const hit = (path: string, sources: string[]) =>
@@ -299,8 +299,15 @@ test('L1: one section is added to the system prompt, the same text every time', 
   const second = await $.prompt.compose(COMPOSE)
   expect(first.sections.length).toBe(2)
   expect(first.sections[0]).toEqual(base[0])
-  expect(first.sections[1]).toEqual({ id: SECTION_ID, text: SECTION, scope: 'session' })
+  // The graph tools are on by default: the section says when to use them.
+  expect(first.sections[1]).toEqual({ id: SECTION_ID, text: SECTION + '\n' + GRAPH_LINE, scope: 'session' })
   expect(second).toEqual(first)
+})
+
+test('L1 with the graph tools off: the section does not mention them', { options: { rung: '1', graph: 'off' } }, async ($, on) => {
+  on('prompt.compose', () => ({ sections: [] }))
+  const composed = await $.prompt.compose(COMPOSE)
+  expect(composed.sections[0]).toEqual({ id: SECTION_ID, text: SECTION, scope: 'session' })
 })
 
 test('rung 0 changes neither the descriptions nor the prompt', rung('0'), async ($, on) => {

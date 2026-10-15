@@ -14,7 +14,7 @@ export const OPTIONS = [
   { key: 'rung', hotkey: 's', label: 'steering', values: ['0', '1', '2', '3'], default: '1' },
   { key: 'grep_pointer', hotkey: 'p', label: 'pointer', values: ['on', 'off'], default: 'on' },
   { key: 'lines', hotkey: 'l', label: 'rung-2 lines', values: ['places', 'signatures'], default: 'places' },
-  { key: 'graph', hotkey: 'g', label: 'graph tools', values: ['off', 'on'], default: 'off' },
+  { key: 'graph', hotkey: 'g', label: 'graph tools', values: ['on', 'off'], default: 'on' },
 ]
 
 // Short enough for one row of the pane beside the label and the value.
