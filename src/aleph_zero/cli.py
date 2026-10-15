@@ -256,6 +256,8 @@ def _setup(args) -> int:
         if what == "worker":
             with embed_setup.installing(say):
                 return f"installed {embed_setup.install_binary(None, say)} and {embed_setup.install_model(None, say)}"
+        if what == "memory":
+            return f"installed Aeon's core in {aeon_setup.install(None, say)}: memories are recalled by meaning from now on"
         if what == "source":
             added = sources.add(args.cwd, given[0])
             return f"linked {added.name} ({added.kind}): {added.location}"
@@ -329,7 +331,8 @@ def _setup(args) -> int:
                 step = next(step for step in steps if step.key == key)
                 # Asked again: what was declined, and the one line that is done only on the person's word.
                 asked = step.state == "open" or (args.again and (step.state == "declined" or (key == "claude" and step.state == "done")))
-                if asked and not (key == "vectors" and not found.worker):
+                # Search by meaning and memory by meaning both need the worker's vectors: asked once it is there.
+                if asked and not (key in ("vectors", "memory") and not found.worker):
                     menu.step(step, found)
         except (KeyboardInterrupt, EOFError):
             say(f"\nleft as it is: `{COMMAND} setup` asks about the rest")

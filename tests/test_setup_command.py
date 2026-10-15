@@ -68,7 +68,7 @@ def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, m
     configured = subprocess.run(["git", "-C", str(repo.root), "config", "--get", "core.untrackedCache"], capture_output=True)
     assert configured.stdout.strip() == b""                        # no configuration was changed
     assert [hit.path for hit in Engine(repo.root).search("zeppelin_mooring").hits] == ["handbook:guides/mooring.md"]
-    assert _states(repo, capsys) == {"claude": "done", "worker": "declined", "sources": "done", "vectors": "declined", "untracked_cache": "done"}
+    assert _states(repo, capsys) == {"claude": "done", "worker": "declined", "memory": "declined", "sources": "done", "vectors": "declined", "untracked_cache": "done"}
     _terminal(monkeypatch)                                         # again: nothing is open, so nothing is asked
     assert _setup(repo) == 0
     asked, left = _terminal(monkeypatch, "y", "n")                 # asked for again: the line done on their word, and what was declined
@@ -96,9 +96,9 @@ def test_a_yes_to_search_by_meaning_makes_the_vectors_and_keeps_the_choice_for_t
     monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
-    asked, left = _terminal(monkeypatch, "n", "", "y", "n")        # the worker is there: Claude Code, sources, vectors, git's cache
+    asked, left = _terminal(monkeypatch, "n", "n", "", "y", "n")   # the worker is there: Claude Code, memory, sources, vectors, git's cache
     assert _setup(repo) == 0
-    assert left == [] and "meaning" in asked[2] and "[y/N]" in asked[2]          # Python: the verdict is against, so no is the default
+    assert left == [] and "meaning" in asked[3] and "[y/N]" in asked[3]          # Python: the verdict is against, so no is the default
     assert settings.read(settings.repo_file(gitio.common_dir(repo.root)))["dense"] is True
     status = Engine(repo.root).status()["vectors"]
     assert status["enabled"] is True and status["with_vector"] == status["chunks"] > 0
@@ -109,9 +109,9 @@ def test_a_yes_to_search_by_meaning_makes_the_vectors_and_keeps_the_choice_for_t
 def test_where_the_verdict_is_for_vectors_yes_is_the_default_and_a_no_is_the_repository_s_choice(repo, capsys, monkeypatch):
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})
     monkeypatch.setattr(embed_setup, "installed", lambda: True)
-    asked, left = _terminal(monkeypatch, "n", "", "n", "n")
+    asked, left = _terminal(monkeypatch, "n", "n", "", "n", "n")   # Claude Code, memory, sources, vectors, git's cache
     assert _setup(repo) == 0
-    assert "[Y/n]" in asked[2]
+    assert "[Y/n]" in asked[3]
     assert settings.read(settings.repo_file(gitio.common_dir(repo.root)))["dense"] is False
     assert Engine(repo.root).status()["vectors"]["enabled"] is False
 
@@ -136,9 +136,9 @@ def test_the_doctor_and_the_agent_s_status_show_the_same_list_and_act_on_nothing
     from aleph_zero import doctor
 
     row = next(row for row in doctor.check(repo.root) if row.name == "setup")
-    assert row.level == "note" and "aleph setup" in row.detail and "5 of 5" in row.detail
+    assert row.level == "note" and "aleph setup" in row.detail and "6 of 6" in row.detail
     status = Engine(repo.root).status()["setup"]
-    assert status["open"] == ["claude", "worker", "sources", "vectors", "untracked_cache"] and "aleph setup" in status["how"]
+    assert status["open"] == ["claude", "worker", "memory", "sources", "vectors", "untracked_cache"] and "aleph setup" in status["how"]
     assert not settings.repo_file(gitio.common_dir(repo.root)).exists()         # looking keeps nothing
     _terminal(monkeypatch, "n", "n", "", "n")
     assert _setup(repo) == 0
@@ -251,7 +251,7 @@ def test_a_directory_that_is_not_a_repository_is_told_what_cannot_be_done_there(
 
 def test_a_no_to_vectors_where_the_verdict_is_against_is_an_answer_and_not_a_choice(repo, capsys, monkeypatch):
     monkeypatch.setattr(embed_setup, "installed", lambda: True)    # Python: the verdict is against, the worker is there
-    _terminal(monkeypatch, "n", "", "", "n")                       # a bare return at the vectors question
+    _terminal(monkeypatch, "n", "n", "", "", "n")                  # memory: no; a bare return at the vectors question
     assert _setup(repo) == 0
     kept = settings.read(settings.repo_file(gitio.common_dir(repo.root)))
     assert "dense" not in kept and kept["setup"]["vectors"] == "declined"       # a later verdict in favour is not outranked
@@ -280,7 +280,7 @@ def test_the_owner_s_example_a_documentation_repository_is_linked_embedded_and_f
     monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
     monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
     monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
-    _terminal(monkeypatch, "n", str(docs_repo.root), "", "y", "n")  # Claude Code, the source, no more, vectors, git's cache
+    _terminal(monkeypatch, "n", "n", str(docs_repo.root), "", "y", "n")  # Claude Code, memory, the source, no more, vectors, git's cache
     assert _setup(repo) == 0
     engine = Engine(repo.root)
     status = engine.status()
@@ -381,3 +381,17 @@ def test_a_yes_in_the_menu_says_what_it_installed(repo, capsys, monkeypatch):
     assert _setup(repo) == 0
     out = capsys.readouterr().out
     assert "installed the-worker and the-model" in out and "untracked cache is on" in out
+
+
+def test_memory_by_meaning_is_on_the_list_after_the_worker_and_suggested_where_the_worker_is(repo, capsys, monkeypatch):
+    from aleph_zero import aeon_setup
+
+    states = _states(repo, capsys)
+    assert list(states)[:3] == ["claude", "worker", "memory"] and states["memory"] == "open"
+    built = []
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    monkeypatch.setattr(aeon_setup, "install", lambda source=None, report=None: built.append(source) or "lib")
+    asked, left = _terminal(monkeypatch, "y", "", "", "", "n")     # Claude Code; memory: Enter (yes, suggested); sources; vectors; cache
+    assert _setup(repo) == 0
+    assert any("Memory by meaning" in question or "Aeon" in question for question in asked) and built == [None]
+    assert "[Y/n]" in next(question for question in asked if "Aeon" in question)

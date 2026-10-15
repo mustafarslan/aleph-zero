@@ -309,6 +309,16 @@ def _aeon_core():
         return None
 
 
+def aeon_available() -> bool:
+    """Whether Aeon's core can be had here, without loading it: for the setup list and the agent's status."""
+    directory = os.environ.get("ALEPH_AEON_LIB")
+    if directory:
+        return any(Path(directory).glob("core.cpython-*.so")) or any(Path(directory).glob("core.*.pyd"))
+    from . import aeon_setup
+
+    return aeon_setup.installed() or importlib.util.find_spec("aeon_py") is not None
+
+
 def open_store(state: Path) -> "AeonStore | None":
     """The vector store for the repository whose state directory is `state`, or None when
     Aeon is not there."""

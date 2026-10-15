@@ -18,6 +18,7 @@ from .names import COMMAND
 
 CHUNKS_A_SECOND = 100          # what the worker embeds on this kind of machine (ADR-005): for the estimate only
 WORKER_COST = "310 MB download and a build of a few minutes; uses the network"
+MEMORY_COST = "a build of a minute or two (git, cmake, ninja, a C++ compiler and SIMDe: brew install simde); uses the network"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class Found:
     aleph: str = "aleph"       # how this engine is started: where it is, when that is known
     files: int = 0             # files of the worktree itself, linked sources not counted
     plugin: bool = False       # Claude Code has the aleph-zero plugin installed: it starts the engine itself
+    memory: bool = False       # Aeon's core is there: memories are recalled by meaning as well as by words
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,12 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
              "installed" if found.worker else "not installed; search by meaning needs it" if wanted
              else "not installed; nothing needs it while search is by words and names",
              "" if found.worker else WORKER_COST, f"{COMMAND} embed setup", wanted),
+        Step("memory", "machine", "Memory by meaning (Aeon), for recalling earlier answers",
+             "declined" if not found.memory and not found.worker and _state(found.worker, machine, "worker", wanted) == "declined"
+             else _state(found.memory, machine, "memory"),
+             "installed" if found.memory else "not installed; earlier answers and notes are recalled by words and recency"
+             + ("" if found.worker else "; it needs the embedding worker"),
+             "" if found.memory else MEMORY_COST, f"{COMMAND} setup --memory", found.worker),
     ]
     if found.repository:
         steps.append(Step(
@@ -168,8 +176,10 @@ def look(status: dict) -> Found:
 
     verdict, why = dense_policy.decide(None, status.get("main_language"))
     vectors = status.get("vectors") or {}
+    from . import memory as memories
+
     return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
-                 plugin=plugin_installed(),
+                 plugin=plugin_installed(), memory=memories.aeon_available(),
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
@@ -282,6 +292,12 @@ class Menu:
                 self.say(f"  {self.act('worker')}")
             else:
                 settings.answer(kept, "worker", "declined" if step.suggested else "not-needed")
+        elif step.key == "memory":
+            if self._yes("Build Aeon's core, for recalling memories by meaning?", step.suggested):
+                settings.answer(kept, "memory", None)
+                self.say(f"  {self.act('memory')}")
+            else:
+                settings.answer(kept, "memory", "declined" if step.suggested else "not-needed")
         elif step.key == "sources":
             added = 0
             while True:
