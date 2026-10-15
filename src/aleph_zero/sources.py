@@ -288,7 +288,16 @@ def _clone(common_dir: Path, source: Source) -> None:
         _resolve(common_dir, source)
     except gitio.GitError as exc:
         shutil.rmtree(directory, ignore_errors=True)
-        raise SourceError(f"could not clone {source.location}: {exc}") from exc
+        raise SourceError(why_not_cloned(source.location, str(exc))) from exc
+
+
+def why_not_cloned(location: str, error: str) -> str:
+    """What a failed clone means. A host such as GitHub answers a repository that does not exist, or one that is
+    private, by asking for a login, which git may not ask for here: said as that, not as git's prompt."""
+    if "could not read Username" in error or "terminal prompts disabled" in error or "Authentication failed" in error:
+        return (f"could not clone {location}: the repository does not exist, or it is private and git has no login "
+                f"for it here (a private one can be cloned yourself and linked by its path)")
+    return f"could not clone {location}: {error}"
 
 
 def _resolve(common_dir: Path, source: Source) -> None:

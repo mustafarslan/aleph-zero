@@ -163,10 +163,15 @@ def _notes(answer: Answer) -> list[str]:
     return notes
 
 
+# How to see what was left out, in the words of the one asking: the tool's parameters for an agent; the command line
+# puts its flags here (cli._search).
+NARROWER = 'narrow the query, add path_glob, or ask for detail="locations"'
+
+
 def _left_out(count: int) -> str:
     if count <= 0:
         return ""
-    return f"(+{count} more results not shown; narrow the query, add path_glob, or ask for detail=\"locations\")"
+    return f"(+{count} more results not shown; {NARROWER})"
 
 
 def _entries(hits: list[Hit]) -> list[_Entry]:

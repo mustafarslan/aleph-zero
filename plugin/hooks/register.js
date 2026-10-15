@@ -347,7 +347,7 @@ export function register(on, options) {
         ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
         ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
         // Said in the pane itself: this is the user's conversation being kept on disk.
-        Text({ dimColor: true, children: ['Answers and inserted notes are remembered for later sessions: `aleph memory list`, `aleph memory forget`.'] }),
+        Text({ dimColor: true, children: ['Answers and inserted notes are remembered for later sessions: `aleph-zero memory list`, `aleph-zero memory forget`.'] }),
         Input({
           // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
           // and a field drawn empty would wipe a half-typed question.

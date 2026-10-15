@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Never fetch missing objects one at a time from a partial clone, never take
 # optional locks from a background reader, and keep git's messages in English.
-_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
+_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
 _REGULAR_MODES = {b"100644", b"100755"}
 
 

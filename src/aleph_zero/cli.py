@@ -42,6 +42,7 @@ def _index(args) -> int:
 
 
 def _search(args) -> int:
+    render.NARROWER = "narrow the query, add --glob, or ask for --detail locations"
     engine = Engine(args.cwd, dense=_dense_setting(args))
     answer = engine.search(args.query, k=args.k, kind=args.kind, path_glob=args.glob, lang=args.lang,
                            timeout_ms=args.timeout_ms)
@@ -60,6 +61,8 @@ def _symbol(args) -> int:
     for hit in found.symbols:
         print(f"{hit.path}:{hit.line}  {hit.kind}  {hit.qualified}")
         print(f"    {hit.signature[:160]}")
+    if not found.symbols:
+        print(f'no definition named "{args.name}" in this worktree')
     if found.pending:
         print(f"note: {found.pending} files are not indexed yet; run `{COMMAND} index`", file=sys.stderr)
     return 0
@@ -118,6 +121,8 @@ def _scip(args) -> int:
         if args.json:
             print(json.dumps(listed, indent=2))
             return 0
+        if not listed:
+            print(f"no SCIP indexes imported here (`{COMMAND} scip run` or `{COMMAND} scip import FILE`)")
         for row in listed:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["imported_at"]))
             print(f"{row['import_id']}  {when}  {row['tool'] or '?':16} {row['documents']} documents, stamped with {row['stamped']}")
@@ -360,7 +365,10 @@ def _update(args) -> int:
 def _memory(args) -> int:
     engine = Engine(args.cwd, dense=False)
     if args.action == "list":
-        for row in engine.memories(args.limit):
+        rows = engine.memories(args.limit)
+        if not rows:
+            print("no memories of this repository yet: the side chat's answers and what an agent remembers are kept here")
+        for row in rows:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["created_at"]))
             print(f"{row['memory_id']}  {when}  {row['kind']:5} {' '.join(row['text'].split())[:100]}")
         return 0

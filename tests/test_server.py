@@ -557,6 +557,7 @@ def test_the_background_thread_works_only_when_a_vector_is_missing_or_the_worker
 def test_the_graph_switch_takes_the_plugin_option_s_words_as_well(monkeypatch):
     # The plugin passes its `graph` option (on/off, like its other switches) through to the engine as ALEPH_GRAPH.
     from aleph_zero import server
-    for value, enabled in (("1", True), ("on", True), ("off", False), ("0", False), ("", False)):
+    for value, enabled in (("1", True), ("on", True), ("off", False), ("0", False), ("", False),
+                           ("true", True), ("ON", True), ("yes", True), ("false", False), ("no", False)):
         monkeypatch.setenv("ALEPH_GRAPH", value)
         assert server.graph_enabled() is enabled, value

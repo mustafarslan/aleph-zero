@@ -152,3 +152,19 @@ def test_a_reader_that_goes_away_is_not_an_error(repo, tmp_path):
 def test_cwd_is_taken_after_the_command_too(repo, capsys):
     assert cli.main(["search", "refresh token", "--cwd", str(repo.root)]) == 0
     assert "token_store.py" in capsys.readouterr().out
+
+
+def test_empty_answers_say_so(repo, capsys):
+    for argv, said in ((["symbol", "no_such_name_zz"], "no definition named"), (["memory", "list"], "no memories"),
+                       (["scip", "list"], "no SCIP")):
+        assert cli.main(["--cwd", str(repo.root), *argv]) == 0
+        assert said in capsys.readouterr().out
+
+
+def test_the_command_line_names_its_own_flags_when_results_are_left_out(empty_repo, capsys):
+    for number in range(12):
+        empty_repo.write(f"m{number}.py", f"def token_invoice_{number}(x):\n    return x\n")
+    empty_repo.commit("many")
+    assert cli.main(["--cwd", str(empty_repo.root), "search", "token invoice", "--budget-tokens", "40"]) == 0
+    out = capsys.readouterr().out
+    assert "more results not shown" in out and "--glob" in out and "path_glob" not in out

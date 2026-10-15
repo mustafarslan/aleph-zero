@@ -343,3 +343,12 @@ def test_letting_go_of_memory_drops_the_kept_views_of_path_sources(repo, docs_re
     assert sources._MOUNTS
     views.forget_trees()
     assert not sources._MOUNTS
+
+
+def test_a_url_that_asks_for_a_login_is_said_to_be_missing_or_private():
+    # GitHub answers a repository that does not exist (or is private) by asking git for a login.
+    from aleph_zero import sources
+    said = sources.why_not_cloned("https://github.com/someone/nothing", "fatal: could not read Username for "
+                                  "'https://github.com': terminal prompts disabled")
+    assert "does not exist" in said and "private" in said and "Username" not in said
+    assert "timed out" in sources.why_not_cloned("u", "git timed out")      # anything else is passed on

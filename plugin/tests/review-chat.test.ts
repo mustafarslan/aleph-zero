@@ -188,5 +188,5 @@ test('the pane says that answers are kept, and how to see and remove them', asyn
   world(on)
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount(PANE)
-  expect(await ui.find({ type: 'Text', text: /remembered for later sessions.*aleph memory/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /remembered for later sessions.*aleph-zero memory/ })).toBeDefined()
 })
