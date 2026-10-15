@@ -9,12 +9,17 @@ for a public release.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import worker
@@ -25,6 +30,8 @@ MODEL_URL = f"https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/
 MODEL_SHA256 = "6f1bd4ac6c5df7444f9cca7ca36cafe6cfa34cd6f49fefb1e0b4be8143aed8bc"
 PATCH = Path(__file__).with_name("llama-no-logits.patch")
 _CHUNK = 1 << 20
+_READ = 1 << 16          # what one read of the download waits for: a slow link still shows progress
+PROGRESS_SECONDS = 30.0  # between progress lines when they are not redrawn in place on a terminal
 
 
 class SetupError(RuntimeError):
@@ -60,18 +67,31 @@ def install_model(local: Path | None = None, report=lambda text: None) -> Path:
 
 
 def _download(part: Path, report) -> None:
+    """Fetch the model into `part`, continuing what an earlier try left. Says where from and how large first, then how
+    far it is: redrawn in place on a terminal, a line every PROGRESS_SECONDS otherwise."""
     have = part.stat().st_size if part.exists() else 0
     request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
+    live = sys.stderr.isatty()
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             resumed = response.status == 206
+            done = have if resumed else 0
+            total = done + int(response.headers.get("Content-Length") or 0)
+            host = urllib.parse.urlsplit(MODEL_URL).hostname
+            report(f"downloading the model ({total / 1e6:.0f} MB) from {host}"
+                   + (f", from {done / 1e6:.0f} MB where the last try stopped" if done else "")
+                   + "; if it is interrupted, setup again continues where it stopped")
+            started, shown, got = time.monotonic(), 0.0, 0
             with open(part, "ab" if resumed else "wb") as out:
-                done = have if resumed else 0
-                while block := response.read(_CHUNK):
+                while block := response.read(_READ):
                     out.write(block)
                     done += len(block)
-                    if done % (32 * _CHUNK) < _CHUNK:
-                        report(f"model: {done / 1e6:.0f} MB")
+                    got += len(block)
+                    now = time.monotonic()
+                    if now - shown >= (1.0 if live else PROGRESS_SECONDS):
+                        shown = now
+                        _progress(report, live, done, total, got / max(now - started, 1e-6))
+            _progress(report, live, done, total, got / max(time.monotonic() - started, 1e-6), last=True)
     except (urllib.error.URLError, OSError) as exc:
         raise SetupError(f"the model could not be downloaded from {MODEL_URL}: {exc}; run setup again to resume") from exc
 
@@ -95,6 +115,33 @@ def _has_commit(checkout: Path) -> bool:
     found = subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", f"{LLAMA_COMMIT}^{{commit}}"],
                            capture_output=True)
     return found.returncode == 0
+
+
+def _progress(report, live: bool, done: int, total: int, rate: float, last: bool = False) -> None:
+    left = (total - done) / rate / 60 if rate > 0 and total > done else 0
+    text = (f"model: {done / 1e6:.0f} of {total / 1e6:.0f} MB ({100 * done / max(total, 1):.0f}%), {rate / 1e6:.2f} MB/s"
+            + (f", about {left:.0f} min left" if left >= 1 else ""))
+    if live:
+        sys.stderr.write(f"\r{text}   " + ("\n" if last else ""))
+        sys.stderr.flush()
+    else:
+        report(text)
+
+
+@contextmanager
+def installing(report=lambda text: None) -> Iterator[None]:
+    """One installation of the worker at a time: a second terminal, or a retry while the first still downloads, waits
+    for the first instead of building llama.cpp in the same directory."""
+    with open(worker.home() / "install.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            report("another `aleph setup` is installing the worker on this machine; waiting for it to finish")
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def install_binary(source: Path | None = None, report=lambda text: None) -> Path:

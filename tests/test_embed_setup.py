@@ -129,3 +129,38 @@ def test_a_fetch_that_was_interrupted_is_made_again_on_the_next_try(home, monkey
     with pytest.raises(embed_setup.SetupError):
         embed_setup.install_binary()
     assert any("fetch" in command and command[-1] == embed_setup.LLAMA_COMMIT for command in ran)
+
+
+def test_the_download_says_where_from_how_large_and_how_far_it_is(home, served, monkeypatch):
+    # On a slow link the 310 MB took 1.7 hours here; a line every 32 MB (11 minutes apart) looked like a hang.
+    monkeypatch.setattr(embed_setup, "PROGRESS_SECONDS", 0.0)
+    said = []
+    embed_setup.install_model(None, said.append)
+    assert said[0].startswith("downloading the model") and "127.0.0.1" in said[0] and "MB" in said[0]
+    assert "setup again" in said[0]                                     # an interruption is not a loss
+    progress = [line for line in said[1:] if "%" in line]
+    assert progress and "MB/s" in progress[-1] and "100%" in progress[-1]
+
+
+def test_two_installs_at_once_wait_for_each_other(home):
+    # A second terminal (or a retry while the first still downloads) built llama.cpp in the same directory.
+    said, inside = [], threading.Event()
+
+    def second():
+        with embed_setup.installing(said.append):
+            inside.set()
+
+    with embed_setup.installing(lambda text: None):
+        other = threading.Thread(target=second)
+        other.start()
+        assert not inside.wait(0.5)                                     # held while the first is at it
+        assert said and "waiting" in said[0]
+    other.join(5)
+    assert inside.is_set()
+
+
+def test_a_missing_model_file_is_said_before_anything_is_built(home, monkeypatch, capsys):
+    monkeypatch.setattr(embed_setup, "install_binary", lambda *a, **k: pytest.fail("built before the file was looked at"))
+    assert cli.main(["embed", "setup", "--model-file", "/no/such/model.gguf"]) == 2
+    err = capsys.readouterr().err
+    assert "/no/such/model.gguf" in err and "Traceback" not in err

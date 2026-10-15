@@ -198,9 +198,12 @@ def _embed(args) -> int:
     from .embed import setup, worker
 
     if args.action == "setup":
+        if args.model_file is not None and not Path(args.model_file).is_file():
+            raise ValueError(f"{args.model_file} is not a file: --model-file names a copy of {worker.MODEL_FILE} on this machine")
         say = lambda text: print(text, flush=True)  # noqa: E731
-        binary = setup.install_binary(args.llama_source, say)
-        model = setup.install_model(args.model_file, say)
+        with setup.installing(say):
+            binary = setup.install_binary(args.llama_source, say)
+            model = setup.install_model(args.model_file, say)
         print(f"installed {binary}\ninstalled {model}")
     elif args.action == "stop":
         worker.stop()
@@ -245,7 +248,8 @@ def _setup(args) -> int:
 
     def act(what: str, *given: str) -> str:
         if what == "worker":
-            return f"installed {embed_setup.install_binary(None, say)} and {embed_setup.install_model(None, say)}"
+            with embed_setup.installing(say):
+                return f"installed {embed_setup.install_binary(None, say)} and {embed_setup.install_model(None, say)}"
         if what == "source":
             added = sources.add(args.cwd, given[0])
             return f"linked {added.name} ({added.kind}): {added.location}"
