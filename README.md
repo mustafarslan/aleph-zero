@@ -312,8 +312,9 @@ Then remove what it kept:
 
 ```sh
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/aleph-zero"   # worker, model, URL clones, machine settings
-rm -rf "/tmp/aleph-zero-$(id -u)"                     # the worker's socket, if the cache path was too long for one
+rm -rf "/tmp/aleph-zero-$(id -u)"                     # worker sockets, where a cache path was too long for one (every cache's)
 rm -f ~/.claude/plugins/store/aleph-zero_*.json       # the plugin's meter and side-chat settings
+rm -rf ~/.claude/plugins/cache/aleph-zero             # the plugin's copies, which Claude Code keeps after an uninstall
 rm -rf "$(git rev-parse --git-common-dir)/aleph-zero" # in each project: its index, vectors, memories, settings
 git update-index --no-untracked-cache                 # optional, in each worktree where setup turned it on
 ```
