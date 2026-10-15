@@ -33,6 +33,9 @@ PATCH = Path(__file__).with_name("llama-no-logits.patch")
 _CHUNK = 1 << 20
 _READ = 1 << 16          # what one read of the download waits for: a slow link still shows progress
 PROGRESS_SECONDS = 30.0  # between progress lines when they are not redrawn in place on a terminal
+SLOW_WINDOW_SECONDS = 10.0          # how long a connection is watched before it is judged slow
+SLOW_BYTES_PER_SECOND = 256 * 1024  # under this for a whole window, it is replaced by a new connection
+RECONNECTS = 40                     # new connections at most for one download
 
 
 class SetupError(RuntimeError):
@@ -69,30 +72,54 @@ def install_model(local: Path | None = None, report=lambda text: None) -> Path:
 
 def _download(part: Path, report) -> None:
     """Fetch the model into `part`, continuing what an earlier try left. Says where from and how large first, then how
-    far it is: redrawn in place on a terminal, a line every PROGRESS_SECONDS otherwise."""
-    have = part.stat().st_size if part.exists() else 0
-    request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
+    far it is: redrawn in place on a terminal, a line every PROGRESS_SECONDS otherwise. A connection that stays slow is
+    replaced by a new one that continues where it was: the CDN's speed differs from one connection to the next (40 KB/s
+    and 2.9 MB/s for the same bytes, measured), and keeping a slow one made the 310 MB take hours."""
     live = sys.stderr.isatty()
+    total = started = None
+    shown, got = 0.0, 0
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            resumed = response.status == 206
-            done = have if resumed else 0
-            total = done + int(response.headers.get("Content-Length") or 0)
-            host = urllib.parse.urlsplit(MODEL_URL).hostname
-            report(f"downloading the model ({total / 1e6:.0f} MB) from {host}"
-                   + (f", from {done / 1e6:.0f} MB where the last try stopped" if done else "")
-                   + "; if it is interrupted, setup again continues where it stopped")
-            started, shown, got = time.monotonic(), 0.0, 0
-            with open(part, "ab" if resumed else "wb") as out:
-                while block := response.read(_READ):
-                    out.write(block)
-                    done += len(block)
-                    got += len(block)
-                    now = time.monotonic()
-                    if now - shown >= (1.0 if live else PROGRESS_SECONDS):
-                        shown = now
-                        _progress(report, live, done, total, got / max(now - started, 1e-6))
-            _progress(report, live, done, total, got / max(time.monotonic() - started, 1e-6), last=True)
+        for attempt in range(RECONNECTS + 1):
+            have = part.stat().st_size if part.exists() else 0
+            if total is not None and have >= total:
+                break
+            request = urllib.request.Request(MODEL_URL, headers={"Range": f"bytes={have}-"} if have else {})
+            try:
+                response = urllib.request.urlopen(request, timeout=60)
+            except urllib.error.HTTPError as exc:
+                if exc.code == 416 and have:    # nothing after what is there: an earlier try got it all
+                    break
+                raise
+            with response:
+                resumed = response.status == 206
+                done = have if resumed else 0
+                if total is None:
+                    total = done + int(response.headers.get("Content-Length") or 0)
+                    host = urllib.parse.urlsplit(MODEL_URL).hostname
+                    report(f"downloading the model ({total / 1e6:.0f} MB) from {host}"
+                           + (f", from {done / 1e6:.0f} MB where the last try stopped" if done else "")
+                           + "; if it is interrupted, setup again continues where it stopped")
+                    started = time.monotonic()
+                window_at, window = time.monotonic(), 0
+                slow = False
+                with open(part, "ab" if resumed else "wb") as out:
+                    while block := response.read(_READ):
+                        out.write(block)
+                        done += len(block)
+                        got += len(block)
+                        window += len(block)
+                        now = time.monotonic()
+                        if now - shown >= (1.0 if live else PROGRESS_SECONDS):
+                            shown = now
+                            _progress(report, live, done, total, got / max(now - started, 1e-6))
+                        if now - window_at >= SLOW_WINDOW_SECONDS:
+                            if window / (now - window_at) < SLOW_BYTES_PER_SECOND and attempt < RECONNECTS:
+                                slow = True     # this connection crawls: a new one continues from here
+                                break
+                            window_at, window = now, 0
+            if not slow:
+                break
+        _progress(report, live, part.stat().st_size, total or 0, got / max(time.monotonic() - (started or 0), 1e-6), last=True)
     except (urllib.error.URLError, OSError) as exc:
         raise SetupError(f"the model could not be downloaded from {MODEL_URL}: {exc}; run setup again to resume") from exc
 

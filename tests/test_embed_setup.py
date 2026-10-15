@@ -37,6 +37,10 @@ def served(monkeypatch):
             if self.headers.get("Range"):
                 start = int(self.headers["Range"].removeprefix("bytes=").rstrip("-"))
             asked.append(start)
+            if start >= len(CONTENT):                                # as a real server answers a range past the end
+                self.send_response(416)
+                self.end_headers()
+                return
             body = CONTENT[start:]
             self.send_response(206 if start else 200)
             self.send_header("Content-Length", str(len(body)))
@@ -164,3 +168,46 @@ def test_a_missing_model_file_is_said_before_anything_is_built(home, monkeypatch
     assert cli.main(["embed", "setup", "--model-file", "/no/such/model.gguf"]) == 2
     err = capsys.readouterr().err
     assert "/no/such/model.gguf" in err and "Traceback" not in err
+
+
+def test_a_connection_that_stays_slow_is_replaced_and_the_download_goes_on_where_it_was(home, monkeypatch):
+    # Measured: Hugging Face's CDN gives one connection 40 KB/s and the next 2.9 MB/s for the same bytes. A download
+    # that keeps a slow connection takes hours; one that starts a new connection when the last stays slow does not.
+    import time as clock
+    asked = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            start = int(self.headers["Range"].removeprefix("bytes=").rstrip("-")) if self.headers.get("Range") else 0
+            asked.append(start)
+            body = CONTENT[start:]
+            self.send_response(206 if start else 200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            slow = len(asked) <= 2                                       # the first two connections crawl
+            for at in range(0, len(body), 4096):
+                self.wfile.write(body[at:at + 4096])
+                if slow:
+                    clock.sleep(0.05)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(embed_setup, "MODEL_URL", f"http://127.0.0.1:{server.server_port}/model.gguf")
+    monkeypatch.setattr(embed_setup, "_READ", 4096)
+    monkeypatch.setattr(embed_setup, "SLOW_WINDOW_SECONDS", 0.3)
+    monkeypatch.setattr(embed_setup, "SLOW_BYTES_PER_SECOND", 200_000)
+    try:
+        assert embed_setup.install_model().read_bytes() == CONTENT
+    finally:
+        server.shutdown()
+    assert len(asked) == 3 and asked[0] == 0 and 0 < asked[1] < asked[2] < len(CONTENT)     # resumed each time
+
+
+def test_a_whole_part_left_by_an_earlier_try_is_checked_without_asking_for_more(home, served):
+    part = worker.model().with_suffix(".part")
+    part.parent.mkdir(parents=True, exist_ok=True)
+    part.write_bytes(CONTENT)
+    assert embed_setup.install_model().read_bytes() == CONTENT
