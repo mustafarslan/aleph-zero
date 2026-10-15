@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 AEON_REPOSITORY = "https://github.com/mustafarslan/aeon"
-AEON_COMMIT = ""   # the commit of the branch Aleph's fixes are on; set when it is published
+AEON_COMMIT = "c7128c959a3342d63ed1f9bd8e789305f6b4b567"   # Aeon branch aleph-memory-fixes (off v4), with the fixes memory needs
 
 
 class SetupError(RuntimeError):

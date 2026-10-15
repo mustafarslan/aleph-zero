@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.5
+
+Memory by meaning works for real (Aeon), and the side chat reads like a conversation (the owner's asks, with the
+advisor's and agy's review).
+
+- **Aeon, switched on by a command.** `aleph setup --memory` builds Aeon's core for this engine's Python into the cache
+  directory (a few seconds to a few minutes; needs git, cmake, ninja, a C++ compiler and SIMDe: `brew install simde`),
+  and memory finds it there with no setting. The setup list offers it once the embedding worker is installed.
+  Before, Aeon was used only where `ALEPH_AEON_LIB` pointed at a build, which nothing set.
+- `forget` now erases inside Aeon too (the event is tombstoned and its text overwritten on disk); `forget --all`
+  removes Aeon's files. Memories kept without a vector (the worker was down, or Aeon came later) get one at the next
+  `aleph update` or `aleph embed run`.
+- The agent is told that earlier sessions' answers are kept and that `recall` finds them. The side chat does not
+  recall memories: its saved answers are unverified, and feeding them back would compound mistakes (advisor and agy).
+- Aeon's branch `aleph-memory-fixes` (off `v4`) carries the fixes this needs, each with a test that failed first: ids
+  kept across a crash, crash-recovered events searchable, a durable tombstone that erases text, compaction that
+  keeps histories whole and keeps what was written during it, a blob arena safe for concurrent writers (it
+  segfaulted under eight threads before), and a base install of `aeon_py` without PyTorch.
+
+- Docked beside the transcript, the pane takes the window's height: a one-line header (model, effort, tokens), the
+  messages with the newest at the bottom, a rule, the question field, and one line of keys under it. Before, the
+  engine's window started at the top and the question field scrolled out of view after a few answers.
+- Questions show as `> …`, answers marked `⏺` as Claude Code marks its own, each followed by one dim line of what it
+  cites and its tokens; `✻ Searching the index…` and `✻ Thinking…` while it works.
+- Settings are keys (m model, e effort) instead of two pickers; c closes; i inserts; s stops. The empty pane says
+  what to ask, how to move between it and the conversation, and that answers are kept.
+- Above the prompt (a narrow terminal) the pane fits its contents and shows the last two turns.
+
 ## 0.1.4
 
 The side chat (`/aleph`), from its first use by a person.

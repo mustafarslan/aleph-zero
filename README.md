@@ -81,11 +81,12 @@ whose answers cite `path:line`.
    uv tool update-shell
    ```
 
-3. In a new terminal: the embedding server and model (optional, for search by meaning), then
-   the plugin.
+3. In a new terminal: the embedding server and model (optional, for search by meaning), Aeon
+   (optional, for recalling earlier answers by meaning: `brew install simde` first), then the plugin.
 
    ```sh
    aleph setup --worker
+   aleph setup --memory
    claude plugin marketplace add mustafarslan/aleph-zero
    claude plugin install aleph-zero@aleph-zero
    ```

@@ -16,7 +16,7 @@ def _by_key(steps):
 def test_a_fresh_python_repository_has_five_open_steps_and_none_that_costs_is_suggested():
     steps = firstrun.plan(PYTHON, repo={}, machine={})
     # Sources before vectors: what is linked is embedded with the rest, so it is asked for first.
-    assert [step.key for step in steps] == ["claude", "worker", "sources", "vectors", "untracked_cache"]
+    assert [step.key for step in steps] == ["claude", "worker", "memory", "sources", "vectors", "untracked_cache"]
     assert {step.state for step in steps} == {"open"}
     by = _by_key(steps)
     assert by["claude"].suggested and "claude --plugin-dir /src/aleph/plugin" in by["claude"].command
@@ -40,13 +40,13 @@ def test_a_person_who_asked_for_search_by_meaning_in_a_python_repository_is_offe
 
 
 def test_what_is_found_done_is_done_and_what_was_declined_is_not_open_again():
-    found = replace(CPP, worker=True, with_vector=1200, sources=2, untracked_cache=True)
+    found = replace(CPP, worker=True, with_vector=1200, sources=2, untracked_cache=True, memory=True)
     by = _by_key(firstrun.plan(found, repo={}, machine={"setup": {"claude": "done"}}))
     assert {step.state for step in by.values()} == {"done"} and "2 linked" in by["sources"].detail
     declined = _by_key(firstrun.plan(CPP, repo={"setup": {"sources": "declined", "untracked_cache": "declined"}, "dense": False},
                                      machine={"setup": {"worker": "declined", "claude": "declined"}}))
     assert {step.state for step in declined.values()} == {"declined"}
-    assert firstrun.open_steps(firstrun.plan(CPP, repo={}, machine={})) == ["claude", "worker", "sources", "vectors", "untracked_cache"]
+    assert firstrun.open_steps(firstrun.plan(CPP, repo={}, machine={})) == ["claude", "worker", "memory", "sources", "vectors", "untracked_cache"]
     assert firstrun.open_steps(list(declined.values())) == []
 
 
@@ -65,7 +65,7 @@ def test_without_the_worker_and_with_a_no_to_it_vectors_are_not_a_question_any_m
 
 def test_a_directory_that_is_not_a_repository_is_not_offered_what_needs_one():
     steps = firstrun.plan(replace(PYTHON, repository=False), repo={}, machine={})
-    assert [step.key for step in steps] == ["claude", "worker", "vectors"]
+    assert [step.key for step in steps] == ["claude", "worker", "memory", "vectors"]     # memory is the machine's
 
 
 def test_answers_are_kept_in_a_file_and_a_damaged_file_is_no_answers(tmp_path):
