@@ -14,6 +14,7 @@ from .engine import Engine
 from .indexer import PREPARE_PROCESSES, Index, collect_garbage
 from .store import StoreError, index_file, open_db
 from .view import build_view
+from .names import COMMAND
 
 
 def _open(cwd: Path) -> tuple[Index, object]:
@@ -60,7 +61,7 @@ def _symbol(args) -> int:
         print(f"{hit.path}:{hit.line}  {hit.kind}  {hit.qualified}")
         print(f"    {hit.signature[:160]}")
     if found.pending:
-        print(f"note: {found.pending} files are not indexed yet; run `aleph index`", file=sys.stderr)
+        print(f"note: {found.pending} files are not indexed yet; run `{COMMAND} index`", file=sys.stderr)
     return 0
 
 
@@ -122,7 +123,7 @@ def _scip(args) -> int:
             print(f"{row['import_id']}  {when}  {row['tool'] or '?':16} {row['documents']} documents, stamped with {row['stamped']}")
         return 0
     if args.import_id is None and not args.all:
-        print("say which import to forget (see `aleph scip list`), or --all", file=sys.stderr)
+        print(f"say which import to forget (see `{COMMAND} scip list`), or --all", file=sys.stderr)
         return 2
     print(f"forgot {engine.scip_forget(None if args.all else args.import_id)} documents")
     return 0
@@ -259,9 +260,9 @@ def _setup(args) -> int:
         try:                                                    # 'embed': in the foreground, and it can be left
             report = Engine(args.cwd, dense=True).embed(progress=lambda done, left: print(f"  {done} embedded", end="\r", flush=True))
         except KeyboardInterrupt:
-            return "interrupted; `aleph embed run` continues where this stopped"
+            return f"interrupted; `{COMMAND} embed run` continues where this stopped"
         return (f"embedded {report.embedded} chunks in {report.seconds:.0f} s; {report.remaining} left"
-                + (f" ({report.reason}); `aleph embed run` continues" if report.reason else ""))
+                + (f" ({report.reason}); `{COMMAND} embed run` continues" if report.reason else ""))
 
     def flag(name: str, do) -> None:
         """One flag's work. What fails is said and counted; the flags after it are still done."""
@@ -283,7 +284,7 @@ def _setup(args) -> int:
         if args.json:
             print(json.dumps(firstrun.as_json([]), indent=2))
         else:
-            say("\nThe rest of the list is a project's: run `aleph setup` in one.")
+            say(f"\nThe rest of the list is a project's: run `{COMMAND} setup` in one.")
         return 2 if failed else 0
     repo_file = Path(status["index"]).parent / "settings.json"
     flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
@@ -302,7 +303,7 @@ def _setup(args) -> int:
     if args.embed and not firstrun.look(Engine(args.cwd).status()).worker:
         failed.append("--embed")
         print("aleph setup --embed: the embedding worker is not installed, so no vectors can be made: "
-              "`aleph setup --worker` first (310 MB; uses the network)", file=sys.stderr)
+              f"`{COMMAND} setup --worker` first (310 MB; uses the network)", file=sys.stderr)
     elif args.dense or args.no_dense or args.embed:
         settings.change(repo_file, dense=not args.no_dense)     # kept for the repository: vectors made are then used
         if args.embed:
@@ -323,17 +324,17 @@ def _setup(args) -> int:
                 if asked and not (key == "vectors" and not found.worker):
                     menu.step(step, found)
         except (KeyboardInterrupt, EOFError):
-            say("\nleft as it is: `aleph setup` asks about the rest")
+            say(f"\nleft as it is: `{COMMAND} setup` asks about the rest")
         settings.change(repo_file, hint_shown=True)
-        say("\nAfter a pull, `aleph update` brings all of this up to date in one go, for what changed only; "
-            "`aleph update --print-hook` prints the lines that make git do it by itself.\n")
+        say(f"\nAfter a pull, `{COMMAND} update` brings all of this up to date in one go, for what changed only; "
+            f"`{COMMAND} update --print-hook` prints the lines that make git do it by itself.\n")
     status, found, steps = now()
     if args.json:
         print(json.dumps(firstrun.as_json(steps), indent=2))
         return 2 if failed else 0
     say(firstrun.text(steps))
     if firstrun.open_steps(steps) and not firstrun.on_terminal():
-        say("\nAnswer these on a terminal with `aleph setup`, or one at a time: --worker, --source LOCATION, --embed, "
+        say(f"\nAnswer these on a terminal with `{COMMAND} setup`, or one at a time: --worker, --source LOCATION, --embed, "
             "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
     return 2 if failed else 0
 
@@ -375,7 +376,7 @@ def _memory(args) -> int:
             print(recalled_text(found, " ".join(args.query)))
         return 0
     if bool(args.all) == bool(args.memory_id):
-        print("aleph: name one memory to forget (its id is in `aleph memory list`), or pass --all by itself", file=sys.stderr)
+        print(f"aleph: name one memory to forget (its id is in `{COMMAND} memory list`), or pass --all by itself", file=sys.stderr)
         return 2
     forgotten = engine.forget(None if args.all else args.memory_id)
     print(f"forgot {forgotten}")
@@ -426,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     find.add_argument("--budget-tokens", type=int, default=render.DEFAULT_BUDGET, help="ceiling for the text answer")
     find.add_argument("--timeout-ms", type=int, help="answer within this time, marked partial if cut short")
     meaning = find.add_mutually_exclusive_group()
-    meaning.add_argument("--dense", action="store_true", help="also search by meaning (needs `aleph embed run` first)")
+    meaning.add_argument("--dense", action="store_true", help=f"also search by meaning (needs `{COMMAND} embed run` first)")
     meaning.add_argument("--no-dense", action="store_true", help="search by words and names only")
     find.add_argument("--json", action="store_true")
     find.set_defaults(run=_search)
@@ -584,7 +585,7 @@ def _grammar_notice() -> None:
     if failed and firstrun.hint_wanted():
         why = next(iter(failed.values()))
         print(f"aleph: the grammar for {', '.join(sorted(failed))} could not be loaded ({why[:160]}); those files are "
-              f"searched by words only, without definitions, until it is. `aleph doctor --fetch-grammars` fetches it",
+              f"searched by words only, without definitions, until it is. `{COMMAND} doctor --fetch-grammars` fetches it",
               file=sys.stderr)
 
 

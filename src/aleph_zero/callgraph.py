@@ -33,6 +33,7 @@ from .lang.calls import FAMILIES, Call, calls
 from .lang.definitions import definitions
 from .store import transaction
 from .view import View
+from .names import COMMAND
 
 GRAPH_VERSION = 7           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
@@ -447,7 +448,7 @@ def text(answer: Answer) -> str:
     if stale:
         lines.append(f"note: an imported compiler index covers these files but could not be used here, so the resolver "
                      f"answered: {stale[0]}" + (f" (and {len(stale) - 1} more reasons)" if len(stale) > 1 else "")
-                     + ". To have exact answers again: `aleph scip run`, or `aleph scip import` a new index")
+                     + f". To have exact answers again: `{COMMAND} scip run`, or `{COMMAND} scip import` a new index")
     if answer.unanswered:
         lines.append(f"note: {answer.unanswered} calls inside it reach nothing in this worktree (libraries, local functions)")
     if answer.truncated:

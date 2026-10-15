@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import dense_policy, gitio, settings, sources
+from .names import COMMAND
 
 CHUNKS_A_SECOND = 100          # what the worker embeds on this kind of machine (ADR-005): for the estimate only
 WORKER_COST = "310 MB download and a build of a few minutes; uses the network"
@@ -75,7 +76,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
         Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker", wanted),
              "installed" if found.worker else "not installed; search by meaning needs it" if wanted
              else "not installed; nothing needs it while search is by words and names",
-             "" if found.worker else WORKER_COST, "aleph embed setup", wanted),
+             "" if found.worker else WORKER_COST, f"{COMMAND} embed setup", wanted),
     ]
     if found.repository:
         steps.append(Step(
@@ -83,7 +84,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
             _state(found.sources > 0, repo, "sources"),
             f"{found.sources} linked" if found.sources else "none linked",
             "a path is read where it is; a URL is cloned into the cache directory (uses the network)",
-            "aleph source add <path or URL>", False))
+            f"{COMMAND} source add <path or URL>", False))
     missing = max(found.chunks - found.with_vector, 0)
     # Chosen and begun is done: chunks written since get their vectors from a running server or the next
     # `aleph embed run`, and an edit must not make this a question again. An empty repository has nothing to make.
@@ -101,9 +102,9 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
         + ("" if found.verdict else "; on whole questions (a pasted issue, or the plugin's second rung, which asks with the "
            "whole prompt) vectors gained in every language measured, 5 to 20 points")
         + ("" if asked_for is None else f"; this repository is set to {'use' if asked_for else 'not use'} vectors")
-        + ("; `aleph embed run` makes the rest, and so does a running server" if vectors == "done" and missing else ""),
+        + (f"; `{COMMAND} embed run` makes the rest, and so does a running server" if vectors == "done" and missing else ""),
         "" if not missing else f"about {minutes} min of this machine's GPU for {count(missing)}; it can be interrupted and continued",
-        "aleph embed run", wanted))
+        f"{COMMAND} embed run", wanted))
     if found.repository:
         steps.append(Step(
             "untracked_cache", "repository", "Git's untracked cache for this worktree (a faster look at it on every query)",
@@ -187,14 +188,14 @@ def of(status: dict) -> list[Step]:
 def summary(status: dict) -> dict:
     """What the agent's status tool says of it: information for a person, nothing an agent should act on.
     Never raises: a status that a search could answer is not lost to a list that could not be made."""
-    how = "a person answers these in a terminal with `aleph setup`; search needs none of them"
+    how = f"a person answers these in a terminal with `{COMMAND} setup`; search needs none of them"
     try:
         return {"open": open_steps(of(status)), "how": how}
     except Exception as exc:  # noqa: BLE001 - an unreadable cache directory, a file of the wrong shape: whatever it is
         return {"open": [], "how": how, "unknown": f"the setup list could not be made: {exc}"}
 
 
-HINT = "aleph: `aleph setup` shows what else can be set up here (search by meaning, documentation from another repository). This line is shown once."
+HINT = f"aleph: `{COMMAND} setup` shows what else can be set up here (search by meaning, documentation from another repository). This line is shown once."
 
 
 def hint_wanted() -> bool:

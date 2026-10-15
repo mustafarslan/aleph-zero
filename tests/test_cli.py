@@ -107,3 +107,18 @@ def test_a_grammar_that_could_not_load_is_said_once_on_a_terminal(repo, capsys, 
     monkeypatch.setattr(firstrun, "hint_wanted", lambda: False)         # an agent's pipe: nothing
     assert cli.main(["--cwd", str(repo.root), "search", "refresh token"]) == 0
     assert "could not be loaded" not in capsys.readouterr().err
+
+
+def test_started_as_aleph_zero_it_names_aleph_zero_in_what_it_tells_a_person_to_run(tmp_path):
+    # TeX Live installs its own `aleph`: on such a machine a person runs `aleph-zero`, and `aleph setup` would run TeX.
+    import os
+    bin_dir = Path(sys.executable).parent
+    started = {}
+    for name in ("aleph-zero", "aleph"):
+        if not (bin_dir / name).exists():
+            import pytest
+            pytest.skip("the entry points are not installed in this environment")
+        env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "cache")}
+        started[name] = subprocess.run([str(bin_dir / name), "doctor"], cwd=tmp_path, capture_output=True, text=True, env=env).stdout
+    assert "`aleph-zero embed setup`" in started["aleph-zero"] and "`aleph embed" not in started["aleph-zero"]
+    assert "`aleph embed setup`" in started["aleph"]

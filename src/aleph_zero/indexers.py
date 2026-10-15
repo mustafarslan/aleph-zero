@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from .names import COMMAND
 
 LIMIT_MB = 2048.0               # ADR-004: twice ADR-005's standing budget, for a run that is requested, alone and short
 TIME_LIMIT_SECONDS = 1800.0
@@ -239,7 +240,7 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
             raise CannotRun(f"{language} is import-only by default: {indexer.program} is not run here because {indexer.why_not}. "
                             f"To run it anyway, name the language and a memory limit above {LIMIT_MB:.0f} MB, and it is stopped above that: "
                             f"`ALEPH_SCIP_MEMORY_MB=3072 aleph scip run --lang {language}`. "
-                            f"Or run it elsewhere (CI) and keep the result with `aleph scip import`")
+                            f"Or run it elsewhere (CI) and keep the result with `{COMMAND} scip import`")
     if shutil.which(indexer.program) is None:
         raise CannotRun(f"{indexer.program} is not installed. Aleph does not install it; to get it: {indexer.how_to_get}")
     if indexer.needs and not (root / indexer.needs).is_file():
@@ -267,7 +268,7 @@ def run(root: Path, language: str, out: Path, limit: float | None = None, time_l
                     (where / name).unlink()
     if found["stopped"]:
         raise CannotRun(f"{indexer.program} was stopped: {found['stopped']} (peak {found['peak_mb']} MB, {found['seconds']} s). "
-                        f"The limit is ALEPH_SCIP_MEMORY_MB; or make the index elsewhere and use `aleph scip import`")
+                        f"The limit is ALEPH_SCIP_MEMORY_MB; or make the index elsewhere and use `{COMMAND} scip import`")
     if found["exit"] != 0 or not out.is_file() or out.stat().st_size == 0:
         said = " | ".join(found["last_lines"][-3:])
         raise CannotRun(f"{indexer.program} ended with status {found['exit']} and no index: {said}")

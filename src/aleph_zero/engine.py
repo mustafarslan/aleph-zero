@@ -31,6 +31,7 @@ from .search import search as run_search
 from .store import DAMAGED, SCHEMA_VERSION, index_file, index_note, open_db, state_dir, transaction
 from .store import db as store_db
 from .view import View, build_view
+from .names import COMMAND
 
 SYNC_SECONDS = 5.0       # how long a query without a time limit may spend indexing first
 SEARCH_SHARE = 0.25      # of a time limit, kept for the search itself
@@ -659,7 +660,7 @@ class Engine:
             "outside_checkout": view.outside_checkout,
             "submodules": list(view.submodules),
             **({"submodules_note": "submodules are not searched; link one as a source with "
-                                   f"`aleph source add {view.submodules[0]}`"} if view.submodules else {}),
+                                   f"`{COMMAND} source add {view.submodules[0]}`"} if view.submodules else {}),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(),
             "untracked_cache": False if view.plain else gitio.untracked_cache_enabled(view.root),
@@ -803,14 +804,14 @@ class Engine:
             asked_for = settings.read(chosen).get("dense") if stamp is not None else None
             if isinstance(asked_for, bool):
                 enabled = asked_for
-                why = f"search by meaning is {'on' if asked_for else 'off'} for this repository (chosen in `aleph setup`)"
+                why = f"search by meaning is {'on' if asked_for else 'off'} for this repository (chosen in `{COMMAND} setup`)"
             else:
                 enabled, why = dense_policy.decide(None, next(iter(index.languages()), None))
             if enabled:
                 from .embed import setup
 
                 if not setup.installed():  # vectors are wanted, but there is nothing to make them with
-                    enabled, why = False, why + "; the embedding worker is not installed (`aleph embed setup`)"
+                    enabled, why = False, why + f"; the embedding worker is not installed (`{COMMAND} embed setup`)"
             cached = (key, (enabled, why))
             self._decisions[id(index)] = cached
         return cached[1]
@@ -898,7 +899,7 @@ class Engine:
         store = self._store(index, view)
         covered, chunks = store.coverage(index)
         if covered == 0:
-            return "no chunk of this worktree has a vector yet (`aleph embed run` makes them)", 0, chunks, None
+            return f"no chunk of this worktree has a vector yet (`{COMMAND} embed run` makes them)", 0, chunks, None
         sock = worker.socket_path()
         if not sock.exists():  # no probe here: a hung worker would hold the query for the probe's timeout
             return "the embedding worker is not running", covered, chunks, None

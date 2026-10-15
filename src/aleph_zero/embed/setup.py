@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import worker
+from ..names import COMMAND
 
 LLAMA_REPOSITORY = "https://github.com/ggml-org/llama.cpp"
 LLAMA_COMMIT = "c83f3058b6f876f2f7e6ccbada858b2446860c85"
@@ -136,7 +137,7 @@ def installing(report=lambda text: None) -> Iterator[None]:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            report("another `aleph setup` is installing the worker on this machine; waiting for it to finish")
+            report(f"another `{COMMAND} setup` is installing the worker on this machine; waiting for it to finish")
             fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield

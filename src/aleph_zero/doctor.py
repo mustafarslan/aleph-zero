@@ -16,6 +16,7 @@ from .store import SCHEMA_VERSION, index_file, state_reason
 from .store import db as store_db
 from .store.db import MIN_SQLITE
 from .view import build_view
+from .names import COMMAND
 
 
 @dataclass(frozen=True)
@@ -62,11 +63,11 @@ def _checkout(cwd: Path) -> list[Row]:
         promisor = b""  # git exits 1 when no such setting exists: a full clone
     if promisor.strip():
         rows.append(Row("note", "partial clone", "partial clone: a file whose content git has not fetched is not searched, "
-                        "and nothing is fetched to answer a query; `aleph status` counts such files (unreadable)"))
+                        f"and nothing is fetched to answer a query; `{COMMAND} status` counts such files (unreadable)"))
     if worktree.submodules:
         listed = ", ".join(worktree.submodules[:5]) + (" ..." if len(worktree.submodules) > 5 else "")
         rows.append(Row("note", "submodules", f"submodules are not searched ({listed}); link one as a source "
-                        f"with `aleph source add {worktree.submodules[0]}`"))
+                        f"with `{COMMAND} source add {worktree.submodules[0]}`"))
     return rows
 
 
@@ -80,7 +81,7 @@ def _compiler_indexes() -> Row:
         allowed = f"A run may use {indexers.limit_mb():.0f} MB (ALEPH_SCIP_MEMORY_MB)"
     except indexers.CannotRun as exc:
         allowed = f"No run is possible: {exc}"
-    return Row("note", "compiler indexes", "SCIP indexers for `aleph scip run`: " + "; ".join(parts) + ". " + allowed)
+    return Row("note", "compiler indexes", f"SCIP indexers for `{COMMAND} scip run`: " + "; ".join(parts) + ". " + allowed)
 
 
 def _git() -> Row:
@@ -130,7 +131,7 @@ def _grammars() -> Row:
     have = len(wanted) - len(missing)
     if missing:
         return Row("FAIL", "grammars", f"grammars: {have} of {len(wanted)} load; missing: {', '.join(missing)}. "
-                                       "Run `aleph doctor --fetch-grammars` (uses the network)")
+                                       f"Run `{COMMAND} doctor --fetch-grammars` (uses the network)")
     return Row("ok", "grammars", f"grammars: {have} of {len(wanted)} load")
 
 
@@ -139,14 +140,14 @@ def _worker() -> Row:
 
     if not setup.installed():
         return Row("note", "embedding worker", "embedding worker: not installed, so search is by words and names only. "
-                                               "`aleph embed setup` builds it and downloads the model (310 MB, uses the network)")
+                                               f"`{COMMAND} embed setup` builds it and downloads the model (310 MB, uses the network)")
     running = "running" if worker.available() else "not running (it starts when vectors are needed)"
     return Row("ok", "embedding worker", f"embedding worker: installed in {worker.home()}, {running}")
 
 
 def _index(path: Path) -> Row:
     if not path.exists():
-        return Row("note", "index", f"index: not built yet; the first search or `aleph index` creates {path}")
+        return Row("note", "index", f"index: not built yet; the first search or `{COMMAND} index` creates {path}")
     try:
         conn = apsw.Connection(str(path), flags=apsw.SQLITE_OPEN_READONLY)
         try:
@@ -205,9 +206,9 @@ def _setup(root: Path) -> Row:
         return Row("note", "setup", f"the setup list could not be made: {exc}")
     waiting = [step.title for step in steps if step.state == "open"]
     if not waiting:
-        return Row("ok", "setup", "nothing is open (`aleph setup --again` asks about what was declined)")
+        return Row("ok", "setup", f"nothing is open (`{COMMAND} setup --again` asks about what was declined)")
     return Row("note", "setup", f"{len(waiting)} of {len(steps)} things are open: {'; '.join(waiting)}. "
-                                "`aleph setup` asks about them once; search needs none of them")
+                                f"`{COMMAND} setup` asks about them once; search needs none of them")
 
 
 def _untracked_cache(root: Path) -> Row:

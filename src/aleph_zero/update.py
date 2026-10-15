@@ -21,12 +21,13 @@ from . import archfacts, callgraph, gitio, scipstore, sources, vectorfile
 from .indexer import PREPARE_PROCESSES, Index, collect_if_due
 from .store import StoreError, index_file, open_db, state_dir
 from .view import build_view
+from .names import COMMAND
 
 EMBED_MINUTES = 10.0     # of embedding in one update unless told otherwise; `aleph embed run` is the unbounded one
 HOOK_MINUTES = 5         # in the lines printed for git's hooks: a pull is not held up for it, but it is not left running for long either
 FACTS_SECONDS = 60.0     # of reading the graph's and the architecture's facts
 ROUNDS = 3               # times one update looks again at a worktree that moved on while it worked
-BUSY = "another `aleph update` is running for this worktree"
+BUSY = f"another `{COMMAND} update` is running for this worktree"
 # What a part may run into without the parts after it being lost, and without a traceback in a hook's output.
 # apsw's errors are not RuntimeErrors: an index another session is writing to says "busy" through them.
 _FAILURES = (gitio.GitError, StoreError, sources.SourceError, apsw.Error, OSError, RuntimeError)
@@ -147,7 +148,7 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
     def compiler_indexes() -> None:
         compiled = scipstore.Compiled(index.conn, seen.files)
         stale = sum(1 for path in seen.files if compiled.status(path)) if compiled.any else 0
-        report["compiler_indexes"] = {"out_of_date": stale, "how": "`aleph scip run` makes them again" if stale else ""}
+        report["compiler_indexes"] = {"out_of_date": stale, "how": f"`{COMMAND} scip run` makes them again" if stale else ""}
 
     def vectors() -> None:
         # Where search by meaning is on already: the verdict of the language, or the choice kept by `aleph setup`.
@@ -199,7 +200,7 @@ def text(report: dict) -> list[str]:
                      + (f"; {made['left']} chunks still without one" if made["left"] else "") + (f" ({made['why']})" if made.get("why") else ""))
     stale = (report.get("compiler_indexes") or {}).get("out_of_date")
     if stale:
-        lines.append(f"a compiler index is out of date for {files(stale)}: `aleph scip run` makes them again")
+        lines.append(f"a compiler index is out of date for {files(stale)}: `{COMMAND} scip run` makes them again")
     lines += [f"FAILED {problem}" for problem in report.get("failed", [])]
     return lines or ["nothing changed: the index matches the worktree"]
 

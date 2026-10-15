@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .client import EmbedClient, Unavailable
+from ..names import COMMAND
 
 MODEL_FILE = "embeddinggemma-2-Q8_0.gguf"
 IDLE_SLEEP = 600          # seconds without a request before the worker unloads its model
@@ -188,7 +189,7 @@ def ensure() -> Path:
         if time.time() - failed < _seconds("ALEPH_WORKER_COOLDOWN_SECONDS", 60):
             raise Unavailable(f"the worker failed to start recently: {known.get('reason', 'unknown reason')}")
         if not binary().exists() or not model().exists():
-            raise Unavailable("the embedding worker is not installed; run `aleph embed setup`")
+            raise Unavailable(f"the embedding worker is not installed; run `{COMMAND} embed setup`")
         path.unlink(missing_ok=True)  # left behind by a crash: the server does not remove its socket
         state_file().unlink(missing_ok=True)
         supervisor = _spawn_supervisor([])
