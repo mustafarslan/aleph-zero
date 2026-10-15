@@ -241,3 +241,4 @@ test('every row that can take the ring has help, and the help keeps to the facts
   expect(help('b-graph', { options: {} })!.values!.find((item: any) => item.current)!.value).toBe('on')
   expect(help('b-dense', { status: status({ main_language: 'python' }) })!.text).toMatch(/python\*\*: off/)
 })
+

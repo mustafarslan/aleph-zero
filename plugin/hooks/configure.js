@@ -241,8 +241,12 @@ export function progressWord(progress) {
   return progress.percent + '% made' + (progress.waiting ? ', waiting' : progress.eta ? ', ' + etaText(progress.eta) : '')
 }
 
-export function nextPoll(progress) {
-  return !progress || !progress.enabled ? PROGRESS_OFF_MS : progress.active ? PROGRESS_FAST_MS : PROGRESS_SLOW_MS
+// A look costs about what a search's look at the worktree does, on the server's one call thread; on a very large
+// worktree without git's untracked cache that is a second or more. So the next look waits at least 30 times what the
+// last one took: a look never takes more than about 3% of the thread, whatever the repository.
+export function nextPoll(progress, tookMs = 0) {
+  const base = !progress || !progress.enabled ? PROGRESS_OFF_MS : progress.active ? PROGRESS_FAST_MS : PROGRESS_SLOW_MS
+  return Math.max(base, Math.round(30 * Math.max(0, Number(tookMs) || 0)))
 }
 
 // One line a part for the help under "search by meaning": project code, its documentation, each linked source.

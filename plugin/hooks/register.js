@@ -166,17 +166,20 @@ async function readConfig($) {
 let progress = null          // the last reading (configure.js progressOf)
 let progressTimer = null
 let fallbackAt = 0           // when the command was last run instead of the server
+let lookMs = 0               // what the last look took: the next waits at least 30 times as long (configure.js nextPoll)
 let quickUntil = 0           // after an action in the settings pane, looked at quickly for a while: the server sees a
                              // linked source only once its kept view of the sources is renewed (up to five seconds)
 
 async function readProgress($) {
   let status = null
+  const asked = $.clock.now()
   try {
     const answer = await reach($, 'status', { format: 'json', timeout_ms: 2000 })
     status = answer ? JSON.parse(resultText(answer)) : null
   } catch {
     status = null
   }
+  lookMs = $.clock.now() - asked
   if (!status && $.clock.now() - fallbackAt >= 30000) {
     fallbackAt = $.clock.now()
     try {
@@ -201,7 +204,7 @@ function watchProgress($) {
   try {
     if (progressTimer) progressTimer.cancel()
     const quick = $.clock.now() < quickUntil
-    progressTimer = $.clock.after(quick ? 5000 : progress ? nextPoll(progress) : 1000, async () => {
+    progressTimer = $.clock.after(quick ? Math.max(5000, 30 * lookMs) : progress ? nextPoll(progress, lookMs) : 1000, async () => {
       progressTimer = null
       await readProgress($).catch(() => null)
       watchProgress($)
@@ -614,6 +617,19 @@ export function register(on, options) {
 
   // ---- /aleph configure's pane -----------------------------------------------------------------
 
+  // Esc in the source field leaves the field, not the pane (seen in use: it closed the whole pane, what was typed
+  // kept but out of sight). The host has every pane close on Esc; a close the person asks for while the field holds
+  // the ring is answered by moving the ring back to the rows instead. A second Esc closes the pane.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === CONFIG_PANE && e.origin && e.origin.kind === 'person' && cfg.focused === 'source') {
+      cfg.focused = 'b-link'
+      await $.ui.focus({ requestId: CONFIG_PANE, key: 'b-link' }).catch(() => undefined)
+      $.ui.invalidate('ui.render')
+      return { value: undefined }     // answered without next: the pane stays open
+    }
+    return next(e)
+  }).catch(async ($, e, next) => next(e))
+
   // The row the focus ring is on, for the help under the rows. Only a move to another element redraws.
   on('ui.focus', async ($, e, next) => {
     // The person's moves name the element (`element`); the plugin's own $.ui.focus arrives as asked (`key`).
@@ -741,7 +757,10 @@ export function register(on, options) {
       // leaves the pane for the prompt), Esc back out of it.
       const field = Input({
         key: 'source', placeholder: 'a path or a git URL; Enter links it', value: cfg.draft, submitLabel: 'link',
-        onInput: (value) => { cfg.draft = String(value || '') },
+        onInput: (value) => {
+          cfg.draft = String(value || '')
+          cfg.focused = 'source'        // typing here: the field holds the ring
+        },
         onSubmit: async (value) => {
           const location = String(value || '').trim()
           if (!location || cfg.busy) return
@@ -754,7 +773,10 @@ export function register(on, options) {
         children: [
           Box({ key: 'o-link-k', width: LABEL_COLUMNS, flexShrink: 0, children: [Button({
             key: 'b-link', label: 'link a source', hotkey: 'a', plain: true,
-            onPress: () => $.ui.focus({ requestId: CONFIG_PANE, key: 'source' }).catch(() => undefined),
+            onPress: () => {
+              cfg.focused = 'source'      // the plugin's own focus move is not heard by its own ui.focus hook
+              return $.ui.focus({ requestId: CONFIG_PANE, key: 'source' }).catch(() => undefined)
+            },
           })] }),
           Box({ key: 'o-link-f', flexGrow: 1, children: [field] }),
         ],

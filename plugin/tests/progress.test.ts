@@ -56,6 +56,8 @@ test('the poll is quick while there is work, slow when caught up, slower where v
   expect(nextPoll(progressOf(statusOf(8239), null, 0))).toBe(PROGRESS_SLOW_MS)
   expect(nextPoll(progressOf(statusOf(0, 10, { enabled: false }), null, 0))).toBe(PROGRESS_OFF_MS)
   expect(etaText(5400)).toBe('~2 h')
+  expect(nextPoll(progressOf(statusOf(3100), null, 0), 330)).toBe(PROGRESS_FAST_MS)    // babel's look: still every 10 s
+  expect(nextPoll(progressOf(statusOf(3100), null, 0), 1500)).toBe(45000)            // a slow look paces itself
   expect(etaText(30)).toBe('<1 min')
 })
 
