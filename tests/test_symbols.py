@@ -136,7 +136,7 @@ def test_symbol_command(repo, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["symbols"][0]["path"] == "src/billing/invoice.py" and payload["symbols"][0]["line"] == 1
     assert cli.main(["--cwd", str(repo.root), "symbol", "no_such_name"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == 'no definition named "no_such_name" in this worktree\n'      # said, not left blank
 
 
 def test_a_definition_in_the_code_comes_before_one_of_the_same_name_in_its_tests(repo):
