@@ -555,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         done = args.run(args)
+        if args.command not in ("doctor", "serve"):
+            _grammar_notice()
         if args.command in HINTED:
             from . import firstrun
 
@@ -566,6 +568,20 @@ def main(argv: list[str] | None = None) -> int:
     except (gitio.GitError, StoreError, outline.OutlineError, ValueError, RuntimeError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
+
+
+def _grammar_notice() -> None:
+    """On a terminal: a grammar that could not load means files searched by words only, without definitions, until
+    it does (they are read again then). Said instead of leaving `symbol` and `outline` empty without a word."""
+    from . import firstrun
+    from .lang import parse
+
+    failed = parse.failed()
+    if failed and firstrun.hint_wanted():
+        why = next(iter(failed.values()))
+        print(f"aleph: the grammar for {', '.join(sorted(failed))} could not be loaded ({why[:160]}); those files are "
+              f"searched by words only, without definitions, until it is. `aleph doctor --fetch-grammars` fetches it",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

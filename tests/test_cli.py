@@ -87,3 +87,23 @@ def test_the_version_is_the_package_s(capsys):
     with pytest.raises(SystemExit) as done:
         cli.main(["--version"])
     assert done.value.code == 0 and capsys.readouterr().out.strip() == f"aleph-zero {version('aleph-zero')}"
+
+
+def test_a_grammar_that_could_not_load_is_said_once_on_a_terminal(repo, capsys, monkeypatch):
+    # Offline, or behind a proxy, the grammar download fails and search answers by words only: a person is told why
+    # and what fetches it, instead of finding `symbol` and `outline` empty without a word.
+    from aleph_zero import firstrun
+    from aleph_zero.lang import parse
+
+    def offline(name):
+        raise RuntimeError("could not download the grammar: connection refused")
+    monkeypatch.setattr(parse.pack, "get_parser", offline)
+    monkeypatch.setattr(parse, "_PARSERS", {})
+    monkeypatch.setattr(parse, "_FAILED", {})
+    monkeypatch.setattr(firstrun, "hint_wanted", lambda: True)
+    assert cli.main(["--cwd", str(repo.root), "search", "refresh token"]) == 0
+    err = capsys.readouterr().err
+    assert err.count("could not be loaded") == 1 and "python" in err and "--fetch-grammars" in err
+    monkeypatch.setattr(firstrun, "hint_wanted", lambda: False)         # an agent's pipe: nothing
+    assert cli.main(["--cwd", str(repo.root), "search", "refresh token"]) == 0
+    assert "could not be loaded" not in capsys.readouterr().err

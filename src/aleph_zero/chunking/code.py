@@ -34,6 +34,7 @@ class CodeFile:
     definitions: list[Definition]
     chunk_of: list[int]              # for each definition, the chunk holding its first line
     imports: list[RawImport]
+    grammar_missing: bool = False    # line windows because the grammar could not load: to be read again once it does
 
 
 def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
@@ -41,6 +42,11 @@ def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
     handle at all is chunked by line window."""
     text = text.replace("\r\n", "\n")
     data = text.encode("utf-8", "surrogateescape")
+    try:
+        parse.parser(profile)
+    except Exception:  # noqa: BLE001 - the grammar could not be fetched or loaded: not this file's doing
+        windows = window_chunks(text)
+        return CodeFile(windows, [((c.start_line, c.end_line),) for c in windows], [], [], [], grammar_missing=True)
     try:
         tree = parse.tree(profile, data)
         found = definitions(profile, tree, data)

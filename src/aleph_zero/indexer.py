@@ -60,6 +60,11 @@ def _temp_tables(conn: apsw.Connection):
     conn.execute("RELEASE temp_tables")
 
 
+# The kind of a source file chunked by line windows because its grammar could not load (offline, a proxy): kept as
+# it is while that lasts, and dropped to be read again once the grammar loads (`Index._read_again_with_grammar`).
+NO_GRAMMAR = "text:no-grammar"
+GRAMMAR_RETRY_SECONDS = 60.0     # how often a session looks whether such a grammar has arrived
+
 _MISSING = ("SELECT v.blob_oid, v.family FROM temp.view_blobs v LEFT JOIN blobs b "
             "ON b.blob_oid = v.blob_oid AND b.family = v.family AND b.chunker_version = ? "
             "WHERE b.blob_oid IS NULL ORDER BY v.blob_oid, v.family")
@@ -118,7 +123,7 @@ def _digest(family: str, data: bytes, words: bool) -> tuple:
     if profile is not None:
         code = code_chunks(profile, text)
         if code.chunks:
-            return (kind, code.chunks, code.definitions, code.chunk_of, code.imports,
+            return (NO_GRAMMAR if code.grammar_missing else kind, code.chunks, code.definitions, code.chunk_of, code.imports,
                     [lexical.columns(chunk) for chunk in code.chunks] if words else None)
     chunks = chunk_file(family, kind, text)
     return (kind if chunks else "skip:empty", chunks, [], [], [], [lexical.columns(chunk) for chunk in chunks] if words else None)
@@ -150,6 +155,7 @@ class Index:
         self._version: int | None = None   # SQLite's data_version when the last sync looked: other sessions' commits change it
         self._collections = -1       # the index's count of removals when the list of chunks was built
         self._touched_at = 0.0
+        self._grammar_look_at = 0.0     # when to look next whether a grammar that could not load has arrived
 
     def sync(self, view: View, budget_seconds: float = 5.0,
              stop: Callable[[], bool] | None = None) -> SyncReport:
@@ -160,9 +166,10 @@ class Index:
         collected this view's content, or indexed what was pending here."""
         started = time.monotonic()
         changed = view.fingerprint != self._fingerprint
+        read_again = self._read_again_with_grammar()
         # Read before looking: a commit by another session after this point is seen as a change next time.
         version = self.conn.pragma("data_version")
-        if (not changed and version == self._version and self._missing == self._unreadable
+        if (not changed and not read_again and version == self._version and self._missing == self._unreadable
                 and all(asked > started - RETRY_SECONDS for asked in self._deferred.values())):
             # The same view, nothing pending, and no other session has written: the index is as it was.
             self._touch()
@@ -491,6 +498,33 @@ class Index:
                     self.prepared_elsewhere += 1
             yield prepared, unread
 
+    def _read_again_with_grammar(self) -> bool:
+        """Drop the blobs that were chunked by line windows while their grammar could not load, once it loads, so
+        that this sync reads them again with their definitions. Looked at once in GRAMMAR_RETRY_SECONDS at most,
+        and only while the index holds any (a flag in `meta`, so that the usual case costs one lookup)."""
+        now = time.monotonic()
+        if now < self._grammar_look_at:
+            return False
+        self._grammar_look_at = now + GRAMMAR_RETRY_SECONDS
+        if not self.conn.execute("SELECT 1 FROM meta WHERE key = 'no_grammar'").fetchall():
+            return False
+        from .lang import parse
+
+        families = [row[0] for row in self.conn.execute("SELECT DISTINCT family FROM blobs WHERE kind = ?", (NO_GRAMMAR,))]
+        ready = [family for family in families if family in lang.PROFILES and parse.loads(lang.PROFILES[family])]
+        dropped: list[Key] = []
+        with transaction(self.conn):
+            for family in ready:
+                dropped += [(row[0], row[1]) for row in self.conn.execute(
+                    "SELECT blob_oid, family FROM blobs WHERE kind = ? AND family = ?", (NO_GRAMMAR, family))]
+                self.conn.execute("DELETE FROM blobs WHERE kind = ? AND family = ?", (NO_GRAMMAR, family))
+            if dropped:
+                _removed_content(self.conn)     # another session may be listing these blobs' chunks
+            if not self.conn.execute("SELECT 1 FROM blobs WHERE kind = ? LIMIT 1", (NO_GRAMMAR,)).fetchall():
+                self.conn.execute("DELETE FROM meta WHERE key = 'no_grammar'")
+        self._indexed = self._indexed - frozenset(dropped)     # dropped here on purpose: not lost to a collection
+        return bool(dropped)
+
     def _store(self, item: _Prepared) -> bool:
         """Write one blob. False if another session had already written it."""
         conn = self.conn
@@ -508,6 +542,8 @@ class Index:
         )
         if conn.changes() == 0:
             return False
+        if item.kind == NO_GRAMMAR:
+            conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('no_grammar', 1)")
         for ordinal, chunk in enumerate(item.chunks):
             digest = chunk_hash(family, chunk)
             conn.execute(

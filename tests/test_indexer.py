@@ -694,3 +694,34 @@ def test_processes_that_cannot_be_used_leave_the_files_to_be_prepared_here(make_
     index.workers = 3
     report = index.sync(view, budget_seconds=60)
     assert report.pending == 0 and report.indexed >= 180 and index.prepared_elsewhere == 0
+
+
+def test_files_read_while_their_grammar_could_not_load_are_read_again_once_it_loads(repo, monkeypatch):
+    # A first index made offline (or behind a proxy that stops the grammar download) chunks code by line windows and
+    # finds no definitions. Those blobs are content-addressed: without this, they would stay without definitions
+    # until each file changed, however long after the grammar arrived.
+    from aleph_zero import indexer
+    from aleph_zero.lang import parse
+
+    real = parse.pack.get_parser
+    def offline(name):
+        raise RuntimeError(f"could not download {name}")
+    monkeypatch.setattr(parse.pack, "get_parser", offline)
+    monkeypatch.setattr(parse, "RETRY_SECONDS", 0.0)                   # every look tries again: offline it still fails
+    monkeypatch.setattr(indexer, "GRAMMAR_RETRY_SECONDS", 0.0)
+    parse._PARSERS.clear()
+    parse._FAILED.clear()
+    index = _index(repo)
+    index.sync(build_view(repo.root))
+    assert _total(index, "symbols") == 0
+    assert index.conn.execute("SELECT count(*) FROM blobs WHERE kind = ?", (indexer.NO_GRAMMAR,)).fetchall() == [(2,)]
+    again = index.sync(build_view(repo.root))
+    assert again.indexed == 0                                           # still offline: not read again on every query
+
+    monkeypatch.setattr(parse.pack, "get_parser", real)               # the grammar arrives
+    report = index.sync(build_view(repo.root))
+    assert report.indexed == 2                                          # the two Python files, not the Markdown
+    assert _total(index, "symbols") > 0
+    assert index.conn.execute("SELECT count(*) FROM blobs WHERE kind = ?", (indexer.NO_GRAMMAR,)).fetchall() == [(0,)]
+    assert index.lost_to_collection == 0
+    assert index.sync(build_view(repo.root)).indexed == 0               # and then settled
