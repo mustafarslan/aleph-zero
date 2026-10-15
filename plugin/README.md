@@ -53,8 +53,9 @@ These are all the mod's hooks, and everything each one does:
 | Hook | What it does |
 |---|---|
 | `session.start` | Registers the `/aleph` command and notes the session's working directory. |
-| `command.run` (`/aleph`) | Opens the side chat pane, or answers `/aleph stats`, `/aleph check` and `/aleph check model`. |
-| `ui.render` (the pane) | Draws the side chat. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
+| `command.run` (`/aleph`) | Opens the side chat pane or the settings pane (`/aleph configure`), or answers `/aleph stats`, `/aleph check` and `/aleph check model`. |
+| `ui.render` (the panes) | Draws the side chat and the settings pane. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
+| `ui.focus` (the settings pane) | Notes which row the focus ring is on, to show that row's help under the rows; passes every move on unchanged. |
 | `tool.describe` (the engine's tools) | At rung 1 and above, replaces the descriptions of `search`, `symbol`, `outline` and `status` with tuned ones and loads them up front instead of on demand. |
 | `tool.describe` (Grep, Glob) | At rung 1 and above, with `grep_pointer` on, appends one sentence to their descriptions pointing to `search`. It changes nothing else about them. |
 | `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right; with the `graph` option on, one more line saying when to use `references`, `decisions` and `facts`. |

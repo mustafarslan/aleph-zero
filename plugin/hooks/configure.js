@@ -69,7 +69,7 @@ export function vectorsRow(vectors, language) {
 export function machineState(installed, current) {
   if (installed === null || installed === undefined) return 'unknown'
   if (!installed) return 'not installed'
-  return current === false ? 'installed, out of date' : 'installed'
+  return current === false ? 'out of date' : 'installed'
 }
 
 // A build for a terminal: the engine by its path (Claude Code started from the Dock, and a person's shell, may not
@@ -96,3 +96,87 @@ export function fit(text, columns) {
   const s = String(text || '')
   return s.length <= columns ? s : s.slice(0, Math.max(1, columns - 1)) + '…'
 }
+
+// ---- the help under the rows ----------------------------------------------------------------
+// One entry for the row the focus ring is on (↑↓, Tab or a click), drawn in a fixed place under all the rows, so the
+// rows never move. Each says the same four things, briefly: what it does (Markdown, light), its values with the
+// current one marked, when a change applies, and what was measured or not (frame-features-plainly).
+
+export const VALUE_COLUMNS = 12
+
+const VALUES = {
+  rung: [
+    ['0', 'the search tools only'],
+    ['1', 'tools up front, one standing rule, a Grep pointer'],
+    ['2', 'adds locations to a session\'s first prompt'],
+    ['3', 'adds locations after a search that found nothing'],
+  ],
+  grep_pointer: [['on', 'one sentence in Grep\'s and Glob\'s descriptions points to `search`'], ['off', 'Grep and Glob as Claude Code has them']],
+  lines: [['places', 'each file with its line ranges'], ['signatures', 'also each file\'s first signature']],
+  graph: [['on', '`references`, `facts` and `decisions` offered to the agent'], ['off', 'the search tools alone']],
+}
+
+const OPTION_HELP = {
+  rung: { text: 'How far the plugin steers Claude Code towards Aleph\'s search before it reaches for a recursive grep.', applies: 'Applies at once.', note: ['No rung has yet been shown to save tokens or tool calls (ADR-011).', 'warning'] },
+  grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1.', applies: 'Applies at once.' },
+  lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt. Used at rung 2 and above only.', applies: 'Applies at once.' },
+  graph: { text: 'Who calls what (`references`), the routes, models and environment names a repository states (`facts`), and the decision records behind a change (`decisions`).', applies: 'From the next session: the engine reads it when Claude Code starts it.', note: ['Not yet measured to help an agent.', 'warning'] },
+}
+
+// The help for the element `key` (a Button's or the field's key); null for one without help.
+export function help(key, context) {
+  const { options, status, sources = [] } = context || {}
+  const option = OPTIONS.find((item) => 'b-' + item.key === key)
+  if (option) {
+    const current = valueOf(options, option)
+    const about = OPTION_HELP[option.key]
+    return { title: option.label, text: about.text, applies: about.applies, note: about.note,
+      values: VALUES[option.key].map(([value, meaning]) => ({ value, meaning, current: value === current })) }
+  }
+  const vectors = (status && status.vectors) || {}
+  const language = status && status.main_language
+  if (key === 'b-dense') {
+    const helps = Boolean(vectors.verdict && vectors.verdict.helps)
+    const chosen = typeof vectors.chosen === 'boolean' ? vectors.chosen : null
+    return {
+      title: 'search by meaning',
+      text: 'Vectors beside words and names: a question in plain words finds code that uses other words for it. Left alone, it follows the benchmark for the repository\'s main language' + (language ? ' (**' + language + '**: ' + (helps ? 'on' : 'off') + ')' : '') + '.',
+      values: [
+        { value: 'measured', meaning: 'as the benchmark says for the language', current: chosen === null },
+        { value: 'on', meaning: 'vectors for this repository, made in the background', current: chosen === true },
+        { value: 'off', meaning: 'words and names only', current: chosen === false },
+      ],
+      applies: 'Applies at the next search.',
+      note: vectors.worker_installed === false ? ['Needs the embedding worker: w copies its build.', 'warning'] : undefined,
+    }
+  }
+  if (key === 'b-cache' || key === 'b-cache-config') {
+    const fromConfig = status && status.untracked_cache_from === 'config'
+    return {
+      title: 'untracked cache',
+      text: 'Git keeps a note of the untracked files, so the look at the worktree that every search starts with is faster on a large repository.',
+      values: [{ value: 'on', meaning: 'kept in ' + (fromConfig ? 'git\'s configuration' : 'this repository\'s index'), current: Boolean(status && status.untracked_cache) },
+        { value: 'off', meaning: 'git reads the whole worktree each time', current: !(status && status.untracked_cache) }],
+      applies: fromConfig ? 'Set by `core.untrackedCache`: `git config --unset core.untrackedCache` turns it off.' : 'Applies at once; changes no configuration.',
+    }
+  }
+  const linked = /^b-src-(\d+)$/.exec(String(key || ''))
+  if (linked) {
+    const source = sources[Number(linked[1])] || {}
+    return { title: String(source.name || 'source'), text: '`' + String(source.location || '') + '`, ' + (source.files || 0) + ' files, searched beside this repository' + (source.kind === 'url' ? '; fetched again by `aleph update`.' : '; read where it is.'), applies: 'Its digit unlinks it after a yes; its files leave the index.' }
+  }
+  if (key === 'b-link' || key === 'source') {
+    return { title: 'link a source', text: 'Documentation or code from elsewhere, searched beside this repository. A **path** is read where it is; a **git URL** is cloned into Aleph\'s cache.', applies: 'Enter links it; a URL uses the network.' }
+  }
+  if (key === 'b-worker') {
+    return { title: 'embedding worker', text: 'llama.cpp and a 310 MB model, built once for this machine: they make the vectors that search by meaning uses.', applies: 'w copies `setup --worker` for a terminal: a download and a few minutes.' }
+  }
+  if (key === 'b-memory') {
+    return { title: 'memory (Aeon)', text: 'Recalls earlier side-chat answers by meaning. Without it they are recalled by words and recency.', applies: 'm copies `setup --memory` for a terminal: under a minute; needs Xcode\'s command-line tools.' }
+  }
+  return null
+}
+
+// What the help area says while no row has the focus.
+export const HELP_HINT = '**Plugin** options apply in Claude Code at once · **Repository** settings are this worktree\'s · **Machine** builds are copied for a terminal.'
+export const HELP_KEYS = '↑↓ moves over the rows; the one under the ring is explained here.'

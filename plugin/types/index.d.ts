@@ -9,6 +9,6 @@ export type Meter = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'aleph-zero': { session: { meter: Meter; prompts: number; turns: ChatTurn[]; tokens: number } }
+    'aleph-zero': { session: { meter: Meter; prompts: number; turns: ChatTurn[]; tokens: number; focused: string | null } }
   }
 }

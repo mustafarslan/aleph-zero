@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.10
+
+- `/aleph configure` explains the row the focus is on (↑↓, Tab or a click), in a fixed place under the rows: what it
+  does in a sentence or two, its values with the current one marked, when a change applies, and a word where nothing
+  was measured. Nothing is focused: what the three parts are. Values sit in a column of their own, an off value
+  recedes and an out-of-date build is marked; chrome is in the light tone. Made with the advisor and agy.
+- The side chat in the same style: its keys say the model and effort chosen, an answer is marked in the accent colour
+  (a failed one in the warning colour), and an answer that cites nothing says so in the warning colour.
+
 ## 0.1.9
 
 - The graph tools are on by default in the plugin: `references` (who calls a function, and what it calls), `facts`

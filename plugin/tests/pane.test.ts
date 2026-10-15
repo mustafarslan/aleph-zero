@@ -106,7 +106,8 @@ test('m and e choose the model and effort of the next answer, and they are remem
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'model-next' })
   await ui.press({ key: 'effort-next' })
-  expect(await ui.find({ type: 'Text', text: /mid · effort high/ })).toBeDefined()   // the header says what is chosen
+  expect((await ui.find({ key: 'model-next' }))?.text).toBe('model: mid')        // each key says what is chosen
+  expect((await ui.find({ key: 'effort-next' }))?.text).toBe('effort: high')
   await ui.input({ key: 'question', text: 'where is refresh_token exchanged for an access token?' })
   expect(JSON.stringify(seen.models[0])).toContain('sonnet')
   expect(JSON.stringify(seen.models[0])).toContain('high')
@@ -126,7 +127,8 @@ test('docked, the pane is a conversation: the window\'s height, newest at the bo
   expect(await ui.find({ type: 'Text', text: '⏺' })).toBeDefined()                 // an answer is marked as Claude Code marks its own
   expect(await ui.find({ type: 'Text', text: /ctrl\+x tab/ })).toBeUndefined()    // the empty pane's words go once there is a conversation
   expect(await ui.find({ type: 'Select' })).toBeUndefined()                         // settings are keys, not pickers
-  const footer = await ui.find({ key: 'footer-hint' })
+  const footer = await ui.find({ type: 'Text', text: /^Esc, then:/ })     // by its words: a Text keeps no key here
+  expect(footer).toBeDefined()
   expect(String(footer?.text).length <= 60).toBe(true)                             // one line in the pane's 60 columns
 })
 

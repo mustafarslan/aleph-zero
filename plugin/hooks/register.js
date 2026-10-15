@@ -12,7 +12,7 @@ import {
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
-  CONFIG_PANE, FOOTER_COLUMNS, LABEL_COLUMNS, OPTIONS, commandLine, engineCommand, fit, lastLine, machineState, meaning, nextValue, settingKey,
+  CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help, fit, lastLine, machineState, meaning, nextValue, settingKey,
   valueOf, vectorsRow,
 } from './configure.js'
 
@@ -44,6 +44,7 @@ async function restore($) {
     if (typeof value.prompts === 'number') prompts = value.prompts
     if (Array.isArray(value.turns) && !chat.turns.length) chat.turns.push(...value.turns)
     if (typeof value.tokens === 'number') chat.tokens = value.tokens
+    if (typeof value.focused === 'string') cfg.focused = value.focused     // the settings row the ring was on
   } catch {
     // nothing kept, or $.state not there: start from nothing, as before
   }
@@ -54,7 +55,7 @@ async function saveSession($) {
   const turns = chat.turns.slice(-8).map((turn) => turn.state === 'searching' || turn.state === 'thinking'
     ? { ...turn, state: 'failed', answer: 'Stopped: the plugin was loaded again.' } : { ...turn })
   try {
-    await $.state.set(SESSION_STATE, { meter, prompts, turns, tokens: chat.tokens })
+    await $.state.set(SESSION_STATE, { meter, prompts, turns, tokens: chat.tokens, focused: cfg.focused })
   } catch {
     // the session goes on without it
   }
@@ -109,7 +110,7 @@ const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: 
 // ---- /aleph configure ------------------------------------------------------------------------
 // What the pane last read from the engine. Module state: a changed plugin option loads the mod again, and the pane
 // then reads it all again, which is what it should show anyway.
-const cfg = { status: undefined, error: '', loading: false, again: false, busy: '', note: '', command: '', removing: null, enginePath: '', draft: '' }
+const cfg = { status: undefined, error: '', loading: false, again: false, busy: '', note: '', command: '', removing: null, enginePath: '', draft: '', focused: null }
 
 // The engine's status for the session's directory, and the engine's path for the commands it copies. Never raises.
 async function readConfig($) {
@@ -442,28 +443,31 @@ export function register(on, options) {
     const columns = Number(props.bodyColumns) || 60
     const last = chat.turns.length ? chat.turns[chat.turns.length - 1] : null
     const label = (MODELS.find((item) => item.value === chat.model) || { label: chat.model }).label
-    const header = Text({ key: 'header', dimColor: true, children: ['Aleph side chat · ' + label + ' · effort ' + chat.effort + ' · ' + chat.tokens + ' tokens'] })
+    // Chrome in the light tone, so the conversation is the brightest thing in the pane; the model and effort are on
+    // their own keys below.
+    const header = Text({ key: 'header', color: 'subtle', children: ['Aleph side chat · ' + chat.tokens + ' tokens'] })
 
     const turns = chat.turns.slice(docked ? -8 : -2).flatMap((turn, index) => [
-      Text({ key: 'q' + index, bold: true, children: ['> ' + turn.question] }),
+      Text({ key: 'q' + index, weight: 'semibold', children: ['> ' + turn.question] }),
       turn.state === 'searching' || turn.state === 'thinking'
-        ? Text({ key: 'busy' + index, color: 'gray', children: [turn.state === 'searching' ? '✻ Searching the index…' : '✻ Thinking…'] })
+        ? Text({ key: 'busy' + index, color: 'inactive', children: [turn.state === 'searching' ? '✻ Searching the index…' : '✻ Thinking…'] })
         : Box({
           key: 'a' + index, flexDirection: 'row',
-          children: [Text({ children: ['⏺'] }), Box({ flexDirection: 'column', flexShrink: 1, marginLeft: 1, children: [Markdown({ text: turn.answer })] })],
+          children: [Text({ color: turn.state === 'failed' ? 'warning' : 'claude', children: ['⏺'] }), Box({ flexDirection: 'column', flexShrink: 1, marginLeft: 1, children: [Markdown({ text: turn.answer })] })],
         }),
       ...(turn.state === 'answered'
-        ? [Text({ key: 'm' + index, dimColor: true, children: ['  ↳ ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited') + ' · ' + turn.tokens + ' tokens'] })]
+        // An answer that cites nothing is unverified: said in the warning tone, so it reads apart from a cited one.
+        ? [Text({ key: 'm' + index, color: turn.cited.length ? 'inactive' : 'warning', children: ['  ↳ ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited') + ' · ' + turn.tokens + ' tokens'] })]
         : []),
     ])
     const empty = [
-      Text({ key: 'hello', dimColor: true, children: ['Ask about this repository: where something is handled, how it works, what its documentation says. Answers cite path:line.'] }),
-      Text({ key: 'hello-keys', dimColor: true, children: ['ctrl+x tab moves between the conversation and this pane; /aleph opens it again; /aleph configure sets Aleph up. Answers are kept for later sessions: `aleph-zero memory list`, and `forget`.'] }),
+      Text({ key: 'hello', color: 'inactive', children: ['Ask about this repository: where something is handled, how it works, what its documentation says. Answers cite path:line.'] }),
+      Text({ key: 'hello-keys', color: 'subtle', children: ['ctrl+x tab moves between the conversation and this pane; /aleph opens it again; /aleph configure sets Aleph up. Answers are kept for later sessions: `aleph-zero memory list`, and `forget`.'] }),
     ]
     const messages = Box({
       key: 'messages', flexDirection: 'column', rowGap: 1,
       ...(docked ? { flexGrow: 1, justifyContent: 'flex-end', overflow: 'hidden' } : {}),
-      children: [...(turns.length ? turns : empty), ...(chat.note ? [Text({ key: 'note', dimColor: true, children: [chat.note] })] : [])],
+      children: [...(turns.length ? turns : empty), ...(chat.note ? [Text({ key: 'note', color: 'subtle', children: [chat.note] })] : [])],
     })
 
     // The pane's keys, pressed while the pane (not the question field) has the keyboard: Esc leaves the field, Tab
@@ -499,8 +503,8 @@ export function register(on, options) {
       }))
     }
     keys.push(
-      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: actions.m = () => choose('model', step(MODELS, chat.model)) }),
-      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: actions.e = () => choose('effort', step(EFFORTS, chat.effort)) }),
+      Button({ key: 'model-next', label: 'model: ' + label.replace(/ \(.*\)$/, ''), hotkey: 'm', plain: true, onPress: actions.m = () => choose('model', step(MODELS, chat.model)) }),
+      Button({ key: 'effort-next', label: 'effort: ' + chat.effort, hotkey: 'e', plain: true, onPress: actions.e = () => choose('effort', step(EFFORTS, chat.effort)) }),
       Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: actions.c = () => $.ui.close({ id: PANE }) }),
     )
     const question = Input({
@@ -536,36 +540,54 @@ export function register(on, options) {
       children: [
         header,
         messages,
-        Text({ key: 'rule', dimColor: true, children: ['─'.repeat(Math.max(10, columns))] }),
+        Text({ key: 'rule', color: 'subtle', children: ['─'.repeat(Math.max(10, columns))] }),
         question,
-        Box({ key: 'footer', flexDirection: 'row', columnGap: 2, children: [Text({ key: 'footer-hint', dimColor: true, children: ['Enter asks · Esc for keys:'] }), ...keys] }),
+        Box({ key: 'footer', flexDirection: 'row', columnGap: 2, children: [Box({ key: 'footer-hint-box', flexShrink: 0, children: [Text({ key: 'footer-hint', color: 'subtle', children: ['Esc, then:'] })] }), ...keys] }),
       ],
     })
   })
 
   // ---- /aleph configure's pane -----------------------------------------------------------------
 
+  // The row the focus ring is on, for the help under the rows. Only a move to another element redraws.
+  on('ui.focus', async ($, e, next) => {
+    // The person's moves name the element (`element`); the plugin's own $.ui.focus arrives as asked (`key`).
+    const element = e.element || e.key || null
+    if (e.requestId === CONFIG_PANE && element !== cfg.focused) {
+      cfg.focused = element
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
+  }).catch(async ($, e, next) => next(e))      // a fault here must never keep the ring from moving
+
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== CONFIG_PANE) return next(e)
-    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    await restore($)     // after an option changed: the row the ring is on, so its help stays
+    const { Box, Text, Button, Input, Markdown } = $.ui.resolve(e)
     if (cfg.status === undefined && !cfg.loading) void readConfig($)   // loaded again after an option changed
-    const columns = Math.max(30, Number((e.props || {}).bodyColumns) || 60)
+    const props = e.props || {}
+    const columns = Math.max(30, Number(props.bodyColumns) || 60)
+    const docked = props.placement === 'dock' && Number(props.scroll && props.scroll.bodyRows) > 0
     const rows = []
-    const heading = (key, text) => rows.push(Text({ key, bold: true, children: [text] }))
-    // One line a row: the key and name in a column of their own, the value whole, what it means cut to what fits.
+    // Tones by role, theme keys only (light and dark themes, four surfaces): headings strong, chrome subtle, what a
+    // row means inactive, an off value receding, a warning in its own colour.
+    const heading = (key, text, first) => rows.push(Box({ key: key + '-box', ...(first ? {} : { marginTop: 1 }), children: [Text({ key, weight: 'semibold', children: [text] })] }))
+    const tone = (value) => /^(off|not installed|unknown)/.test(String(value)) ? { color: 'inactive' }
+      : /out of date/.test(String(value)) ? { color: 'warning' } : { weight: 'medium' }
+    // One line a row: the key and name in a column of their own, the value in one too, what it means cut to what fits.
     const row = (key, control, value, detail) => rows.push(Box({
       key, flexDirection: 'row', columnGap: 1,
       children: [
         Box({ key: key + '-k', width: LABEL_COLUMNS, flexShrink: 0, children: [control] }),
-        Box({ key: key + '-vb', flexShrink: 0, children: [Text({ key: key + '-v', children: [value] })] }),
-        ...(detail ? [Text({ key: key + '-d', dimColor: true, wrap: 'truncate-end', children: [detail] })] : []),
+        Box({ key: key + '-vb', width: VALUE_COLUMNS, flexShrink: 0, children: [Text({ key: key + '-v', wrap: 'truncate-end', ...tone(value), children: [value] })] }),
+        ...(detail ? [Text({ key: key + '-d', color: 'inactive', wrap: 'truncate-end', children: [detail] })] : []),
       ],
     }))
-    const say = (key, text) => rows.push(Text({ key, dimColor: true, children: [fit(text, columns)] }))
-    const tell = (key, text) => rows.push(Text({ key, dimColor: true, children: [String(text)] }))   // whole, wrapped: a reason
+    const say = (key, text) => rows.push(Text({ key, color: 'subtle', children: [fit(text, columns)] }))
+    const tell = (key, text, color = 'subtle') => rows.push(Text({ key, color, children: [String(text)] }))   // whole, wrapped: a reason
 
     // The plugin's options: through Claude Code's settings, as /plugin would; they need neither the engine nor its tools.
-    heading('h-plugin', 'Plugin')
+    heading('h-plugin', 'Plugin', true)
     for (const option of OPTIONS) {
       const value = valueOf(options, option)
       row('o-' + option.key, Button({
@@ -596,7 +618,7 @@ export function register(on, options) {
     if (status === undefined || (status === null && cfg.loading)) {
       say('r-reading', 'reading the engine\'s status…')
     } else if (status === null) {
-      tell('r-error', cfg.error)
+      tell('r-error', cfg.error, 'error')
     } else if (status.refused) {
       tell('r-refused', status.refused)
     } else if (status.repository === false) {
@@ -607,7 +629,7 @@ export function register(on, options) {
         vectors.value, vectors.note)
       const cached = Boolean(status.untracked_cache)
       // Kept by git's configuration, the cache comes back whatever the index says: no key, and where it is set.
-      if (status.untracked_cache_from === 'config') row('o-cache', Text({ key: 'b-cache-config', dimColor: true, children: ['   untracked cache'] }), 'on', 'set in git\'s configuration (core.untrackedCache)')
+      if (status.untracked_cache_from === 'config') row('o-cache', Text({ key: 'b-cache-config', color: 'subtle', children: ['   untracked cache'] }), 'on', 'set in git\'s configuration')
       else row('o-cache', Button({
         key: 'b-cache', label: 'untracked cache', hotkey: 'u', plain: true,
         onPress: async () => {
@@ -625,9 +647,9 @@ export function register(on, options) {
             $.ui.invalidate('ui.render')
           }
         },
-      }), cached ? 'on' : 'off', 'git\'s; a faster look at the worktree')
+      }), cached ? 'on' : 'off', 'a faster look at the worktree')
       const linked = Array.isArray(status.sources) ? status.sources : []
-      say('s-head', linked.length ? 'Linked sources, searched with it (a digit unlinks):' : 'No linked sources: docs or code elsewhere, searched with it.')
+      say('s-head', linked.length ? 'Linked sources (a digit unlinks)' : 'No linked sources')
       linked.slice(0, 9).forEach((source, index) => {
         const name = String(source.name)
         removable.push(name)
@@ -644,7 +666,7 @@ export function register(on, options) {
         rows.push(Box({
           key: 'confirm', flexDirection: 'row', columnGap: 2,
           children: [
-            Text({ key: 'confirm-q', children: ['Unlink ' + name + '? Its files leave the index.'] }),
+            Text({ key: 'confirm-q', color: 'warning', children: ['Unlink ' + name + '? Its files leave the index.'] }),
             Button({ key: 'b-yes', label: 'unlink', hotkey: 'y', plain: true, onPress: () => { cfg.removing = null; return runEngine($, ['source', 'remove', name], 'unlinking ' + name) } }),
             Button({ key: 'b-no', label: 'keep', hotkey: 'n', plain: true, onPress: () => { cfg.removing = null; $.ui.invalidate('ui.render') } }),
           ],
@@ -694,17 +716,49 @@ export function register(on, options) {
             cfg.note = copied && copied.isCopied ? 'Copied; run it in a terminal (it goes on if this pane closes):' : 'Run this in a terminal:'
             $.ui.invalidate('ui.render')
           },
-        }), state, wanted ? cost + '; the key copies it' : 'the key copies a rebuild')
+        }), state, wanted ? cost : '')
       }
     } else {
       say('m-wait', status === null ? 'what is built is known once the engine answers' : 'reading…')
     }
 
-    if (cfg.busy) rows.push(Text({ key: 'busy', color: 'gray', children: [fit('✻ ' + cfg.busy, columns)] }))
-    else if (cfg.note) tell('note', cfg.note)
-    if (!cfg.busy && cfg.command) rows.push(Text({ key: 'command', children: [cfg.command] }))   // whole, to select by hand too
-    rows.push(Text({ key: 'footer', dimColor: true, children: [fit('A key changes its row · Esc closes · ctrl+x tab: prompt', FOOTER_COLUMNS)] }))
-    return Box({ key: 'configure', flexDirection: 'column', children: rows })
+    if (cfg.busy) rows.push(Box({ key: 'busy-box', marginTop: 1, children: [Text({ key: 'busy', color: 'inactive', children: [fit('✻ ' + cfg.busy, columns)] })] }))
+    else if (cfg.note) rows.push(Box({ key: 'note-box', marginTop: 1, children: [Text({ key: 'note', color: /^failed|^git:|could not/.test(cfg.note) ? 'error' : 'subtle', children: [cfg.note] })] }))
+    if (!cfg.busy && cfg.command) rows.push(Text({ key: 'command', mono: true, children: [cfg.command] }))   // whole, to select by hand too
+
+    // The help for the row the ring is on, in one fixed place under all the rows: only its words change as the ring
+    // moves. A rule with the row's name, what it does in light Markdown, its values with the current one marked, when
+    // a change applies, and a word of warning where one is due.
+    const about = help(cfg.focused, { options, status, sources: status && Array.isArray(status.sources) ? status.sources : [] })
+    const width = Math.max(10, columns - 1)
+    const helpRows = about ? [
+      Text({ key: 'help-rule', color: 'subtle', children: [fit('── ' + about.title + ' ' + '─'.repeat(width), width)] }),
+      Markdown({ key: 'help-text', dimColor: true, text: about.text }),
+      ...(about.values || []).map((item, index) => Box({
+        key: 'help-v' + index, flexDirection: 'row',
+        children: [
+          Box({ key: 'help-v' + index + '-m', width: 2, flexShrink: 0, children: [Text({ color: item.current ? 'claude' : 'subtle', children: [item.current ? '▸' : ' '] })] }),
+          Box({ key: 'help-v' + index + '-n', width: 12, flexShrink: 0, children: [Text({ ...(item.current ? { weight: 'medium' } : { color: 'subtle' }), children: [item.value] })] }),
+          Box({ key: 'help-v' + index + '-t', flexShrink: 1, children: [Markdown({ dimColor: !item.current, text: item.meaning })] }),
+        ],
+      })),
+      Markdown({ key: 'help-applies', dimColor: true, text: '*' + about.applies + '*' }),
+      ...(about.note ? [Text({ key: 'help-note', color: about.note[1] || 'subtle', children: [about.note[0]] })] : []),
+    ] : [
+      Text({ key: 'help-rule', color: 'subtle', children: ['─'.repeat(width)] }),
+      Markdown({ key: 'help-hint', dimColor: true, text: HELP_HINT }),
+      Text({ key: 'help-keys', color: 'subtle', children: [HELP_KEYS] }),
+    ]
+    return Box({
+      key: 'configure', flexDirection: 'column',
+      ...(docked ? { height: Number(props.scroll.bodyRows) } : {}),
+      children: [
+        Box({ key: 'rows', flexDirection: 'column', flexShrink: 0, children: rows }),
+        ...(docked ? [Box({ key: 'spacer', flexGrow: 1 })] : []),
+        Box({ key: 'help', flexDirection: 'column', flexShrink: 0, marginTop: 1, children: helpRows }),
+        Box({ key: 'footer-box', marginTop: 1, children: [Text({ key: 'footer', color: 'subtle', children: [fit('↑↓ explains a row · a key changes it · Esc closes', FOOTER_COLUMNS)] })] }),
+      ],
+    })
   })
 
   // ---- the meter ------------------------------------------------------------------------------

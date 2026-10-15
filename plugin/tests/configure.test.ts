@@ -1,6 +1,6 @@
 // /aleph configure: what it shows, what each key changes and through what, and what it never runs by itself.
 import { expect, test } from 'claude-code/testing'
-import { commandLine, meaning, nextValue, OPTIONS, valueOf, vectorsRow } from '../hooks/configure.js'
+import { commandLine, help, meaning, nextValue, OPTIONS, valueOf, vectorsRow } from '../hooks/configure.js'
 
 const PANE = {
   plugin: 'aleph-zero', component: 'Pane', requestId: 'aleph-config', viewport: { columns: 160, rows: 40 },
@@ -45,6 +45,7 @@ function world(on: any, options: { status?: any, engine?: number, denied?: strin
     seen.sets.push(e)
     return options.denied ? { deny: options.denied } : { value: e.value }
   })
+  on('ui.focus', () => ({ value: {} }))     // the engine's side: the ring lands where asked
   on('ui.copy', ($: any, e: any) => {
     seen.copies.push(e)
     return { value: { isCopied: true } }
@@ -81,7 +82,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(asked[0]).toBe('sh')
     expect(asked[1]).toMatch(/scripts\/engine\.sh$/)
     expect(asked.slice(2)).toEqual(['--cwd', '/work/shop', 'status'])
-    expect(String((await ui.find({ key: 'footer' }))?.text).length <= 60).toBe(true)
+    const footer = await ui.find({ type: 'Text', text: /explains a row/ })     // by its words: a Text keeps no key here
+    expect(footer).toBeDefined()
+    expect(String(footer?.text).length <= 60).toBe(true)
     await ui.unmount()
   })
 }
@@ -188,7 +191,7 @@ test('git\'s untracked cache kept by git\'s configuration has no key: only the c
   world(on, { status: status({ untracked_cache: true, untracked_cache_from: 'config' }) })
   const ui = await open($)
   expect(await ui.find({ key: 'b-cache' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /core\.untrackedCache/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /set in git's configuration/ })).toBeDefined()
 })
 
 test('outside a git repository the repository rows are left out, and said why', async ($, on) => {
@@ -213,4 +216,28 @@ test('the rules: values, steps, meanings and commands for a terminal', () => {
   expect(vectorsRow({ chosen: true }).flag).toBe('--no-dense')
   expect(vectorsRow({ chosen: false }).flag).toBe('--auto-dense')
   expect(commandLine('/Users/a b/.venv/bin/aleph-zero', 'setup --worker')).toBe('\'/Users/a b/.venv/bin/aleph-zero\' setup --worker')
+})
+
+test('the help under the rows follows the focus ring: what the row does, its values with the current one marked', async ($, on) => {
+  world(on)
+  const ui = await open($)
+  expect(await ui.find({ key: 'help-hint' })).toBeDefined()                // nothing focused: what the three parts are
+  await $.ui.focus({ requestId: 'aleph-config', key: 'b-rung' })
+  expect(await ui.find({ type: 'Text', text: /^── steering ─/ })).toBeDefined()
+  expect(await ui.find({ key: 'help-hint' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '▸' })).toBeDefined()        // rung 1, the default, marked
+  expect(await ui.find({ type: 'Text', text: /No rung has yet been shown to save tokens/ })).toBeDefined()
+  await $.ui.focus({ requestId: 'aleph-config', key: 'b-graph' })
+  expect(await ui.find({ type: 'Text', text: /^── graph tools ─/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Not yet measured to help an agent/ })).toBeDefined()
+})
+
+test('every row that can take the ring has help, and the help keeps to the facts it states', () => {
+  for (const key of ['b-rung', 'b-grep_pointer', 'b-lines', 'b-graph', 'b-dense', 'b-cache', 'b-src-0', 'b-link', 'source', 'b-worker', 'b-memory']) {
+    const about = help(key, { options: {}, status: status(), sources: status().sources })
+    expect(about).not.toBeNull()
+    expect(about!.text.length < 260).toBe(true)                               // helper text, not a page
+  }
+  expect(help('b-graph', { options: {} })!.values!.find((item: any) => item.current)!.value).toBe('on')
+  expect(help('b-dense', { status: status({ main_language: 'python' }) })!.text).toMatch(/python\*\*: off/)
 })
