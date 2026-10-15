@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.9
+
+- The graph tools are on by default in the plugin: `references` (who calls a function, and what it calls), `facts`
+  (routes, data models, environment names) and `decisions` (the decision records that govern a change) are offered
+  to the agent, and the standing instruction says when to use each. Whether they help an agent has not been measured;
+  `graph=off` (in `/aleph configure`, or `/plugin`) offers the search tools alone. A setup without the plugin still
+  opts in with `ALEPH_GRAPH=1`.
+- Benchmark C has its hand-made part: 68 questions on six of the owner's public repositories, made so that nobody who
+  built Aleph wrote, answered or edited one (`bench/eval/owner_questions.py`, `--set owner`), read by kind.
+
 ## 0.1.8
 
 - `aleph-zero status` in a directory Aleph refuses (a home directory, more than 20,000 files) still refuses, and

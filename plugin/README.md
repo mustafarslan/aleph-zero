@@ -21,7 +21,7 @@ Then, optionally: `aleph-zero setup --worker` once (the embedding server and mod
 ## What it adds
 
 - The engine's tools: `search`, `symbol`, `outline`, `status`, `recall`, `remember`, and with
-  the `graph` option `references`, `facts` and `decisions`.
+  the `graph` option (on by default; not yet measured to help) `references`, `facts` and `decisions`.
 - Steering, by the `rung` option (default `1`): tool descriptions and a short instruction to
   search before a recursive grep; at `2`, ranked locations with the first prompt of a
   session; at `3`, ranked locations after a grep (the Grep tool's or a shell's) that found nothing. No rung has yet been
@@ -57,7 +57,7 @@ These are all the mod's hooks, and everything each one does:
 | `ui.render` (the pane) | Draws the side chat. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
 | `tool.describe` (the engine's tools) | At rung 1 and above, replaces the descriptions of `search`, `symbol`, `outline` and `status` with tuned ones and loads them up front instead of on demand. |
 | `tool.describe` (Grep, Glob) | At rung 1 and above, with `grep_pointer` on, appends one sentence to their descriptions pointing to `search`. It changes nothing else about them. |
-| `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right. |
+| `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right; with the `graph` option on, one more line saying when to use `references`, `decisions` and `facts`. |
 | `prompt.submit` | At rung 2 and above, for the first prompt of a session that is a question, asks the engine's `search` with the prompt's first 2,000 characters and, when the top result is confident, attaches up to five file locations to that prompt as context. The prompt's own text is not changed. |
 | `tool.call` (Bash) | At rung 3, after a recursive `grep`, `rg`, `git grep` or `find` has run and found nothing, asks the engine's `search` with its pattern and appends up to five ranked locations to that command's output. The command and its input are not changed, and nothing is done for any other command. |
 | `tool.call` (Grep) | At rung 3, after a Grep tool search of the repository has found nothing, asks the engine's `search` with its pattern and gives up to five ranked locations to the model as context after the result. The search, its input and its result are not changed. |
