@@ -66,3 +66,17 @@ def test_at_most_one_result_a_file_is_cut_where_the_engine_cuts_its_list(repo, m
     more: list = []
     search(index, view, "rotate token helper", k=3, more_files=more)
     assert set(as_it_is) | {hit.path for hit in more} == set(one_each)                                 # the same files, named after the results
+
+
+def test_the_owner_s_questions_are_read_from_their_file_and_summed_up_by_kind(tmp_path):
+    rows = [{"repo": "mustafarslan/aeon", "base_commit": "c" * 40, "instance_id": "aeon-1", "problem_statement": "where is the WAL replayed",
+             "gold": ["a.py"], "language": "python", "category": "conceptual", "local": "/somewhere/aeon"},
+            {"repo": "mustafarslan/oxn", "base_commit": "d" * 40, "instance_id": "oxn-1", "problem_statement": "TraceManager",
+             "gold": ["a.py"], "language": "python", "category": "identifier", "local": "/somewhere/oxn"}]
+    (tmp_path / "q.json").write_text(__import__("json").dumps(rows))
+    assert bench.instances(None, "owner", questions=tmp_path / "q.json") == rows
+    assert [row["instance_id"] for row in bench.instances({"mustafarslan/oxn"}, "owner", questions=tmp_path / "q.json")] == ["oxn-1"]
+    entries = [_entry(["a.py"], ["a.py"], []) | {"category": "conceptual"}, _entry([], ["a.py"], []) | {"category": "identifier"}]
+    by_kind = bench.summarise(entries, {})["by_category"]
+    assert by_kind["conceptual"]["instances"] == 1 and by_kind["conceptual"]["title"]["lexical"] == 1.0
+    assert by_kind["identifier"]["title"]["hybrid"] == 1.0 and by_kind["identifier"]["title"]["lexical"] == 0.0

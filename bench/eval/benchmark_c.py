@@ -97,9 +97,15 @@ def asked_in(results: list[Path]) -> set[str]:
 
 
 def instances(repos: set[str] | None, source: str = "locbench", language: str | None = None, per_repo: int | None = None,
-              asked: set[str] | frozenset[str] = frozenset()) -> list[dict]:
+              asked: set[str] | frozenset[str] = frozenset(), questions: Path | None = None) -> list[dict]:
     """The questions: Loc-Bench's (Python), or those of another set for another language (`question_sets`). With
-    `asked`, a second draw from another set: only questions that no earlier run scored."""
+    `asked`, a second draw from another set: only questions that no earlier run scored. `owner`: the hand-made
+    questions of a file (`--questions`), in the same shape, with a `category` and the `local` clone each is asked of."""
+    if source == "owner":
+        if questions is None:
+            raise SystemExit("--set owner needs --questions FILE")
+        rows = json.loads(questions.read_text())
+        return [row for row in rows if repos is None or row["repo"] in repos]
     if source != "locbench":
         import question_sets
 
@@ -136,7 +142,9 @@ def fetch(workdir: Path, row: dict) -> Path:
     if not (clone / ".git").exists():
         clone.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "-C", str(clone), "init", "--quiet"], check=True)
-        subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", f"https://github.com/{row['repo']}"], check=True)
+        # A question of the owner's own names the clone on this machine: no network, and a private repository works.
+        origin = row.get("local") or f"https://github.com/{row['repo']}"
+        subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", origin], check=True)
     have = subprocess.run(["git", "-C", str(clone), "cat-file", "-e", f"{row['base_commit']}^{{commit}}"], capture_output=True)
     if have.returncode != 0:
         subprocess.run(["git", "-C", str(clone), "fetch", "--quiet", "--depth", "1", "origin", row["base_commit"]],
@@ -419,6 +427,22 @@ def summarise(results: list[dict], passed_over: dict[str, int]) -> dict:
                                                    [entry["scores"][form][second][key] for entry in results])
                 block[name][key] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
         summary[form] = block
+    # The owner's questions are read by their kind too (conceptual, identifier, mixed, documentation): file recall@10 of
+    # each arm, and what vectors add, with its interval.
+    categories = sorted({entry["category"] for entry in results if entry.get("category")})
+    if categories:
+        summary["by_category"] = {}
+        for category in categories:
+            part = [entry for entry in results if entry.get("category") == category]
+            block = {"instances": len(part)}
+            for form in FORMS:
+                block[form] = {mode: round(statistics.mean(entry["scores"][form][mode]["recall@10"] for entry in part), 3)
+                               for mode in ("lexical", "hybrid", "dense")}
+                mean, low, high = paired_bootstrap([entry["scores"][form]["hybrid"]["recall@10"] for entry in part],
+                                                   [entry["scores"][form]["lexical"]["recall@10"] for entry in part])
+                block[form]["hybrid_minus_lexical"] = {"mean": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
+            block["bm25"] = round(statistics.mean(entry["bm25"]["recall@10"] for entry in part), 3)
+            summary["by_category"][category] = block
     return summary
 
 
@@ -510,6 +534,7 @@ def run(workdir: Path, rows: list[dict], out: Path | None, with_bm25: bool, code
         bm25 = bm25_files(view, forms["full"]) if with_bm25 else []
         index.conn.close()
         entry = {"instance": row["instance_id"], "repo": row["repo"], "gold": row["gold"], "chunks": total,
+                 **({"category": row["category"]} if row.get("category") else {}),
                  "title": forms["title"][:120], "files": found, "bm25_files": bm25, "cut_differs": differs,
                  "bm25": score(row["gold"], bm25),
                  "scores": {form: {mode: score(row["gold"], found[form][mode]) for mode in MODES} for form in FORMS}}
@@ -542,9 +567,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--repos", help="comma-separated owner/name; default: every repository of Loc-Bench")
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--set", default="locbench", choices=("locbench", "others", "multilingual", "polybench", "multi-swe"),
+    parser.add_argument("--set", default="locbench", choices=("locbench", "others", "multilingual", "polybench", "multi-swe", "owner"),
                         help="where the questions are from: Loc-Bench (Python, the default), one set for other languages, or `others`: "
                              "all three of them together (bench/eval/question_sets.py)")
+    parser.add_argument("--questions", type=Path, help="with --set owner: the file of hand-made questions (bench/eval/owner_questions.json)")
     parser.add_argument("--language", help="with another --set: only the questions of this language (cpp, c, go, rust, java, javascript, typescript)")
     parser.add_argument("--per-repo", type=int, default=40, help="with another --set: at most this many questions of one repository in a language (default 40)")
     parser.add_argument("--not-asked-in", help="with another --set: comma-separated result files; a second draw, of questions none of them scored")
@@ -578,9 +604,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.not_asked_in and args.set == "locbench":
         parser.error("--not-asked-in is for the other sets: Loc-Bench is asked whole")
     asked = asked_in([Path(name) for name in args.not_asked_in.split(",")]) if args.not_asked_in else frozenset()
-    rows = instances(set(args.repos.split(",")) if args.repos else None, args.set, args.language, args.per_repo, asked)[: args.limit]
+    rows = instances(set(args.repos.split(",")) if args.repos else None, args.set, args.language, args.per_repo, asked,
+                     args.questions)[: args.limit]
     if args.action == "list":
-        if args.set != "locbench":
+        if args.set not in ("locbench", "owner"):
             import question_sets
 
             for language, found in question_sets.counts(rows).items():
