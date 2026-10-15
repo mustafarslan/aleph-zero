@@ -188,3 +188,16 @@ test('the pane says how to close it and how to change its settings, and has keys
   await ui.press({ key: 'close' })
   expect(JSON.stringify(seen.closed[0])).toContain('aleph-chat')
 })
+
+test('a key typed into the question field does what the key does, not ask it as a question', async ($, on) => {
+  // Seen in use: "m" typed while the field had the keys was sent as a question and answered.
+  const { seen, saved } = world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.input({ key: 'question', text: 'm' })
+  await ui.input({ key: 'question', text: 'E' })
+  expect(seen.models.length).toBe(0)                                  // no question was asked
+  expect(saved.get('aleph-zero.chat-settings')).toEqual({ model: 'sonnet', effort: 'high' })
+  await ui.input({ key: 'question', text: 'c' })
+  expect(JSON.stringify(seen.closed[0])).toContain('aleph-chat')
+})

@@ -329,10 +329,11 @@ export function register(on, options) {
       await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
     }
     const keys = []
+    const actions = {}     // the same keys, for a letter typed into the question field
     if (chat.busy) {
       keys.push(Button({
         key: 'stop', label: 'stop', hotkey: 's', plain: true,
-        onPress: () => {
+        onPress: actions.s = () => {
           chat.serial += 1  // whatever comes back for the question in flight is dropped
           if (chat.busy) finish(chat.busy, 'failed', 'Stopped.')
           $.ui.invalidate('ui.render')
@@ -341,7 +342,7 @@ export function register(on, options) {
     } else if (last && last.state === 'answered') {
       keys.push(Button({
         key: 'insert', label: 'insert', hotkey: 'i', plain: true,
-        onPress: async () => {
+        onPress: actions.i = async () => {
           // Drafts the note into the prompt box. Nothing reaches Claude until the user sends it.
           const filled = await $.prompt.fill({ text: note(last.answer, last.cited), mode: 'insert' })
           chat.note = filled && filled.isFilled === false ? 'The prompt box could not be filled.' : 'Drafted into the prompt box; edit or send it.'
@@ -352,9 +353,9 @@ export function register(on, options) {
       }))
     }
     keys.push(
-      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: () => choose('model', step(MODELS, chat.model)) }),
-      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: () => choose('effort', step(EFFORTS, chat.effort)) }),
-      Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
+      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: actions.m = () => choose('model', step(MODELS, chat.model)) }),
+      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: actions.e = () => choose('effort', step(EFFORTS, chat.effort)) }),
+      Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: actions.c = () => $.ui.close({ id: PANE }) }),
     )
     const question = Input({
       // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
@@ -366,6 +367,13 @@ export function register(on, options) {
       onSubmit: async (value) => {
         const asked = String(value || '').trim()
         if (!asked) return
+        // A key typed while the field had the keyboard (seen in use: "m" was asked as a question): do what it does.
+        const action = asked.length === 1 ? actions[asked.toLowerCase()] : undefined
+        if (action) {
+          chat.draft = ''
+          await action()
+          return
+        }
         if (chat.busy) {
           chat.draft = asked
           chat.note = 'The last question is still being answered: Esc, then s stops it; or wait, then Enter again.'
