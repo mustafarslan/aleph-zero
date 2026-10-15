@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.2
+
+From an end-to-end run as a new user (install from GitHub, every command, offline, update, uninstall).
+
+- `aleph setup --worker` works from any directory. In a new terminal, which starts in the home directory,
+  it refused the home directory and installed nothing: the first command of the install failed.
+- Files read while their grammar could not load (offline, behind a proxy) are read again once it loads.
+  Before, they kept no definitions until each file changed: `symbol` and `callers` stayed empty.
+  A command on a terminal says when a grammar could not load, and says before it fetches one; only the
+  grammars a repository needs are fetched.
+- The model download names its source and size, shows percent, speed and time left, replaces a
+  connection that stays slow (the CDN's speed differs between connections: 40 KB/s and 2.9 MB/s were
+  measured for the same bytes), and resumes a part left whole. Two installs at once wait for each other.
+- `aleph setup`: a no to the worker where vectors do not help no longer silences it in repositories
+  where they do; with the plugin installed, Claude Code counts as connected and no second server is
+  suggested; the plugin is offered first.
+- Run as `aleph-zero`, Aleph names `aleph-zero` in what it tells you to run (TeX Live has an `aleph`).
+- Ctrl-C, a closed pipe and file errors end in one line instead of a traceback; `--cwd` is also taken
+  after the command; empty answers say so; `embed setup --model-file` checks the file before building.
+- The plugin's `graph` option is on with `true` or `yes` as well as `on`.
+- When the cache path is too deep for a socket, each cache gets its own worker socket under /tmp.
+- Dependencies locked at the versions a new install resolves (apsw 3.54, tree-sitter-language-pack 1.22.1).
+
 ## 0.1.1
 
 - The plugin's `graph` option is free text (`on` or `off`), as Anthropic's plugin directory requires for an option passed

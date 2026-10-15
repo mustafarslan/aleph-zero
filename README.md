@@ -92,7 +92,8 @@ whose answers cite `path:line`.
 
 The engine is installed as `aleph` and, under the same code, as `aleph-zero`. TeX Live also
 installs a program called `aleph`: if `which aleph` points into a TeX directory, use
-`aleph-zero` instead. The plugin always starts `aleph-zero`.
+`aleph-zero` instead. Run as `aleph-zero`, it names `aleph-zero` in the commands it suggests. The plugin
+always starts `aleph-zero`.
 
 The plugin installs with its measured defaults. To turn every option on (see
 [Plugin options](#plugin-options)):
