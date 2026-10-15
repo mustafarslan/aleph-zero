@@ -34,7 +34,12 @@ def test_status_reports_the_view(repo, capsys):
 def test_a_directory_that_is_not_walked_is_an_error_message_not_a_traceback(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))   # outside a repository, a home directory is refused
     assert cli.main(["--cwd", str(tmp_path), "status"]) == 2
-    assert "aleph:" in capsys.readouterr().err
+    said = capsys.readouterr()
+    assert "aleph:" in said.err
+    # /aleph configure reads what is built on this machine from the same command, refused or not.
+    shown = json.loads(said.out)
+    assert shown["repository"] is False and shown["refused"] and "worker_installed" in shown["vectors"]
+    assert "aeon_installed" in shown["memory"]
 
 
 def test_search_output_survives_a_non_ascii_path(repo, capsys):

@@ -136,8 +136,16 @@ async function readConfig($) {
       cfg.error = older ? 'The engine is older than this plugin: `uv tool install --reinstall '
         + 'git+https://github.com/mustafarslan/aleph-zero.git` in a terminal, then /aleph configure again.' : ''
     } else {
-      cfg.status = null
-      cfg.error = lastLine(status.stderr) || 'the engine did not answer (exit ' + status.exitCode + ')'
+      // A directory the engine refuses (a home directory, more than 20,000 files) is said with what is built on this
+      // machine beside it.
+      let refused = null
+      try {
+        refused = JSON.parse(status.stdout)
+      } catch {
+        refused = null
+      }
+      cfg.status = refused && refused.refused ? refused : null
+      cfg.error = cfg.status ? '' : lastLine(status.stderr) || 'the engine did not answer (exit ' + status.exitCode + ')'
     }
   } catch (error) {
     cfg.status = null
@@ -586,6 +594,8 @@ export function register(on, options) {
       say('r-reading', 'reading the engine\'s status…')
     } else if (status === null) {
       tell('r-error', cfg.error)
+    } else if (status.refused) {
+      tell('r-refused', status.refused)
     } else if (status.repository === false) {
       say('r-plain', 'not a git repository: search by meaning, linked sources and git\'s cache are set in one')
     } else {
@@ -593,7 +603,9 @@ export function register(on, options) {
       row('o-dense', Button({ key: 'b-dense', label: 'search by meaning', hotkey: 'd', plain: true, onPress: () => runEngine($, ['setup', vectors.flag], 'switching search by meaning') }),
         vectors.value, vectors.note)
       const cached = Boolean(status.untracked_cache)
-      row('o-cache', Button({
+      // Kept by git's configuration, the cache comes back whatever the index says: no key, and where it is set.
+      if (status.untracked_cache_from === 'config') row('o-cache', Text({ key: 'b-cache-config', dimColor: true, children: ['   untracked cache'] }), 'on', 'set in git\'s configuration (core.untrackedCache)')
+      else row('o-cache', Button({
         key: 'b-cache', label: 'untracked cache', hotkey: 'u', plain: true,
         onPress: async () => {
           if (cfg.busy) return

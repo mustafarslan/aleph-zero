@@ -388,16 +388,23 @@ def untracked_cache_enabled(cwd: Path) -> bool:
     """True if git keeps its untracked cache for this repository: because its configuration says so, or because
     the cache is in the repository's index (`git update-index --untracked-cache` puts it there and changes no
     configuration; git then keeps and uses it)."""
+    return untracked_cache_source(cwd) is not None
+
+
+def untracked_cache_source(cwd: Path) -> str | None:
+    """Where git's untracked cache for this repository comes from: "config" (core.untrackedCache is true: git keeps
+    it whatever the index says, and only a change of configuration turns it off), "index" (put there by
+    `git update-index --untracked-cache`), or None when it is off."""
     try:
         if git(cwd, "config", "--bool", "--get", "core.untrackedCache").strip() == b"true":
-            return True
+            return "config"
     except GitError:
         pass
     try:
         index = Path(git(cwd, "rev-parse", "--path-format=absolute", "--git-dir").decode().strip()) / "index"
-        return _has_extension(index.read_bytes(), b"UNTR")
+        return "index" if _has_extension(index.read_bytes(), b"UNTR") else None
     except (GitError, OSError):
-        return False
+        return None
 
 
 def _has_extension(index: bytes, signature: bytes) -> bool:

@@ -19,7 +19,7 @@ function status(overrides: any = {}) {
 }
 
 // Claude Code's side: the engine's commands, git, the settings writer and the prompt box, each one recorded.
-function world(on: any, options: { status?: any, engine?: number, denied?: string } = {}) {
+function world(on: any, options: { status?: any, engine?: number, denied?: string, refused?: any } = {}) {
   const seen = { runs: [] as string[][], spawns: [] as string[][], sets: [] as any[], fills: [] as any[], copies: [] as any[], opened: [] as any[], submits: 0 }
   on('session.cwd', () => ({ value: '/work/shop' }))
   on('ui.open', ($: any, e: any) => {
@@ -31,6 +31,7 @@ function world(on: any, options: { status?: any, engine?: number, denied?: strin
     seen.runs.push([...e.argv])
     if (e.argv.includes('--path')) return { value: { exitCode: 0, stdout: ENGINE + '\n', stderr: '' } }
     if (e.argv[0] === 'git') return { value: { exitCode: 0, stdout: '', stderr: '' } }
+    if (options.refused) return { value: { exitCode: 2, stdout: JSON.stringify(options.refused), stderr: options.refused.refused + '\n' } }
     if (options.engine) return { value: { exitCode: options.engine, stdout: '', stderr: 'aleph-zero: the engine is not installed: uv tool install git+https://github.com/mustafarslan/aleph-zero.git\n' } }
     return { value: { exitCode: 0, stdout: JSON.stringify(options.status || status()), stderr: '' } }
   })
@@ -171,6 +172,23 @@ test('an engine older than the plugin is named, with how to update it, and its r
   expect(await ui.find({ key: 'b-dense' })).toBeUndefined()
   expect(await ui.find({ key: 'b-worker' })).toBeUndefined()
   expect(await ui.find({ key: 'b-rung' })).toBeDefined()
+})
+
+test('in a directory the engine refuses, the refusal is said and what is built on this machine still shows', async ($, on) => {
+  const refused = { root: '/Users/someone', repository: false, refused: 'aleph: /Users/someone is your home directory', vectors: { chosen: null, worker_installed: true, worker_current: true }, memory: { aeon_installed: false, aeon_current: false } }
+  world(on, { refused })
+  const ui = await open($)
+  expect(await ui.find({ type: 'Text', text: /is your home directory/ })).toBeDefined()
+  expect(await ui.find({ key: 'b-dense' })).toBeUndefined()
+  expect(await ui.find({ key: 'b-worker' })).toBeDefined()
+  expect(await ui.find({ key: 'b-memory' })).toBeDefined()
+})
+
+test('git\'s untracked cache kept by git\'s configuration has no key: only the configuration turns it off', async ($, on) => {
+  world(on, { status: status({ untracked_cache: true, untracked_cache_from: 'config' }) })
+  const ui = await open($)
+  expect(await ui.find({ key: 'b-cache' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /core\.untrackedCache/ })).toBeDefined()
 })
 
 test('outside a git repository the repository rows are left out, and said why', async ($, on) => {

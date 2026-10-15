@@ -141,8 +141,30 @@ def _outline(args) -> int:
 
 
 def _status(args) -> int:
-    print(json.dumps(Engine(args.cwd).status(), indent=2))
+    try:
+        print(json.dumps(Engine(args.cwd).status(), indent=2))
+    except plain.Refused as refused:
+        # Refused as before (the message, exit 2), and what is known without the directory said beside it: a settings
+        # pane opened in the home directory still shows what is built on this machine.
+        print(json.dumps({"root": str(Path(args.cwd).resolve()), "repository": False, "refused": str(refused),
+                          **_machine()}, indent=2))
+        raise
     return 0
+
+
+def _machine() -> dict:
+    """What is built on this machine, in the shape `status` gives it."""
+    from .embed import setup as worker_setup
+
+    try:
+        worker = {"worker_installed": worker_setup.installed(), "worker_current": worker_setup.current()}
+    except OSError:
+        worker = {"worker_installed": None, "worker_current": None}
+    try:
+        aeon = {"aeon_installed": aeon_setup.installed(), "aeon_current": aeon_setup.current()}
+    except OSError:
+        aeon = {"aeon_installed": None, "aeon_current": None}
+    return {"vectors": {"chosen": None, **worker}, "memory": aeon}
 
 
 def _dense_setting(args) -> bool | None:
@@ -333,6 +355,7 @@ def _setup(args) -> int:
     if not flagged and not args.json and firstrun.on_terminal():
         say(f"Setting up Aleph Zero for {status['root']}\n\n{firstrun.text(steps)}")
         menu = firstrun.Menu(status, say, input, act)
+        asked_any = False
         try:
             for key in [step.key for step in steps]:
                 status, found, steps = now()                    # an answer changes what the next question is
@@ -341,10 +364,16 @@ def _setup(args) -> int:
                 asked = step.state == "open" or (args.again and (step.state == "declined" or (key == "claude" and step.state == "done")))
                 # Search by meaning and memory by meaning both need the worker's vectors: asked once it is there.
                 if asked and not (key in ("vectors", "memory") and not found.worker):
+                    asked_any = True
                     menu.step(step, found)
         except (KeyboardInterrupt, EOFError):
             say(f"\nleft as it is: `{COMMAND} setup` asks about the rest")
         settings.change(repo_file, hint_shown=True)
+        if not asked_any:
+            # Everything here was answered before: the list above is the whole of it, said once, and how to change a no.
+            if any(step.state == "declined" for step in steps):
+                say(f"\nEvery step was answered before; `{COMMAND} setup --again` asks again about what was declined.")
+            return 2 if failed else 0
         say(f"\nAfter a pull, `{COMMAND} update` brings all of this up to date in one go, for what changed only; "
             f"`{COMMAND} update --print-hook` prints the lines that make git do it by itself.\n")
     status, found, steps = now()

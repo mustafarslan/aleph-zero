@@ -420,3 +420,23 @@ def test_the_status_says_the_verdict_the_choice_and_whether_the_worker_is_there(
     settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
     vectors = Engine(repo.root).status()["vectors"]
     assert vectors["chosen"] is True and "python" in vectors["verdict"]["why"]      # the verdict is still said
+
+
+def test_the_status_never_fetches_a_grammar_on_a_repository_not_indexed_yet(repo, monkeypatch):
+    # /aleph configure reads the status when it opens: in a fresh repository that must not be a download.
+    from aleph_zero.lang import parse
+
+    monkeypatch.setattr(parse, "fetch_missing", lambda grammars: pytest.fail(f"fetched {grammars}"))
+    status = Engine(repo.root).status()
+    assert status["pending"] > 0
+
+
+def test_the_status_says_where_git_s_untracked_cache_comes_from(repo):
+    import subprocess
+
+    assert Engine(repo.root).status()["untracked_cache_from"] is None
+    subprocess.run(["git", "-C", str(repo.root), "update-index", "--untracked-cache"], check=True, capture_output=True)
+    status = Engine(repo.root).status()
+    assert status["untracked_cache"] is True and status["untracked_cache_from"] == "index"
+    subprocess.run(["git", "-C", str(repo.root), "config", "core.untrackedCache", "true"], check=True)
+    assert Engine(repo.root).status()["untracked_cache_from"] == "config"     # only a change of configuration turns it off

@@ -700,7 +700,7 @@ class Engine:
                                    f"`{COMMAND} source add {view.submodules[0]}`"} if view.submodules else {}),
             "schema_version": SCHEMA_VERSION, "chunker_version": CHUNKER_VERSION,
             "sqlite": apsw.sqlite_lib_version(),
-            "untracked_cache": False if view.plain else gitio.untracked_cache_enabled(view.root),
+            **self._untracked_cache(view),
             # A directory that is not a repository is searched as it is on disk, without what nothing vouches for.
             "repository": not view.plain, "inner_repositories": view.inner_repositories,
             **({"left_out": plain.WHAT_IS_LEFT_OUT} if view.plain else {}),
@@ -716,6 +716,13 @@ class Engine:
         return found
 
     # ---- long-term memory -----------------------------------------------------------------------
+
+    @staticmethod
+    def _untracked_cache(view: View) -> dict:
+        """Whether git keeps its untracked cache here, and from where: a settings pane offers to turn off only one
+        that the index holds (git's configuration puts it back)."""
+        source = None if view.plain else gitio.untracked_cache_source(view.root)
+        return {"untracked_cache": source is not None, "untracked_cache_from": source}
 
     def _memories(self, view: View, create: bool = True) -> memory.Memory | None:
         """The repository's memories: a database of their own beside the index, which a

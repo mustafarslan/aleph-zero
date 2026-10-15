@@ -169,7 +169,8 @@ class Index:
         collected this view's content, or indexed what was pending here."""
         started = time.monotonic()
         changed = view.fingerprint != self._fingerprint
-        looked = self._look_for_grammars()
+        # With no time to read anything (`status`, `gc`), no grammar is looked for or fetched: a look is a download.
+        looked = self._look_for_grammars() if budget_seconds > 0 else False
         regrammar = self._regrammar
         # Read before looking: a commit by another session after this point is seen as a change next time.
         version = self.conn.pragma("data_version")
@@ -202,7 +203,7 @@ class Index:
             f"WHERE b.kind = ? AND b.family IN ({','.join('?' * len(regrammar))}) ORDER BY v.blob_oid, v.family",
             (NO_GRAMMAR, *regrammar))] if regrammar else []
         todo += again
-        if todo:
+        if todo and budget_seconds > 0:
             from .lang import parse
 
             parse.fetch_missing({lang.PROFILES[family].grammar for _, family in todo if family in lang.PROFILES})
