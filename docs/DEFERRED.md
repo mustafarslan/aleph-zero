@@ -303,6 +303,20 @@ Your words: "analyze capabilities of aleph zero and do research webseaech litera
   - *Frozen:* `bench/eval/owner_questions.json`, sha256 `b537ec7a6f21d52a1e30d64bdb7e581a3b8baf9c501dba66b48280c1eb048b0c`, one line a question so any can be struck.
 - **The reading, written before anything is prepared or run:** file recall@10 of words and names (`lexical`) and with vectors (`hybrid`), BM25 beside, on each question's text as given; read by category and by repository. By the verdicts every one of these six repositories ships words only (Python, Go and Java are off; aeon and nexus are mainly Python), so `lexical` is the column a person meets. **Nothing moves a default:** 68 questions see about ±11 points; this fills Benchmark C's missing hand-written part descriptively, and the 8 documentation questions say something about entry 8's query prefix without settling it.
 
+- **Run and read (2026-10-15, 20:06 to 20:12; 68 of 68 scored; chip at 76 °C at most, no waits). Descriptive, as written: no default moves.** File recall@10 on the question as given (`bench/data/results/benchmark_c_owner.json`):
+
+  | Kind | Questions | Words and names (shipped) | With vectors | Vectors alone | BM25 over whole files | Vectors add (95%) |
+  |---|---|---|---|---|---|---|
+  | Identifier | 18 | 1.000 | 1.000 | 0.944 | 0.833 | 0 |
+  | Conceptual | 24 | 0.861 | 0.875 | 0.868 | 0.826 | +1.4 (−4.9 to +7.6) |
+  | Mixed | 18 | 0.806 | 0.787 | 0.861 | 0.778 | −1.9 (−12.0 to +8.3) |
+  | Documentation | 8 | 0.542 | 0.667 | 0.625 | 0.917 | +12.5 (−12.5 to +43.8) |
+  | All | 68 | 0.846 | 0.860 | 0.858 | 0.826 | +1.5 (−3.2 to +6.6) |
+
+  By repository, words and names / with vectors / BM25: aeon 0.833 / 0.818 / 0.848, carbon 0.894 / 0.909 / 0.848, fidus 0.875 / 0.792 / 0.708, janus 0.864 / 0.864 / 0.818, nexus 0.864 / 0.955 / 0.727, oxn 0.750 / 0.833 / 1.000.
+  - *What it says:* on these repositories the shipped search finds 85% of the answering files in ten, a little above BM25 over whole files (83%); an identifier's defining file is always found, also where the name is used in three or more other files (BM25: 83%); vectors add nothing that can be told from zero here, as the verdicts for Python, Go and Java said.
+  - *What it found:* **documentation answers are where Aleph is weakest, and BM25 is far ahead there** (54% against 92%, 8 questions). The reason is a choice of the ranking, not a fault: asked with `kind="any"` (what the agent and the plugin use by default), search puts code first and gives documentation at most 2 of 10 places, after it (`search.arrange`); "how do I start only the database containers" then gets `docker-compose.yml`, `Makefile` and configuration ahead of the README, and oxn's README and its dependency ADR fall off the ten. An agent can ask with `kind="docs"`. A change (documentation first for a "how do I" question, or a larger share) needs its own rule and many more documentation questions than 8 before it is measured; not built.
+
 ## 3. Git's untracked cache in the owner's repositories
 
 - **Done (2026-10-15, your word: "turn on git untracked thing"):** `core.untrackedCache=true` set in each of your 24 repositories under `/Volumes/AI_SSD/Projects` (all of them were unset before; the list with each one's earlier value is kept in this session's scratch directory), and one `git status` run in each to build the cache. `aleph status` says `untracked_cache_from: config` there, and `/aleph configure` shows it with no key. To undo in one repository: `git config --unset core.untrackedCache`.
