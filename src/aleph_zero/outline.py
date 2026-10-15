@@ -29,6 +29,7 @@ class Item:
     signature: str
     start_line: int
     end_line: int
+    nested: bool = False   # defined inside a function: shown under it, and the first to go when it does not fit
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ def of(view: View, path: str) -> Outline:
 def _code_items(profile, text: str) -> list[Item]:
     data = text.encode("utf-8", "surrogateescape")
     try:
-        found = definitions(profile, parse.tree(profile, data), data)
+        found = definitions(profile, parse.tree(profile, data), data, inner=True)
     except Exception:  # noqa: BLE001 - a grammar that fails to load: no structure, not an error
         return []
     depths: list[int] = []
@@ -75,7 +76,7 @@ def _code_items(profile, text: str) -> list[Item]:
         depth = 0 if definition.parent is None else depths[definition.parent] + 1
         depths.append(depth)
         items.append(Item(depth, definition.kind, definition.name, definition.qualified, definition.signature,
-                          definition.start_line, definition.end_line))
+                          definition.start_line, definition.end_line, definition.nested))
     return items
 
 
@@ -104,14 +105,21 @@ def _opens_section(chunk) -> bool:
 
 
 def text(outline: Outline, budget_tokens: int = DEFAULT_BUDGET) -> str:
-    """The outline as indented lines, inside the budget. When it does not fit, nested
-    definitions give way to top-level ones first, and what is left out is counted."""
+    """The outline as indented lines, inside the budget. When it does not fit, what is defined inside functions goes
+    first (on a file of callbacks it would crowd out the file's own structure), then nested definitions give way to
+    top-level ones, and what is left out is counted."""
     head = f"{outline.path}  {outline.family}  {outline.lines} lines"
     if not outline.items:
         return head + "\n  (no structure found)"
-    deepest = max(item.depth for item in outline.items)
+    whole = _lines(head, outline.items, 0, budget_tokens)
+    if whole is not None:
+        return whole
+    own = [item for item in outline.items if not item.nested]
+    if not own:
+        own = outline.items
+    deepest = max(item.depth for item in own)
     for max_depth in range(deepest, -1, -1):
-        kept = [item for item in outline.items if item.depth <= max_depth]
+        kept = [item for item in own if item.depth <= max_depth]
         rendered = _lines(head, kept, len(outline.items) - len(kept), budget_tokens)
         if rendered is not None:
             return rendered

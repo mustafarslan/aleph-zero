@@ -266,9 +266,9 @@ def test_what_changed_while_an_update_ran_is_taken_up_by_the_same_update(repo, c
     real = Index.sync
     state = {"calls": 0}
 
-    def sync(self, view, budget_seconds=30.0):
+    def sync(self, view, budget_seconds=30.0, **kwargs):
         state["calls"] += 1
-        done = real(self, view, budget_seconds=budget_seconds)
+        done = real(self, view, budget_seconds=budget_seconds, **kwargs)
         if state["calls"] == 1:                                    # a checkout lands while the first round is at work
             repo.write("src/billing/late.py", "def arrived_late():\n    return 1\n")
             repo.commit("landed meanwhile")

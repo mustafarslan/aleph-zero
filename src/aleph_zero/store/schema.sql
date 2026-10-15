@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS blobs (
     size            INTEGER NOT NULL,
     chunker_version INTEGER NOT NULL,
     last_seen_at    INTEGER NOT NULL,   -- unix seconds; garbage collection is by age
+    symbols_version INTEGER NOT NULL DEFAULT 0,  -- what wrote its symbols: older ones are read again, chunks untouched
     PRIMARY KEY (blob_oid, family)
 ) WITHOUT ROWID;
 
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS symbols (
     signature TEXT NOT NULL,
     chunk_ord INTEGER NOT NULL,   -- the chunk of the same blob that holds its first line
     line      INTEGER NOT NULL,
+    nested    INTEGER NOT NULL DEFAULT 0,  -- defined inside a function: `symbol` finds it; search's name ranking does not
     PRIMARY KEY (blob_oid, family, ord),
     FOREIGN KEY (blob_oid, family) REFERENCES blobs(blob_oid, family) ON DELETE CASCADE
 ) WITHOUT ROWID;

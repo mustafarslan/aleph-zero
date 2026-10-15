@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.13
+
+- Functions defined inside functions are found by `symbol` and shown by `outline` (the owner's decision). `symbol` lists
+  them after the top-level definitions of the same name, qualified under their function (`outer.inner`); `outline`
+  shows them nested under it, and leaves them out first when a file is too long for its budget. What counts: a
+  function, a name bound to a function (`const f = () => …`, `f = lambda …`), a class and its methods, defined in a
+  function's body; not plain locals, options in object literals, default arguments or unnamed callbacks.
+- Search ranks as before (it does not use them by name), the code graph answers as before, and nothing is chunked or
+  embedded again. The index's schema goes from 10 to 11 in place; an index made before has its symbols read again
+  once, during a long sync (the server's start, `index`, `update`, `source add`), never during a question: 1.7 s on a
+  repository of 18,489 files. An older Aleph cannot open an index this one has upgraded.
+
 ## 0.1.12
 
 - `/aleph configure`: Esc in the source field leaves the field and keeps the pane (what was typed stays); a second

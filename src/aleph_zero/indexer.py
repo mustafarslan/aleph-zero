@@ -124,7 +124,8 @@ def _digest(family: str, data: bytes, words: bool) -> tuple:
     if profile is not None:
         code = code_chunks(profile, text)
         if code.chunks:
-            return (NO_GRAMMAR if code.grammar_missing else kind, code.chunks, code.definitions, code.chunk_of, code.imports,
+            symbols, chunk_of = (code.symbols, code.symbol_chunk_of) if code.symbols is not None else (code.definitions, code.chunk_of)
+            return (NO_GRAMMAR if code.grammar_missing else kind, code.chunks, symbols, chunk_of, code.imports,
                     [lexical.columns(chunk) for chunk in code.chunks] if words else None)
     chunks = chunk_file(family, kind, text)
     return (kind if chunks else "skip:empty", chunks, [], [], [], [lexical.columns(chunk) for chunk in chunks] if words else None)
@@ -159,9 +160,10 @@ class Index:
         self._grammar_look_at = 0.0     # when to look next whether a grammar that could not load has arrived
         self._regrammar: list[str] = []     # families whose grammar arrived, as the last look found them
         self._again_left = False            # this view still has files of those families to read again
+        self._symbols_left = True           # blobs of the view may still have symbols an older build wrote
 
     def sync(self, view: View, budget_seconds: float = 5.0,
-             stop: Callable[[], bool] | None = None) -> SyncReport:
+             stop: Callable[[], bool] | None = None, symbols: bool = False) -> SyncReport:
         """Index every blob of the view the index has not seen, within a time budget,
         then point the connection's view tables at this view.
 
@@ -174,7 +176,11 @@ class Index:
         regrammar = self._regrammar
         # Read before looking: a commit by another session after this point is seen as a change next time.
         version = self.conn.pragma("data_version")
-        if (not changed and not looked and not self._again_left and version == self._version and self._missing == self._unreadable
+        # Older blobs' symbols are read again only when the caller asks (the server's warming, `index`, `update`,
+        # `source add`): never inside a question, whatever its budget.
+        refresh = symbols and budget_seconds >= SYMBOLS_REFRESH_FROM and self._symbols_left
+        if (not changed and not looked and not self._again_left and not refresh and version == self._version
+                and self._missing == self._unreadable
                 and all(asked > started - RETRY_SECONDS for asked in self._deferred.values())):
             # The same view, nothing pending, and no other session has written: the index is as it was.
             self._touch()
@@ -284,10 +290,74 @@ class Index:
         self._unreadable = self._missing.intersection(self._deferred)
         left -= len(self._unreadable)
         self._pending = left
+        if refresh and time.monotonic() < deadline and not (stop is not None and stop()):
+            self._symbols_left = self._refresh_symbols(view, deadline, stop)
         self._touch(now=True)
         self._fingerprint = view.fingerprint
         self._version = version
         return SyncReport(indexed, skipped, left, time.monotonic() - started, len(self._unreadable))
+
+    def _refresh_symbols(self, view: View, deadline: float, stop: Callable[[], bool] | None) -> bool:
+        """Read again the symbols of the view's blobs that an older build wrote (SYMBOLS_VERSION): their chunks and
+        vectors stay as they are. Until the deadline; True while some are left for the next long sync."""
+        conn = self.conn
+        rows = conn.execute(
+            "SELECT b.blob_oid, b.family FROM temp.view_blobs v JOIN blobs b ON b.blob_oid = v.blob_oid AND b.family = v.family "
+            "WHERE b.symbols_version < ? AND b.kind != ?", (SYMBOLS_VERSION, NO_GRAMMAR)).fetchall()
+        todo = [(oid, family) for oid, family in rows if family in lang.PROFILES]
+        with transaction(conn):    # what has no language profile has no symbols to read
+            conn.executemany("UPDATE blobs SET symbols_version = ? WHERE blob_oid = ? AND family = ?",
+                             [(SYMBOLS_VERSION, oid, family) for oid, family in rows if family not in lang.PROFILES])
+        with gitio.Readers() as reader:
+            for start in range(0, len(todo), 50):
+                written = []
+                for key in todo[start:start + 50]:
+                    if time.monotonic() >= deadline or (stop is not None and stop()):
+                        break
+                    written.append((key, self._symbols_of(view, reader, key)))
+                with transaction(conn):
+                    for (oid, family), found in written:
+                        if found is None:
+                            continue     # not readable now: its symbols stay as they were, and it is read again next time
+                        conn.execute("DELETE FROM symbols WHERE blob_oid = ? AND family = ?", (oid, family))
+                        conn.executemany(
+                            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, "
+                            "chunk_ord, line, nested) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            [(oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature,
+                              chunk_ord, d.start_line, int(d.nested)) for ordinal, (d, chunk_ord) in enumerate(found)])
+                        conn.execute("UPDATE blobs SET symbols_version = ? WHERE blob_oid = ? AND family = ?",
+                                     (SYMBOLS_VERSION, oid, family))
+                if len(written) < len(todo[start:start + 50]):
+                    return True
+        return False
+
+    def _symbols_of(self, view: View, reader, key: Key) -> list | None:
+        """A blob's definitions with what is inside its functions, each with the stored chunk that holds its first
+        line; None when the blob cannot be read now (its symbols stay as they are)."""
+        oid, family = key
+        paths = self._paths.get(key) or []
+        data = view.read(paths[0], reader, filters.MAX_BYTES) if paths else None
+        if data is None or isinstance(data, gitio.TooLarge):
+            return None
+        _, text = filters.classify(family, data)
+        if text is None:
+            return []
+        from .lang import parse
+        from .lang.definitions import definitions
+
+        profile = lang.PROFILES[family]
+        data = text.replace("\r\n", "\n").encode("utf-8", "surrogateescape")   # as the chunker reads it: same lines
+        try:
+            found = definitions(profile, parse.tree(profile, data), data, inner=True)
+        except Exception:  # noqa: BLE001 - a parser that gives up: the symbols stay as they are
+            return None
+        spans = self.conn.execute("SELECT ord, start_line, end_line FROM blob_chunks WHERE blob_oid = ? AND family = ? "
+                                  "ORDER BY ord", (oid, family)).fetchall()
+
+        def holding(line: int) -> int:
+            inside = [(end - first, ord_) for ord_, first, end in spans if first <= line <= end]
+            return min(inside)[1] if inside else 0
+        return [(d, holding(d.start_line)) for d in found]
 
     def release_memory(self) -> None:
         """Drop what is rebuilt on demand: the words of every path, SQLite's cached pages."""
@@ -408,8 +478,9 @@ class Index:
         return {
             "blobs_in_view": one("SELECT count(*) FROM temp.view_blobs"),
             "chunks_in_view": one("SELECT count(*) FROM temp.view_chunks"),
+            # Top-level definitions, as before inner functions were kept: the figure means what it meant.
             "symbols_in_view": one("SELECT count(*) FROM symbols s JOIN temp.view_blobs v "
-                                   "ON v.blob_oid = s.blob_oid AND v.family = s.family"),
+                                   "ON v.blob_oid = s.blob_oid AND v.family = s.family WHERE s.nested = 0"),
             "imports_in_view": one("SELECT count(*) FROM imports i JOIN temp.view_blobs v "
                                    "ON v.blob_oid = i.blob_oid AND v.family = i.family"),
             "blobs_total": one("SELECT count(*) FROM blobs"),
@@ -567,9 +638,9 @@ class Index:
         if conn.changes():
             _removed_content(conn)  # another session may be listing this blob's chunks
         conn.execute(
-            "INSERT OR IGNORE INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (oid, family, item.kind, item.size, CHUNKER_VERSION, int(time.time())),
+            "INSERT OR IGNORE INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at, symbols_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (oid, family, item.kind, item.size, CHUNKER_VERSION, int(time.time()), SYMBOLS_VERSION),
         )
         if conn.changes() == 0:
             return False
@@ -594,9 +665,10 @@ class Index:
                  chunk.scope_start_line, chunk.scope_end_line),
             )
         conn.executemany(
-            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ((oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature, chunk_ord, d.start_line)
+            "INSERT INTO symbols(blob_oid, family, ord, name, name_key, qualified, kind, signature, chunk_ord, line, nested) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ((oid, family, ordinal, d.name, symbol_key(d.name), d.qualified, d.kind, d.signature, chunk_ord, d.start_line,
+              int(d.nested))
              for ordinal, (d, chunk_ord) in enumerate(zip(item.definitions, item.chunk_of))),
         )
         conn.executemany(
@@ -608,6 +680,9 @@ class Index:
         )
         return True
 
+
+SYMBOLS_VERSION = 1             # 1: what is defined inside functions is in the symbols table too (2026-10-15)
+SYMBOLS_REFRESH_FROM = 1.0      # a sync with at least this budget reads older blobs' symbols again; a question's never does
 
 COLLECT_EVERY_SECONDS = 86400   # collection by itself: at most once a day per index
 COLLECT_AGE_DAYS = 30.0

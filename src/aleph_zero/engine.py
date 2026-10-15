@@ -409,7 +409,8 @@ class Engine:
                                 truncated or len(callers) > k or len(callees) > k, direction)
 
     def _references(self, index: Index, view: View, name: str, direction: str) -> tuple:
-        definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT + 1)
+        # Top-level definitions: the graph answers calls to an inner function, not the callers of one (ADR-003).
+        definitions = symbols.lookup(index, view, name, limit=callgraph.DEFINITION_LIMIT + 1, nested=False)
         if not definitions:
             return [], [], [], 0, False
         more = len(definitions) > callgraph.DEFINITION_LIMIT     # answered for the first few: said, not hidden
@@ -896,7 +897,7 @@ class Engine:
         and the plugin gives its own question 400 ms. Never raises: whether a worktree was warmed."""
         started = time.monotonic()
         try:
-            index, view, _, _ = self._ready(cwd, started, started + WARM_SECONDS)
+            index, view, _, _ = self._ready(cwd, started, started + WARM_SECONDS, symbols=True)
             index.path_words(view)
             covered, chunks = self._store(index, view).coverage(index) if self._dense_decision(index)[0] else (0, 0)
             # The first question is then not the one that finds out: its vector is asked for while git is asked.
@@ -1007,7 +1008,7 @@ class Engine:
         return index
 
     def _ready(self, cwd: Path | str | None, started: float, until: float | None,
-               sync_seconds: float = SYNC_SECONDS) -> tuple[Index, View, int, bool]:
+               sync_seconds: float = SYNC_SECONDS, symbols: bool = False) -> tuple[Index, View, int, bool]:
         """The index of the worktree containing `cwd`, synced to its current view within
         the time allowed. Returns (index, view, files still pending, out of time)."""
         with gitio.until(until):
@@ -1017,7 +1018,7 @@ class Engine:
             budget = sync_seconds
         else:
             budget = max(0.0, (until - time.monotonic()) * (1 - SEARCH_SHARE))
-        report = index.sync(view, budget_seconds=budget, stop=self._stop.is_set)
+        report = index.sync(view, budget_seconds=budget, stop=self._stop.is_set, symbols=symbols)
         if self._stop.is_set():
             raise Cancelled
         if until is None and (report.indexed or report.skipped):

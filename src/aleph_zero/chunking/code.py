@@ -35,6 +35,8 @@ class CodeFile:
     chunk_of: list[int]              # for each definition, the chunk holding its first line
     imports: list[RawImport]
     grammar_missing: bool = False    # line windows because the grammar could not load: to be read again once it does
+    symbols: list[Definition] | None = None   # what the symbols table holds: `definitions` and those inside functions
+    symbol_chunk_of: list[int] | None = None  # for each of them, the chunk holding its first line
 
 
 def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
@@ -70,7 +72,14 @@ def code_chunks(profile: LanguageProfile, text: str) -> CodeFile:
             for number in range(first, last + 1):
                 line_chunk[number] = ordinal
     chunk_of = [line_chunk[min(max(d.start_line, 1), len(lines))] if lines else 0 for d in found]
-    return CodeFile([chunk for chunk, _ in chunks], [runs for _, runs in chunks], found, chunk_of, imported)
+    # The symbols a by-name lookup reads also hold what is defined inside functions; the chunks above do not change.
+    try:
+        named = definitions(profile, tree, data, inner=True)
+    except Exception:  # noqa: BLE001 - the walk into bodies failing must not cost the file its chunks
+        named = found
+    named_chunk_of = [line_chunk[min(max(d.start_line, 1), len(lines))] if lines else 0 for d in named]
+    return CodeFile([chunk for chunk, _ in chunks], [runs for _, runs in chunks], found, chunk_of, imported,
+                    symbols=named, symbol_chunk_of=named_chunk_of)
 
 
 def _owners(found: list[Definition], count: int) -> list[int]:

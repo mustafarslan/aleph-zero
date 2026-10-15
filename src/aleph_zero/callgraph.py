@@ -211,7 +211,9 @@ class Indexed(Source):
         if oid is None or family not in FAMILIES:
             return None
         conn = self._index.conn
-        rows = conn.execute("SELECT name, qualified, kind, line FROM symbols WHERE blob_oid = ? AND family = ? ORDER BY ord",
+        # Top-level definitions only: the graph's own facts are of the walk without inner functions, matched by order.
+        rows = conn.execute("SELECT name, qualified, kind, line FROM symbols WHERE blob_oid = ? AND family = ? AND nested = 0 "
+                            "ORDER BY ord",
                             (oid, family)).fetchall()
         shape = conn.execute("SELECT shape FROM graph_facts WHERE blob_oid = ? AND family = ? AND version = ?",
                              (oid, family, GRAPH_VERSION)).fetchall()
@@ -230,7 +232,8 @@ class Indexed(Source):
             for oid, family, qualified, kind, line in self._index.conn.execute(
                     "SELECT s.blob_oid, s.family, s.qualified, s.kind, s.line FROM symbols s "
                     "JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
-                    "WHERE s.name_key = ? AND s.name = ? AND s.kind != 'namespace' ORDER BY s.blob_oid, s.family, s.ord",
+                    "WHERE s.name_key = ? AND s.name = ? AND s.kind != 'namespace' AND s.nested = 0 "
+                    "ORDER BY s.blob_oid, s.family, s.ord",
                     (symbol_key(name), name)):
                 if family in FAMILIES and _group(family) == group:
                     found += [Target(path, name, qualified, kind, line, line) for path in self._index.paths_for(oid, family)]

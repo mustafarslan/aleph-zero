@@ -9,10 +9,11 @@ export const DESCRIPTIONS = {
     + '(uncommitted edits included). Ask in plain words or with identifiers; returns ranked locations '
     + '(path:lines, kind, name, signature) with snippets. Use this FIRST to locate where something is '
     + 'implemented, before recursive grep or reading whole files; then read only the lines it points to.',
-  symbol: 'Find where a name is defined: function, method, class, constant or field. A qualified name narrows it '
-    + '(TokenStore.get). Faster and more exact than grep for "where is X defined".',
-  outline: 'List what a file defines (functions, classes, fields, headings) with line ranges, instead of reading '
-    + 'the whole file. Use before Read on a large file.',
+  symbol: 'Find where a name is defined: function, method, class, constant or field, also one defined inside a '
+    + 'function (listed after top-level ones, qualified outer.inner). A qualified name narrows it (TokenStore.get). '
+    + 'Faster and more exact than grep for "where is X defined".',
+  outline: 'List what a file defines (functions, classes, fields, headings, and functions defined inside functions, '
+    + 'nested under them) with line ranges, instead of reading the whole file. Use before Read on a large file.',
   status: 'Report what is indexed for this worktree and what is not searched (files outside a sparse checkout, submodules).',
 }
 

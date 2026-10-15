@@ -42,7 +42,7 @@ def stateless_enabled() -> bool:
     `initialize` on the wire (2.1.296, 2026-10-13). Switched off, the server says "method not found" to that first
     question and the client falls back to the handshake, as every session did before."""
     return os.environ.get("ALEPH_MCP_STATELESS", "") != "0"
-SERVER_INFO = {"name": "aleph-zero", "version": "0.1.12"}
+SERVER_INFO = {"name": "aleph-zero", "version": "0.1.13"}
 
 INSTRUCTIONS = """\
 Aleph Zero is a local index of this repository's code and documentation. It always \
@@ -107,16 +107,17 @@ TOOLS = [
     },
     {
         "name": "outline",
-        "description": "List what a file defines (functions, classes, fields, headings) with line ranges, "
-                       "instead of reading the whole file.",
+        "description": "List what a file defines (functions, classes, fields, headings, and functions defined inside "
+                       "functions, nested under them) with line ranges, instead of reading the whole file.",
         "inputSchema": {"type": "object", "required": ["path"], "properties": {
             "path": {"type": "string", "description": "A path relative to the top of the worktree."},
             **_COMMON, **_TIMEOUT}},
     },
     {
         "name": "symbol",
-        "description": "Find where a name is defined: function, method, class, constant or field. "
-                       "A qualified name narrows it (TokenStore.get).",
+        "description": "Find where a name is defined: function, method, class, constant or field, also one defined "
+                       "inside a function (after top-level ones, qualified outer.inner). A qualified name narrows it "
+                       "(TokenStore.get).",
         "inputSchema": {"type": "object", "required": ["name"], "properties": {
             "name": {"type": "string"},
             "k": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},

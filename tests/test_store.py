@@ -16,7 +16,7 @@ def test_open_creates_the_schema_in_wal_mode(tmp_path):
 def test_reopening_keeps_the_data(tmp_path):
     path = tmp_path / "index.db"
     conn = open_db(path)
-    conn.execute("INSERT INTO blobs VALUES ('abc', 'text', 'text', 1, 1, 0)")
+    conn.execute("INSERT INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) VALUES ('abc', 'text', 'text', 1, 1, 0)")
     conn.close()
     assert open_db(path).execute("SELECT count(*) FROM blobs").fetchall() == [(1,)]
 
@@ -35,7 +35,7 @@ def test_transaction_rolls_back_on_error(tmp_path):
     conn = open_db(tmp_path / "index.db")
     with pytest.raises(RuntimeError):
         with transaction(conn):
-            conn.execute("INSERT INTO blobs VALUES ('abc', 'text', 'text', 1, 1, 0)")
+            conn.execute("INSERT INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) VALUES ('abc', 'text', 'text', 1, 1, 0)")
             raise RuntimeError("boom")
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == [(0,)]
 
@@ -66,14 +66,29 @@ def test_an_index_from_an_older_version_is_rebuilt_because_it_is_a_cache(tmp_pat
 def test_an_index_of_schema_9_gains_the_table_of_record_vectors_and_keeps_what_it_has(tmp_path):
     path = tmp_path / "index.db"
     conn = open_db(path)
-    conn.execute("INSERT INTO blobs VALUES ('abc', 'text', 'text', 1, 1, 0)")
+    conn.execute("INSERT INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) VALUES ('abc', 'text', 'text', 1, 1, 0)")
     conn.execute("DROP TABLE record_vectors")
     conn.pragma("user_version", 9)
     conn.close()
     conn = open_db(path)
-    assert conn.pragma("user_version") == SCHEMA_VERSION == 10
+    assert conn.pragma("user_version") == SCHEMA_VERSION == 11
     assert conn.execute("SELECT count(*) FROM record_vectors").fetchall() == [(0,)]
     assert conn.execute("SELECT count(*) FROM blobs").fetchall() == [(1,)]
+
+
+def test_an_index_of_schema_10_gains_nested_symbols_and_keeps_what_it_has(tmp_path):
+    # 2026-10-15: inner functions in the symbols table. Chunks and vectors stay; each blob's symbols are read again.
+    path = tmp_path / "index.db"
+    conn = open_db(path)
+    conn.execute("INSERT INTO blobs(blob_oid, family, kind, size, chunker_version, last_seen_at) VALUES ('abc', 'text', 'text', 1, 1, 0)")
+    conn.execute("ALTER TABLE symbols DROP COLUMN nested")
+    conn.execute("ALTER TABLE blobs DROP COLUMN symbols_version")
+    conn.pragma("user_version", 10)
+    conn.close()
+    conn = open_db(path)
+    assert conn.pragma("user_version") == 11
+    assert conn.execute("SELECT blob_oid, symbols_version FROM blobs").fetchall() == [("abc", 0)]
+    assert "nested" in {row[1] for row in conn.execute("PRAGMA table_info(symbols)")}
 
 
 def test_threads_that_first_ask_where_a_repository_s_state_lives_all_get_the_same_answer(repo):

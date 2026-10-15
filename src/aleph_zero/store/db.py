@@ -15,7 +15,7 @@ import apsw
 
 from .. import gitio
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 BUSY_MS = 5000       # how long a statement waits for another session's write
 MIN_SQLITE = (3, 51, 3)  # earlier versions can corrupt a WAL database with two writers
 _SCHEMA = Path(__file__).with_name("schema.sql")
@@ -255,9 +255,17 @@ def _upgrade_9(conn: apsw.Connection) -> None:
     conn.execute(_SCHEMA.read_text())
 
 
+def _upgrade_10(conn: apsw.Connection) -> None:
+    """Schema 10 to 11: symbols defined inside functions (`nested`), and per blob which version wrote its symbols.
+    Every blob starts at 0 and has its symbols read again by a long sync; its chunks and vectors are not touched."""
+    for table, column in (("symbols", "nested"), ("blobs", "symbols_version")):
+        if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
+
+
 # Versions that are brought up to date where they are, one step at a time. Anything older
 # is a cache of a different shape and is rebuilt; these hold vectors that took GPU time.
-_UPGRADES = {4: _upgrade_4, 5: _upgrade_5, 6: _upgrade_6, 7: _upgrade_7, 8: _upgrade_8, 9: _upgrade_9}
+_UPGRADES = {4: _upgrade_4, 5: _upgrade_5, 6: _upgrade_6, 7: _upgrade_7, 8: _upgrade_8, 9: _upgrade_9, 10: _upgrade_10}
 
 
 def upgradable() -> frozenset[int]:

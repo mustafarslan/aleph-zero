@@ -133,7 +133,7 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
         nonlocal seen, index
         index = Index(open_db(index_file(view.common_dir)), workers=PREPARE_PROCESSES)   # a command, not a session
         while True:
-            done = index.sync(seen, budget_seconds=30.0)
+            done = index.sync(seen, budget_seconds=30.0, symbols=True)
             report["indexed"] += done.indexed
             report["skipped"] += done.skipped
             report["pending"] = done.pending

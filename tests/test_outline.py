@@ -25,7 +25,9 @@ def test_a_source_file_is_outlined_by_its_definitions(repo):
         (0, "class", "TokenStore", 15, 30), (1, "field", "TokenStore.ttl", 18, 18),
         (1, "method", "TokenStore.__init__", 20, 21), (1, "method", "TokenStore.size", 23, 25),
         (1, "method", "TokenStore.make", 27, 30),
+        (2, "function", "TokenStore.make.handler", 29, 29),          # defined inside `make`: shown under it (2026-10-15)
     ]
+    assert [item.nested for item in result.items][-2:] == [False, True]
     text = outline.text(result)
     assert text.split("\n")[0] == "src/sample.py  python  30 lines"
     assert "  10-12  function  def refresh_token(session: Session, *, force: bool = False) -> str" in text
@@ -86,3 +88,13 @@ def test_two_sections_with_the_same_heading_are_two_items_and_hidden_counts_are_
     text = outline.text(_outline(repo, "gen/flat.py"), budget_tokens=600)
     shown = text.count("  function  ")
     assert f"(+{3000 - shown} more definitions not shown)" in text
+
+
+def test_what_is_defined_inside_functions_is_the_first_to_go_when_a_file_does_not_fit(repo):
+    body = "".join(f"def top_{n}(x):\n    def inner_{n}():\n        return x\n    return inner_{n}()\n\n\n" for n in range(40))
+    repo.write("src/many.py", body)
+    repo.commit("many")
+    result = _outline(repo, "src/many.py")
+    assert sum(item.nested for item in result.items) == 40
+    shown = outline.text(result, budget_tokens=500)
+    assert "top_0" in shown and "inner_0" not in shown and "more definitions not shown" in shown

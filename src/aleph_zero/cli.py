@@ -31,7 +31,7 @@ def _index_linked(cwd: Path) -> None:
     index, view = _open(cwd)
     index.workers = PREPARE_PROCESSES
     print("indexing it…", flush=True)          # a large source takes a while: said, not silent
-    report = index.sync(view, budget_seconds=LINKED_INDEX_SECONDS)
+    report = index.sync(view, budget_seconds=LINKED_INDEX_SECONDS, symbols=True)
     if report.indexed:
         print(f"indexed {report.indexed:,} files" + (f"; {report.pending:,} left for the next search" if report.pending else ""))
 
@@ -41,7 +41,7 @@ def _index(args) -> int:
     index.workers = PREPARE_PROCESSES       # a person waits for this one: the files are prepared on several cores
     indexed = skipped = 0
     while True:
-        report = index.sync(view, budget_seconds=args.budget)
+        report = index.sync(view, budget_seconds=args.budget, symbols=True)
         indexed += report.indexed
         skipped += report.skipped
         if report.pending == 0 or args.once:

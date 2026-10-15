@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from aleph_zero import cli, symbols
+from aleph_zero.engine import Engine
 from aleph_zero.indexer import Index
 from aleph_zero.search import search
 from aleph_zero.store import index_path, open_db
@@ -197,3 +198,70 @@ def test_a_cpp_destructor_is_found_by_its_tilde_name(empty_repo):
         assert any(hit.line == 7 for hit in found)
     assert all(hit.name != "~Buffer" for hit in engine.symbol("Buffer").symbols)
     assert engine.search("~Buffer").hits[0].path == "src/buffer.cpp"
+
+
+
+def test_a_function_defined_inside_a_function_is_found_by_name_after_the_top_level_ones(repo):
+    # The owner's decision of 2026-10-15: `symbol` and `outline` show inner functions.
+    repo.write("src/app/nested.py", "def outer(items):\n    def keep(item):\n        return item\n    return [keep(i) for i in items]\n")
+    repo.write("src/app/keep.py", "def keep(value):\n    return value\n")
+    repo.commit("nested")
+    engine = Engine(repo.root)
+    found = engine.symbol("keep").symbols
+    assert [(hit.path, hit.qualified) for hit in found] == [("src/app/keep.py", "keep"), ("src/app/nested.py", "outer.keep")]
+    assert [hit.qualified for hit in engine.symbol("outer.keep").symbols] == ["outer.keep"]
+
+
+def test_search_s_name_ranking_does_not_use_names_defined_inside_functions(repo):
+    from aleph_zero import search as search_module
+    from aleph_zero.indexer import Index
+    from aleph_zero.store import index_path, open_db
+    from aleph_zero.view import build_view
+
+    repo.write("src/app/nested.py", "def outer(items):\n    def keep_only_this(item):\n        return item\n    return items\n")
+    repo.commit("nested")
+    index = Index(open_db(index_path(repo.root)))
+    view = build_view(repo.root)
+    index.sync(view)
+    named, alone = search_module.symbol_ranking(index, "keep_only_this", False)
+    assert named == [] and alone          # found by its words in outer's chunk, never pinned first as a definition
+
+
+def test_an_index_built_before_reads_inner_functions_on_a_long_sync_never_during_a_question(repo):
+    from aleph_zero.indexer import Index
+    from aleph_zero.store import index_path, open_db
+    from aleph_zero.view import build_view
+
+    repo.write("src/app/nested.py", "def outer(items):\n    def keep(item):\n        return item\n    return items\n")
+    repo.commit("nested")
+    Engine(repo.root).search("outer")
+    conn = open_db(index_path(repo.root))
+    conn.execute("DELETE FROM symbols WHERE nested = 1")
+    conn.execute("UPDATE blobs SET symbols_version = 0")         # as an index of the build before
+    chunks_before = conn.execute("SELECT count(*) FROM chunks").fetchall()
+    conn.close()
+    index = Index(open_db(index_path(repo.root)))
+    view = build_view(repo.root)
+    index.sync(view, budget_seconds=5.0)                           # a question, even one with no time limit: nothing
+    assert index.conn.execute("SELECT count(*) FROM symbols WHERE nested = 1").fetchall() == [(0,)]
+    index.sync(view, budget_seconds=5.0, symbols=True)             # asked for (the server's warming, `index`, `update`)
+    assert index.conn.execute("SELECT qualified FROM symbols WHERE nested = 1").fetchall() == [("outer.keep",)]
+    assert index.conn.execute("SELECT count(*) FROM blobs WHERE symbols_version = 0").fetchall() == [(0,)]
+    assert index.conn.execute("SELECT count(*) FROM chunks").fetchall() == chunks_before    # chunks untouched
+
+
+def test_the_server_s_warming_reads_older_symbols_again(repo):
+    from aleph_zero.store import index_path, open_db
+
+    repo.write("src/app/nested.py", "def outer(items):\n    def keep(item):\n        return item\n    return items\n")
+    repo.commit("nested")
+    Engine(repo.root).search("outer")
+    conn = open_db(index_path(repo.root))
+    conn.execute("DELETE FROM symbols WHERE nested = 1")
+    conn.execute("UPDATE blobs SET symbols_version = 0")
+    conn.close()
+    engine = Engine(repo.root)
+    engine.search("outer")                                         # the agent's question: not read again
+    assert [hit.qualified for hit in engine.symbol("keep").symbols] == []
+    assert Engine(repo.root).warm()                                # what the server does when it starts
+    assert [hit.qualified for hit in Engine(repo.root).symbol("keep").symbols] == ["outer.keep"]

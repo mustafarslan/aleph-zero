@@ -3,6 +3,12 @@
 The walk covers everything outside callable bodies. A function nested in a function
 is part of its parent, and a local variable is not a definition: both would flood a
 by-name lookup with names nobody searches for.
+
+Asked with `inner=True` (outline, and the symbols `symbol` looks up: the owner's decision of 2026-10-15) it also steps
+into the body of every named function and records what is defined there: functions, names bound to a function
+(`const f = () => …`, `f = lambda …`), and classes with their methods, each `nested`, qualified under its function
+(`outer.inner`). Still never a plain local, an option in an object literal, a default argument or an unnamed
+callback (though a function named inside one is). The chunker and the code graph keep the walk without it.
 """
 from __future__ import annotations
 
@@ -52,11 +58,12 @@ class Definition:
     start_byte: int
     end_byte: int
     parent: int | None  # index of the enclosing definition in the same list
+    nested: bool = False  # defined inside a function's body (only with inner=True)
 
 
-def definitions(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Definition]:
-    """Every definition in the file, in source order."""
-    return _Walk(profile, data).run(tree.root_node)
+def definitions(profile: LanguageProfile, tree: Tree, data: bytes, inner: bool = False) -> list[Definition]:
+    """Every definition in the file, in source order; with `inner`, also those inside function bodies."""
+    return _Walk(profile, data, inner).run(tree.root_node)
 
 
 @dataclass(frozen=True)
@@ -64,12 +71,14 @@ class _Scope:
     names: tuple[str, ...] = ()
     parent: int | None = None
     members: bool = False  # inside a type, where a callable is a method and a value a field
+    inside: bool = False   # inside a function's body (inner=True only): what is recorded is nested
 
 
 class _Walk:
-    def __init__(self, profile: LanguageProfile, data: bytes) -> None:
+    def __init__(self, profile: LanguageProfile, data: bytes, inner: bool = False) -> None:
         self.profile = profile
         self.data = data
+        self.inner = inner
         self.found: list[Definition] = []
 
     def run(self, root: Node) -> list[Definition]:
@@ -89,36 +98,46 @@ class _Walk:
         definition = self._unwrap(node)
         kind = definition.type
         if kind in profile.function_like:
-            self._callable(node, definition, scope)
-            return None
+            return self._callable(node, definition, scope)
         if kind in profile.anonymous:
             if _bound_name(definition) is not None:
-                self._callable(node, definition, scope)
-            return None
+                return self._callable(node, definition, scope)
+            # An unnamed callback: nothing to record, but a function named inside one, in a function, is nested there.
+            return (definition, scope) if scope.inside else None
         if kind in profile.types:
             return self._type(node, definition, scope)
         if kind in profile.values:
+            if scope.inside:
+                # In a function's body only a name bound to a function (or a type) is a definition; a local is not.
+                return (definition, scope) if self._holds_definition(definition) else None
             return self._value(node, definition, scope)
         if kind in profile.pair_kinds:
-            return self._pair(node, scope)
+            # Inside a function an object literal's entries are options and hooks, not definitions.
+            return None if scope.inside else self._pair(node, scope)
         return node, scope
 
     # ---- what each kind of node records ------------------------------------------------
 
-    def _callable(self, node: Node, definition: Node, scope: _Scope) -> None:
+    def _callable(self, node: Node, definition: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
         name_node = self._name_node(definition)
         if name_node is None:
-            return
+            return (definition, scope) if scope.inside else None
         outer = self._outer(node, definition)
-        self._function(outer, definition, _text(name_node), scope)
+        index, qualified = self._function(outer, definition, _text(name_node), scope)
+        if not self.inner:
+            return None
+        body = definition.child_by_field_name(self.profile.body_field)
+        # Its body, for what is defined there: nested, qualified under this function.
+        return (body, _Scope(qualified, index, members=False, inside=True)) if body is not None else None
 
-    def _function(self, outer: Node, definition: Node, written: str, scope: _Scope) -> None:
+    def _function(self, outer: Node, definition: Node, written: str, scope: _Scope) -> tuple[int, tuple[str, ...]]:
         owners, name = _split_qualified(written)
         receiver = _receiver_type(definition, self.profile.receiver_field)
         if receiver:
             owners = (receiver,)
         kind = "method" if scope.members or owners else "function"
-        self._add(kind, name, (*scope.names, *owners), scope.parent, outer, definition)
+        index = self._add(kind, name, (*scope.names, *owners), scope.parent, outer, definition, nested=scope.inside)
+        return index, (*scope.names, *owners, name)
 
     def _type(self, node: Node, definition: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
         profile = self.profile
@@ -126,7 +145,7 @@ class _Walk:
         if kind == "impl":
             owner = _implemented_type(definition, profile.implements_field)
             names = (*scope.names, owner) if owner else scope.names
-            return definition, _Scope(names, scope.parent, members=True)
+            return definition, _Scope(names, scope.parent, members=True, inside=scope.inside)
         body = definition.child_by_field_name(profile.body_field)
         if profile.declarator_chain and body is None and kind in ("class", "enum"):
             return None  # `class Later;` or `struct Pair p;`: a mention, not a definition
@@ -135,10 +154,12 @@ class _Walk:
         name_node = self._name_node(definition)
         if name_node is None:
             # Unnamed: what it holds belongs to whatever encloses it, but is still a member.
-            return definition, _Scope(scope.names, scope.parent, members=scope.members or kind in _MEMBER_SCOPES)
+            return definition, _Scope(scope.names, scope.parent, members=scope.members or kind in _MEMBER_SCOPES,
+                                      inside=scope.inside)
         owners, name = _split_qualified(_text(name_node))
-        index = self._add(kind, name, (*scope.names, *owners), scope.parent, self._outer(node, definition), definition)
-        return definition, _Scope((*scope.names, *owners, name), index, members=kind in _MEMBER_SCOPES)
+        index = self._add(kind, name, (*scope.names, *owners), scope.parent, self._outer(node, definition), definition,
+                          nested=scope.inside)
+        return definition, _Scope((*scope.names, *owners, name), index, members=kind in _MEMBER_SCOPES, inside=scope.inside)
 
     def _pair(self, node: Node, scope: _Scope) -> tuple[Node, _Scope] | None:
         """`key: value` in an object literal. A function there is called by its key; an
@@ -244,13 +265,13 @@ class _Walk:
         return kind
 
     def _add(self, kind: str, name: str, scope_names: tuple[str, ...], parent: int | None,
-             outer: Node, definition: Node) -> int:
+             outer: Node, definition: Node, nested: bool = False) -> int:
         doc, first = self._doc(outer, definition)
         self.found.append(Definition(
             kind=kind, name=name, qualified=".".join((*scope_names, name)),
             signature=self._signature(outer, definition), doc=doc,
             start_line=first.start_point[0] + 1, end_line=_last_line(outer),
-            start_byte=first.start_byte, end_byte=outer.end_byte, parent=parent,
+            start_byte=first.start_byte, end_byte=outer.end_byte, parent=parent, nested=nested,
         ))
         return len(self.found) - 1
 

@@ -31,7 +31,7 @@ class SymbolHit:
     chunk_id: int
 
 
-def rows(index: Index, name: str, scoped: bool = False) -> list[tuple]:
+def rows(index: Index, name: str, scoped: bool = False, nested: bool = False) -> list[tuple]:
     """Definitions in the view whose name is `name`, any case: (blob, family, name, qualified,
     kind, signature, line, chunk id), best first. A dotted or `::` name must match the end
     of the qualified name. With `scoped`, only chunks in temp.scope_chunks."""
@@ -41,11 +41,14 @@ def rows(index: Index, name: str, scoped: bool = False) -> list[tuple]:
     wanted = ".".join(parts).lower()
     last = symbol_key(parts[-1])
     found = index.conn.execute(
-        "SELECT s.blob_oid, s.family, s.name, s.qualified, s.kind, s.signature, s.line, bc.chunk_id "
+        "SELECT s.blob_oid, s.family, s.name, s.qualified, s.kind, s.signature, s.line, bc.chunk_id, s.nested "
         "FROM symbols s JOIN temp.view_blobs v ON v.blob_oid = s.blob_oid AND v.family = s.family "
         "JOIN blob_chunks bc ON bc.blob_oid = s.blob_oid AND bc.family = s.family AND bc.ord = s.chunk_ord "
         + ("JOIN temp.scope_chunks sc ON sc.chunk_id = bc.chunk_id " if scoped else "")
-        + "WHERE s.name_key = ? ORDER BY s.blob_oid, s.family, s.ord LIMIT ?",
+        # Nested ones (defined inside a function) only when asked for, and fetched after every top-level one, so that a
+        # name with many local helpers cannot crowd its definitions out of the fetch.
+        + "WHERE s.name_key = ?" + ("" if nested else " AND s.nested = 0")
+        + " ORDER BY s.nested, s.blob_oid, s.family, s.ord LIMIT ?",
         (last, _FETCH),
     ).fetchall()
     if len(parts) > 1:
@@ -55,20 +58,20 @@ def rows(index: Index, name: str, scoped: bool = False) -> list[tuple]:
 
     def rank(row: tuple) -> tuple:
         paths = index.paths_for(row[0], row[1])
-        return (row[2].lstrip("#") != exact, _KIND_RANK.get(row[4], 9), all(_TEST_PATH.search(path) for path in paths),
+        return (row[2].lstrip("#") != exact, row[8], _KIND_RANK.get(row[4], 9), all(_TEST_PATH.search(path) for path in paths),
                 row[3].count("."), paths[0] if paths else "", row[6])
 
     found.sort(key=rank)
     return found
 
 
-def lookup(index: Index, view: View, name: str, limit: int = 20) -> list[SymbolHit]:
+def lookup(index: Index, view: View, name: str, limit: int = 20, nested: bool = True) -> list[SymbolHit]:
     """Where `name` is defined in the view, best first: the exact spelling before other
     cases, types and functions before fields."""
     if not index.serves(view):
         raise ValueError("this view is not the one the index was last synced to; call index.sync(view) first")
     hits: list[SymbolHit] = []
-    for oid, family, found_name, qualified, kind, signature, line, chunk_id in rows(index, name):
+    for oid, family, found_name, qualified, kind, signature, line, chunk_id, _ in rows(index, name, nested=nested):
         for path in index.paths_for(oid, family):
             hits.append(SymbolHit(path, line, kind, found_name, qualified, signature, chunk_id))
             if len(hits) >= limit:

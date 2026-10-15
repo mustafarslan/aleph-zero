@@ -373,3 +373,30 @@ module.exports = {
     names = {d.name for d in defs}
     assert not {"beforeEach", "afterEach", "handler"} & names
     assert "exported" in names
+
+
+def test_with_inner_functions_the_definitions_outside_bodies_are_exactly_those_of_the_walk_without(tmp_path):
+    # What the chunker, the vectors and the code graph read must not change: on every language's sample, leaving out
+    # what is nested gives the old walk back, field for field. Nested ones sit under a function, qualified by it.
+    from pathlib import Path
+
+    from aleph_zero import filters, lang
+    from aleph_zero.lang import parse
+    from aleph_zero.lang.definitions import definitions
+
+    samples = Path(__file__).parent / "samples"
+    for sample in sorted(samples.iterdir()):
+        profile = lang.PROFILES.get(filters.family(sample.name))
+        if profile is None:
+            continue
+        data = sample.read_bytes()
+        tree = parse.tree(profile, data)
+        before = definitions(profile, tree, data)
+        after = definitions(profile, tree, data, inner=True)
+        top = [d for d in after if not d.nested]
+        assert [(d.kind, d.qualified, d.start_line, d.end_line, d.signature) for d in top] == \
+               [(d.kind, d.qualified, d.start_line, d.end_line, d.signature) for d in before], sample.name
+        for d in after:
+            if d.nested:
+                holder = after[d.parent]
+                assert d.qualified.startswith(holder.qualified + ".") and holder.start_line <= d.start_line <= holder.end_line
