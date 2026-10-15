@@ -29,6 +29,37 @@ function usage() {
 const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0 }, listed: [] }
 let prompts = 0
 
+// The session's meter, rung 2's one chance and the side chat's conversation, kept in $.state: a changed option loads the
+// mod again (its module state starts over), and what it had counted and said would be gone. Read back once a load.
+const SESSION_STATE = { plugin: 'aleph-zero', key: 'session' }
+let restored = false
+
+async function restore($) {
+  if (restored) return
+  restored = true
+  try {
+    const { value } = await $.state.get(SESSION_STATE)
+    if (!value || typeof value !== 'object') return
+    if (value.meter && typeof value.meter === 'object') Object.assign(meter, value.meter)
+    if (typeof value.prompts === 'number') prompts = value.prompts
+    if (Array.isArray(value.turns) && !chat.turns.length) chat.turns.push(...value.turns)
+    if (typeof value.tokens === 'number') chat.tokens = value.tokens
+  } catch {
+    // nothing kept, or $.state not there: start from nothing, as before
+  }
+}
+
+async function saveSession($) {
+  // A question still being answered when the mod is loaded again is not answered by the new load: kept as stopped.
+  const turns = chat.turns.slice(-8).map((turn) => turn.state === 'searching' || turn.state === 'thinking'
+    ? { ...turn, state: 'failed', answer: 'Stopped: the plugin was loaded again.' } : { ...turn })
+  try {
+    await $.state.set(SESSION_STATE, { meter, prompts, turns, tokens: chat.tokens })
+  } catch {
+    // the session goes on without it
+  }
+}
+
 // The engine's server as Claude Code names it. The manifest calls it `aleph`; $.mcp.connect
 // takes that name and answers with the full one (`plugin:aleph-zero:aleph`), which is what
 // $.mcp.call wants. Found by trying: the short name is refused there.
@@ -254,6 +285,7 @@ async function answerQuestion($, question) {
   } finally {
     if (chat.busy === turn) chat.busy = null
     $.ui.invalidate('ui.render')
+    await saveSession($)
   }
 }
 
@@ -303,6 +335,7 @@ export function register(on, options) {
   })
 
   on('command.run', { command: 'aleph' }, async ($, e) => {
+    await restore($)
     const args = String(e.args || '').trim()
     if (!args || args === 'chat') {
       // Open the side chat. Nothing is printed, and nothing enters the conversation.
@@ -388,6 +421,7 @@ export function register(on, options) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
+    await restore($)
     const { Box, Text, Button, Input, Markdown } = $.ui.resolve(e)
     const props = e.props || {}
     // Docked beside the transcript, the pane is a conversation: exactly the window's height, the newest message at the
@@ -533,6 +567,7 @@ export function register(on, options) {
             return
           }
           const to = nextValue(option, value)
+          await saveSession($)   // the change loads the mod again: what this load counted and said goes with it
           const set = await $.config.set({ key: settingKey(option), value: to }).catch((error) => ({ deny: error && error.message ? error.message : String(error) }))
           // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
           if (set && set.deny) {
@@ -660,15 +695,18 @@ export function register(on, options) {
   // ---- the meter ------------------------------------------------------------------------------
 
   on('turn.step', async function* ($, e, next) {
+    await restore($)
     const result = yield* next(e)
     add(e.agentId ? meter.subagents : meter.main, result && result.usage)
     return result
   })
 
   on('turn.complete', async ($, e, next) => {
+    await restore($)
     if (!e.agentId) {
       meter.turns += 1
       await $.store.set(LAST, { rung, meter })
+      await saveSession($)
     }
     return next(e)
   })
@@ -677,6 +715,7 @@ export function register(on, options) {
     // The mod's own questions to the engine arrive here as tool calls too. They are not the
     // agent's: only calls Claude Code itself fires are counted.
     if (next.origin && next.origin.plugin !== 'engine') return next(e)
+    await restore($)
     meter.tools[e.tool] = (meter.tools[e.tool] || 0) + 1
     const kind = ENGINE_TOOL.test(e.tool) ? 'aleph'
       : (e.tool === 'Grep' || e.tool === 'Glob' || (e.tool === 'Bash' && isSearchCommand(e.command))) ? 'grep' : null
@@ -715,6 +754,7 @@ export function register(on, options) {
 
   on('prompt.submit', async ($, e, next) => {
     // The one chance goes to the first prompt that is a question: "hi" does not use it up.
+    await restore($)
     if (rung < 2 || prompts > 0 || !worthAsking(e.text)) return next(e)
     prompts += 1
     // Code only, and enough hits to fill five files: a bug report's words match the issue template it was written on,
@@ -727,7 +767,9 @@ export function register(on, options) {
   }).catch(async ($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {
+    await restore($)
     prompts = 0  // /clear, /resume and /branch end one conversation and start another
+    await saveSession($)
     return next(e)
   })
 
@@ -738,6 +780,7 @@ export function register(on, options) {
     if (rung < 3) return result
     const read = readSearch(e.command)
     if (!read || !foundNothing(result, read.program)) return result
+    await restore($)
     const pattern = read.query
     const hits = hitsOf(await ask($, 'search', { query: pattern, k: 5 }))
     if (!hits.length) return result
@@ -753,6 +796,7 @@ export function register(on, options) {
     if (rung < 3) return result
     const read = readGrepTool(e, await cwdOf($))
     if (!read || !grepToolFoundNothing(result)) return result
+    await restore($)
     const hits = hitsOf(await ask($, 'search', { query: read.query, k: 5 }))
     if (!hits.length) return result
     meter.added.grep += 1

@@ -201,3 +201,21 @@ test('a key typed into the question field does what the key does, not ask it as 
   await ui.input({ key: 'question', text: 'c' })
   expect(JSON.stringify(seen.closed[0])).toContain('aleph-chat')
 })
+
+test('the conversation and the meter are kept in the session\'s state, which a reload of the mod keeps', async ($, on) => {
+  world(on)
+  const kept: any[] = []
+  on('state.set', ($: any, e: any, next: any) => {
+    kept.push(e)
+    return next(e)
+  })
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.input({ key: 'question', text: 'where is refresh_token exchanged for an access token?' })
+  const last = kept.filter((set) => set.plugin === 'aleph-zero' && set.key === 'session').at(-1)
+  const value = last.value
+  expect(value.turns.length).toBe(1)
+  expect(value.turns[0].state).toBe('answered')
+  expect(value.turns[0].cited).toEqual(['src/auth/token_store.py:4-6'])
+  expect(typeof value.meter.turns).toBe('number')
+})

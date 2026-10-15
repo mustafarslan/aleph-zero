@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- Changing a plugin option in `/aleph configure` no longer clears the side chat's conversation or this session's
+  `/aleph stats`: Claude Code loads the plugin again with the new value, and what it had counted and said is now kept
+  for the session and read back. A question still being answered at that moment is kept as stopped.
+
 ## 0.1.6
 
 - `/aleph configure` opens Aleph's settings in a pane, each changed with one key. The plugin's options (steering,

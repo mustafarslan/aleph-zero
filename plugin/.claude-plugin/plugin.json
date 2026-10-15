@@ -1,7 +1,7 @@
 {
   "name": "aleph-zero",
   "displayName": "Aleph Zero",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Local code search for coding agents: ranked code locations by meaning or by name, always matching the working tree, and steering that makes Claude Code use it before recursive grep",
   "author": {
     "name": "mustafarslan"
@@ -17,6 +17,7 @@
     "code-intelligence",
     "mcp"
   ],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "rung": {
       "type": "string",
