@@ -73,10 +73,10 @@ test('the session\'s model choice, when it cannot be read, fails that question a
   const { seen } = world(on)   // no stub for $.session.model: the call rejects
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount(PANE)
-  await ui.select({ key: 'model', value: 'session' })
+  for (let press = 0; press < 3; press += 1) await ui.press({ key: 'model-next' })   // haiku → mid → large → session
   await ui.input({ key: 'question', text: QUESTION })
   expect(await ui.find({ key: 'stop' })).toBeUndefined()
-  await ui.select({ key: 'model', value: 'haiku' })
+  await ui.press({ key: 'model-next' })                         // session → haiku
   await ui.input({ key: 'question', text: QUESTION })
   expect(seen.models.length).toBe(1)
 })
@@ -111,7 +111,7 @@ test('text typed into the field survives a redraw of the pane', async ($, on) =>
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount(PANE)
   await ui.input({ key: 'question', text: 'a question half typ', kind: 'change' })
-  await ui.select({ key: 'effort', value: 'high' })            // anything that redraws the pane
+  await ui.press({ key: 'effort-next' })                       // anything that redraws the pane
   expect((await ui.find({ key: 'question' })).props.value).toBe('a question half typ')
   await ui.input({ key: 'question', text: QUESTION })          // sending it empties the field
   expect((await ui.find({ key: 'question' })).props.value).toBe('')
@@ -188,5 +188,5 @@ test('the pane says that answers are kept, and how to see and remove them', asyn
   world(on)
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount(PANE)
-  expect(await ui.find({ type: 'Text', text: /remembered for later sessions.*aleph-zero memory/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /kept for later sessions.*aleph-zero memory list.*forget/ })).toBeDefined()
 })

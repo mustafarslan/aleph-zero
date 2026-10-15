@@ -100,16 +100,46 @@ test('a question and its answer leave the main conversation untouched', async ($
   expect(await ui.find({ type: 'Text', text: /Drafted into the prompt box/ })).toBeDefined()
 })
 
-test('the pickers choose the model and effort of the next answer and are remembered', async ($, on) => {
+test('m and e choose the model and effort of the next answer, and they are remembered', async ($, on) => {
   const { seen, saved } = world(on)
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.select({ key: 'model', value: 'sonnet' })
-  await ui.select({ key: 'effort', value: 'high' })
+  await ui.press({ key: 'model-next' })
+  await ui.press({ key: 'effort-next' })
+  expect(await ui.find({ type: 'Text', text: /mid · effort high/ })).toBeDefined()   // the header says what is chosen
   await ui.input({ key: 'question', text: 'where is refresh_token exchanged for an access token?' })
   expect(JSON.stringify(seen.models[0])).toContain('sonnet')
   expect(JSON.stringify(seen.models[0])).toContain('high')
   expect(saved.get('aleph-zero.chat-settings')).toEqual({ model: 'sonnet', effort: 'high' })
+})
+
+test('docked, the pane is a conversation: the window\'s height, newest at the bottom, the question field under it', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ key: 'chat' }))?.props.height).toBe(30)                  // PANE's scroll.bodyRows
+  const messages = await ui.find({ key: 'messages' })
+  expect([messages?.props.justifyContent, messages?.props.overflow, messages?.props.flexGrow]).toEqual(['flex-end', 'hidden', 1])
+  expect(await ui.find({ type: 'Text', text: /ctrl\+x tab/ })).toBeDefined()      // said while the pane is empty
+  expect(await ui.find({ type: 'Text', text: /memory list/ })).toBeDefined()
+  await ui.input({ key: 'question', text: 'where is refresh_token exchanged for an access token?' })
+  expect(await ui.find({ type: 'Text', text: '⏺' })).toBeDefined()                 // an answer is marked as Claude Code marks its own
+  expect(await ui.find({ type: 'Text', text: /ctrl\+x tab/ })).toBeUndefined()    // the empty pane's words go once there is a conversation
+  expect(await ui.find({ type: 'Select' })).toBeUndefined()                         // settings are keys, not pickers
+  const footer = await ui.find({ key: 'footer-hint' })
+  expect(String(footer?.text).length <= 60).toBe(true)                             // one line in the pane's 60 columns
+})
+
+test('above the prompt, the pane fits its tree and shows the last two turns', async ($, on) => {
+  world(on)
+  await $.command.run({ command: 'aleph', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, placement: 'inline' } })
+  expect((await ui.find({ key: 'chat' }))?.props.height).toBeUndefined()
+  for (const question of ['where is refresh_token kept now?', 'and who calls refresh_token then?', 'and what does refresh_token return?']) {
+    await ui.input({ key: 'question', text: question })
+  }
+  expect(await ui.find({ type: 'Text', text: '> where is refresh_token kept now?' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '> and what does refresh_token return?' })).toBeDefined()
 })
 
 test('a model that does not answer, and an answer with no citation, are shown as what they are', async ($, on) => {

@@ -287,56 +287,51 @@ export function register(on, options) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
-    const { Box, Text, Button, Input, Select, Markdown } = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Markdown } = $.ui.resolve(e)
+    const props = e.props || {}
+    // Docked beside the transcript, the pane is a conversation: exactly the window's height, the newest message at the
+    // bottom of the message area (older ones clipped above it), the question field and its keys under it, as in a
+    // messaging app and in Claude Code itself. Above the prompt the frame fits the tree, so it shows the last two turns.
+    const docked = props.placement === 'dock' && Number(props.scroll && props.scroll.bodyRows) > 0
+    const columns = Number(props.bodyColumns) || 60
     const last = chat.turns.length ? chat.turns[chat.turns.length - 1] : null
-    const header = Box({
-      flexDirection: 'row',
-      columnGap: 2,
-      children: [
-        Select({
-          key: 'model', label: 'model', options: MODELS, value: chat.model,
-          onSelect: async (value) => {
-            chat.model = value
-            $.ui.invalidate('ui.render')
-            await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
-          },
+    const label = (MODELS.find((item) => item.value === chat.model) || { label: chat.model }).label
+    const header = Text({ key: 'header', dimColor: true, children: ['Aleph side chat · ' + label + ' · effort ' + chat.effort + ' · ' + chat.tokens + ' tokens'] })
+
+    const turns = chat.turns.slice(docked ? -8 : -2).flatMap((turn, index) => [
+      Text({ key: 'q' + index, bold: true, children: ['> ' + turn.question] }),
+      turn.state === 'searching' || turn.state === 'thinking'
+        ? Text({ key: 'busy' + index, color: 'gray', children: [turn.state === 'searching' ? '✻ Searching the index…' : '✻ Thinking…'] })
+        : Box({
+          key: 'a' + index, flexDirection: 'row',
+          children: [Text({ children: ['⏺'] }), Box({ flexDirection: 'column', flexShrink: 1, marginLeft: 1, children: [Markdown({ text: turn.answer })] })],
         }),
-        Select({
-          key: 'effort', label: 'effort', options: EFFORTS, value: chat.effort,
-          onSelect: async (value) => {
-            chat.effort = value
-            $.ui.invalidate('ui.render')
-            await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
-          },
-        }),
-        Text({ dimColor: true, children: [chat.tokens + ' tokens this session'] }),
-      ],
-    })
-    const turns = chat.turns.slice(-4).flatMap((turn) => [
-      Text({ bold: true, children: ['> ' + turn.question] }),
-      turn.state === 'searching' ? Text({ dimColor: true, children: ['searching the index…'] })
-        : turn.state === 'thinking' ? Text({ dimColor: true, children: ['thinking…'] })
-          : Markdown({ text: turn.answer }),
       ...(turn.state === 'answered'
-        ? [Text({ dimColor: true, children: [turn.tokens + ' tokens · ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited')] })]
+        ? [Text({ key: 'm' + index, dimColor: true, children: ['  ↳ ' + (turn.cited.length ? 'cites ' + turn.cited.join(', ') : 'no location cited') + ' · ' + turn.tokens + ' tokens'] })]
         : []),
     ])
-    // The pane's own keys, pressed while the pane (not the question field) has the keyboard.
+    const empty = [
+      Text({ key: 'hello', dimColor: true, children: ['Ask about this repository: where something is handled, how it works, what its documentation says. Answers cite path:line.'] }),
+      Text({ key: 'hello-keys', dimColor: true, children: ['ctrl+x tab moves between the conversation and this pane; /aleph opens it again; /plugin configures the plugin. Answers are kept for later sessions: `aleph-zero memory list`, and `forget`.'] }),
+    ]
+    const messages = Box({
+      key: 'messages', flexDirection: 'column', rowGap: 1,
+      ...(docked ? { flexGrow: 1, justifyContent: 'flex-end', overflow: 'hidden' } : {}),
+      children: [...(turns.length ? turns : empty), ...(chat.note ? [Text({ key: 'note', dimColor: true, children: [chat.note] })] : [])],
+    })
+
+    // The pane's keys, pressed while the pane (not the question field) has the keyboard: Esc leaves the field, Tab
+    // walks back to it.
     const step = (list, value) => list[(list.findIndex((item) => item.value === value) + 1) % list.length].value
     const choose = async (what, value) => {
       chat[what] = value
       $.ui.invalidate('ui.render')
       await $.store.set(CHAT_SETTINGS, { model: chat.model, effort: chat.effort })
     }
-    const keys = [
-      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: () => choose('model', step(MODELS, chat.model)) }),
-      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: () => choose('effort', step(EFFORTS, chat.effort)) }),
-      Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
-    ]
-    const controls = []
+    const keys = []
     if (chat.busy) {
-      controls.push(Button({
-        key: 'stop', label: 'Stop', hotkey: 's', plain: true,
+      keys.push(Button({
+        key: 'stop', label: 'stop', hotkey: 's', plain: true,
         onPress: () => {
           chat.serial += 1  // whatever comes back for the question in flight is dropped
           if (chat.busy) finish(chat.busy, 'failed', 'Stopped.')
@@ -344,8 +339,8 @@ export function register(on, options) {
         },
       }))
     } else if (last && last.state === 'answered') {
-      controls.push(Button({
-        key: 'insert', label: 'Insert into prompt', hotkey: 'i', plain: true,
+      keys.push(Button({
+        key: 'insert', label: 'insert', hotkey: 'i', plain: true,
         onPress: async () => {
           // Drafts the note into the prompt box. Nothing reaches Claude until the user sends it.
           const filled = await $.prompt.fill({ text: note(last.answer, last.cited), mode: 'insert' })
@@ -356,39 +351,40 @@ export function register(on, options) {
         },
       }))
     }
+    keys.push(
+      Button({ key: 'model-next', label: 'model', hotkey: 'm', plain: true, onPress: () => choose('model', step(MODELS, chat.model)) }),
+      Button({ key: 'effort-next', label: 'effort', hotkey: 'e', plain: true, onPress: () => choose('effort', step(EFFORTS, chat.effort)) }),
+      Button({ key: 'close', label: 'close', hotkey: 'c', plain: true, onPress: () => $.ui.close({ id: PANE }) }),
+    )
+    const question = Input({
+      // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
+      // and a field drawn empty would wipe a half-typed question.
+      key: 'question', placeholder: '❯ Ask about this repository', value: chat.draft, submitLabel: 'ask', autoFocus: true,
+      onInput: (value) => {
+        chat.draft = String(value || '')
+      },
+      onSubmit: async (value) => {
+        const asked = String(value || '').trim()
+        if (!asked) return
+        if (chat.busy) {
+          chat.draft = asked
+          chat.note = 'The last question is still being answered: Esc, then s stops it; or wait, then Enter again.'
+          $.ui.invalidate('ui.render')
+          return
+        }
+        chat.draft = ''
+        await answerQuestion($, asked)
+      },
+    })
     return Box({
-      flexDirection: 'column',
-      rowGap: 1,
+      key: 'chat', flexDirection: 'column', rowGap: docked ? 0 : 1,
+      ...(docked ? { height: Number(props.scroll.bodyRows) } : {}),
       children: [
         header,
-        ...turns,
-        ...(controls.length ? [Box({ flexDirection: 'row', columnGap: 3, children: controls })] : []),
-        ...(chat.note ? [Text({ dimColor: true, children: [chat.note] })] : []),
-        Box({ flexDirection: 'row', columnGap: 3, children: keys }),
-        Text({ dimColor: true, children: ['Esc leaves the question field; then c closes (or Esc again), m and e change model and effort. '
-          + 'ctrl+x tab comes back here; /aleph opens it again. How far the plugin steers: /plugin, then aleph-zero.'] }),
-        // Said in the pane itself: this is the user's conversation being kept on disk.
-        Text({ dimColor: true, children: ['Answers and inserted notes are remembered for later sessions: `aleph-zero memory list`, `aleph-zero memory forget`.'] }),
-        Input({
-          // Drawn with what was typed so far: the pane is redrawn while an answer is on its way,
-          // and a field drawn empty would wipe a half-typed question.
-          key: 'question', label: 'Ask', placeholder: 'about this repository, then Enter', value: chat.draft, submitLabel: 'ask', autoFocus: true,
-          onInput: (value) => {
-            chat.draft = String(value || '')
-          },
-          onSubmit: async (value) => {
-            const question = String(value || '').trim()
-            if (!question) return
-            if (chat.busy) {
-              chat.draft = question
-              chat.note = 'The last question is still being answered. Press Stop, or wait, then Enter again.'
-              $.ui.invalidate('ui.render')
-              return
-            }
-            chat.draft = ''
-            await answerQuestion($, question)
-          },
-        }),
+        messages,
+        Text({ key: 'rule', dimColor: true, children: ['─'.repeat(Math.max(10, columns))] }),
+        question,
+        Box({ key: 'footer', flexDirection: 'row', columnGap: 2, children: [Text({ key: 'footer-hint', dimColor: true, children: ['Enter asks · Esc for keys:'] }), ...keys] }),
       ],
     })
   })
