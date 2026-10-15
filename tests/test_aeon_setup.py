@@ -45,7 +45,14 @@ def test_a_build_in_the_cache_is_found_without_aleph_aeon_lib(tmp_path, monkeypa
     for built in AEON_LIB.glob("core.cpython-*.so"):
         shutil.copy2(built, lib / built.name)
     assert aeon_setup.installed()
-    assert memory._aeon_core() is not None and hasattr(memory._aeon_core(), "TraceManager")
+    # In a process of its own: an extension module can be loaded once per process, and other tests load Aeon's.
+    import os
+    import subprocess
+    env = {key: value for key, value in os.environ.items() if key != "ALEPH_AEON_LIB"}
+    found = subprocess.run([sys.executable, "-c", "from aleph_zero import memory; core = memory._aeon_core(); "
+                            "print(core is not None and hasattr(core, 'TraceManager'))"],
+                           env={**env, "XDG_CACHE_HOME": str(tmp_path / "cache")}, capture_output=True, text=True)
+    assert found.stdout.strip() == "True", found.stderr
 
 
 def test_the_tools_are_checked_first_and_said_by_name(tmp_path, monkeypatch):
