@@ -46,7 +46,8 @@ def _installed_copy(tmp_path: Path) -> Path:
     """The launcher as a marketplace install has it: the plugin copied alone, no checkout's environment beside it."""
     copy = tmp_path / "cache" / "aleph-zero" / "plugin"
     (copy / "scripts").mkdir(parents=True)
-    shutil.copy2(PLUGIN / "scripts" / "serve.sh", copy / "scripts" / "serve.sh")
+    for script in ("serve.sh", "engine.sh"):       # as a marketplace install copies the plugin: its scripts together
+        shutil.copy2(PLUGIN / "scripts" / script, copy / "scripts" / script)
     return copy / "scripts" / "serve.sh"
 
 
@@ -117,3 +118,12 @@ def test_the_plugin_folder_carries_the_license_the_repository_has():
     # The directory installs the plugin folder alone; it must hold its license itself.
     assert (PLUGIN / "LICENSE").read_text() == (PLUGIN.parent / "LICENSE").read_text()
     assert len((PLUGIN / "README.md").read_text().split()) >= 40
+
+
+def test_the_engine_launcher_passes_its_arguments_for_the_configure_pane(tmp_path):
+    serve = _installed_copy(tmp_path)
+    bin_dir = tmp_path / "uv-bin"
+    _stub(bin_dir)
+    done = subprocess.run(["sh", str(serve.with_name("engine.sh")), "--cwd", "/repo", "source", "list", "--json"],
+                          capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "UV_TOOL_BIN_DIR": str(bin_dir)})
+    assert done.stdout.strip() == "stub --cwd /repo source list --json"
