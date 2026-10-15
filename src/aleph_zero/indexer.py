@@ -515,7 +515,9 @@ class Index:
         from .lang import parse
 
         families = [row[0] for row in self.conn.execute("SELECT DISTINCT family FROM blobs WHERE kind = ?", (NO_GRAMMAR,))]
-        ready = [family for family in families if family in lang.PROFILES and parse.loads(lang.PROFILES[family])]
+        known = [family for family in families if family in lang.PROFILES]
+        parse.fetch_missing({lang.PROFILES[family].grammar for family in known})     # said first, on a terminal
+        ready = [family for family in known if parse.loads(lang.PROFILES[family])]
         dropped: list[Key] = []
         with transaction(self.conn):
             for family in ready:
