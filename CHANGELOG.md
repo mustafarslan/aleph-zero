@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.11
+
+- How far vectors are made is shown while they are being made, wherever you are: one short line under the prompt
+  (`vectors 3,100/8,239 · ~2 min`, or `waiting` when the worker does not answer, or `indexing N files`), a word in
+  the side chat's header, and in `/aleph configure` the row's "58% made" and, in its help, the project's code, its
+  documentation and each linked source counted apart. Nothing is shown once they are made, nor where vectors are off.
+  The estimate is from measured progress only. Designed with the advisor and agy.
+- `status` gives `vectors.parts` (code, documentation, each linked source); from the running server also
+  `vectors.making` (making, waiting and why, or idle; and the measured rate).
+- Linking a source (`source add`, or the settings pane) indexes it at once, so its vectors are made without waiting
+  for the next search; a `status` that finds vectors missing wakes the server's background, as a search does.
+- Fixed: a linked source counted towards the repository's main language, so linking a large repository in another
+  language could switch search by meaning's default for the project (seen: vue/core read as Go after linking a Go
+  repository). Linked sources no longer count.
+
 ## 0.1.10
 
 - `/aleph configure` explains the row the focus is on (↑↓, Tab or a click), in a fixed place under the rows: what it

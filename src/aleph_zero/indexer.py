@@ -386,10 +386,15 @@ class Index:
 
     def languages(self) -> dict[str, float]:
         """The share of each programming language in the view's indexed source, by size.
-        Documentation, data files and anything without a language profile are left out."""
+        Documentation, data files and anything without a language profile are left out, and so are linked sources:
+        a large source in another language must not change which verdict this repository follows."""
+        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_mounted(blob_oid TEXT NOT NULL, family TEXT NOT NULL, "
+                          "PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
         sizes = dict(self.conn.execute(
             "SELECT b.family, sum(b.size) FROM blobs b JOIN temp.view_blobs v "
-            "ON v.blob_oid = b.blob_oid AND v.family = b.family WHERE b.kind NOT LIKE 'skip:%' GROUP BY b.family"))
+            "ON v.blob_oid = b.blob_oid AND v.family = b.family "
+            "LEFT JOIN temp.view_mounted m ON m.blob_oid = b.blob_oid AND m.family = b.family "
+            "WHERE b.kind NOT LIKE 'skip:%' AND m.blob_oid IS NULL GROUP BY b.family"))
         code: dict[str, int] = {}
         for family, size in sizes.items():
             if family in lang.PROFILES:
@@ -427,9 +432,15 @@ class Index:
             paths.setdefault((view.files[path], filters.family(path)), []).append(path)
         self._paths = paths
         self._keys = frozenset(paths)
+        # Blobs found only under linked sources: searched, but not the repository's own code (its main language).
+        mounted_only = [key for key, found in paths.items() if view.mounted and all(path in view.mounted for path in found)]
         with _temp_tables(self.conn):
             self.conn.execute("DELETE FROM temp.view_blobs")
             self.conn.executemany("INSERT INTO temp.view_blobs(blob_oid, family) VALUES (?, ?)", paths)
+            self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS view_mounted(blob_oid TEXT NOT NULL, family TEXT NOT NULL, "
+                              "PRIMARY KEY (blob_oid, family)) WITHOUT ROWID")
+            self.conn.execute("DELETE FROM temp.view_mounted")
+            self.conn.executemany("INSERT INTO temp.view_mounted(blob_oid, family) VALUES (?, ?)", mounted_only)
 
     def _refresh_view_chunks(self) -> None:
         self._view_epoch += 1

@@ -368,3 +368,21 @@ def test_the_status_says_how_far_vectors_are_made_for_the_code_the_docs_and_each
     assert set(parts) == {"code", "docs", "team"}
     assert sum(part["chunks"] for part in vectors["parts"]) == vectors["chunks"]
     assert all(part["with_vector"] == 0 and part["chunks"] > 0 for part in vectors["parts"])
+
+
+def test_linking_a_source_indexes_it_at_once_so_its_vectors_can_be_made_without_waiting_for_a_search(repo, docs_repo, capsys):
+    assert cli.main(["--cwd", str(repo.root), "source", "add", str(docs_repo.root), "--name", "team"]) == 0
+    assert "indexed" in capsys.readouterr().out
+    assert Engine(repo.root).status()["pending"] == 0
+
+
+def test_a_linked_source_in_another_language_does_not_change_the_repository_s_main_language(repo, tmp_path, make_repo):
+    # The main language picks the vectors verdict: linking a large Go repository to a Python one must not make it Go.
+    go = make_repo(tmp_path / "service")
+    for n in range(6):
+        go.write(f"pkg/s{n}.go", "package pkg\n\n" + "".join(f"func Handler{n}_{m}() int {{ return {m} }}\n" for m in range(40)))
+    go.commit("go")
+    sources.add(repo.root, str(go.root), name="service")
+    engine = Engine(repo.root)
+    engine.search("refresh token")
+    assert engine.status()["main_language"] == "python"

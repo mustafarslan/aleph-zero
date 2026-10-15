@@ -575,3 +575,14 @@ def test_the_status_from_the_server_says_whether_vectors_are_being_made_now(repo
     assert status["vectors"]["making"] == {"state": "waiting", "reason": "the worker did not answer", "chunks_per_second": 88.5}
     monkeypatch.setattr(server, "_BACKGROUND", None)
     assert "making" not in json.loads(server._run(Engine(repo.root), "status", {"format": "json"}))["vectors"]
+
+
+def test_a_status_that_finds_vectors_missing_wakes_the_server_s_background_as_a_search_does(repo, monkeypatch):
+    from aleph_zero.engine import Engine
+
+    engine = Engine(repo.root, dense=True)
+    engine.search("refresh token")                          # indexed; vectors are wanted, none made (no worker here)
+    engine._vectors_wanted.clear()                          # as after a session that started with everything made
+    status = engine.status()
+    assert status["vectors"]["with_vector"] < status["vectors"]["chunks"]
+    assert engine.vectors_wanted() is True

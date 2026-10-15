@@ -52,7 +52,7 @@ These are all the mod's hooks, and everything each one does:
 
 | Hook | What it does |
 |---|---|
-| `session.start` | Registers the `/aleph` command and notes the session's working directory. |
+| `session.start` | Registers the `/aleph` command and notes the session's working directory. In an interactive session it also starts watching how far vectors are made: it asks the engine's `status` (every 10 s while vectors are being made, every minute otherwise) and shows one short line under the prompt while there is work (`vectors 3,100/8,239 · ~2 min`), cleared when it is done. Nothing is watched in a headless run. |
 | `command.run` (`/aleph`) | Opens the side chat pane or the settings pane (`/aleph configure`), or answers `/aleph stats`, `/aleph check` and `/aleph check model`. |
 | `ui.render` (the panes) | Draws the side chat and the settings pane. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
 | `ui.focus` (the settings pane) | Notes which row the focus ring is on, to show that row's help under the rows; passes every move on unchanged. |
@@ -88,8 +88,8 @@ Each finding of the directory's validation, answered:
 
 - **MOD_CALLS_TOOLS, MOD_CAN_FETCH_AND_RUN** (`mcp.call`, line 43): the mod's only outbound call is
   `$.mcp.call` to this plugin's own server, `aleph`, which runs on the user's machine. It calls
-  `search`, `symbol` and `remember` there, at the times listed above, with arguments it builds
-  itself; nothing it receives is run as a command. The commands it runs on the user's machine are
+  `search`, `symbol`, `remember` and `status` there, at the times listed above, with arguments it
+  builds itself; nothing it receives is run as a command. The commands it runs on the user's machine are
   `/aleph configure`'s, below. Its own network traffic is the side chat's request to Claude, made
   through Claude Code's own `model.complete`.
 - **`/aleph configure`** (`process.run`, `process.spawn`, `config.set`, `ui.copy`, `state.set`): only when

@@ -22,6 +22,20 @@ def _open(cwd: Path) -> tuple[Index, object]:
     return Index(open_db(index_file(view.common_dir))), view
 
 
+LINKED_INDEX_SECONDS = 120.0    # what linking a source may spend indexing it; the rest waits for the next search
+
+
+def _index_linked(cwd: Path) -> None:
+    """Index what a linked or refreshed source brought, now: otherwise its files wait for the next search, and a person
+    watching the vectors being made (the plugin's status line) sees them only after that. Several cores, as `index`."""
+    index, view = _open(cwd)
+    index.workers = PREPARE_PROCESSES
+    print("indexing it…", flush=True)          # a large source takes a while: said, not silent
+    report = index.sync(view, budget_seconds=LINKED_INDEX_SECONDS)
+    if report.indexed:
+        print(f"indexed {report.indexed:,} files" + (f"; {report.pending:,} left for the next search" if report.pending else ""))
+
+
 def _index(args) -> int:
     index, view = _open(args.cwd)
     index.workers = PREPARE_PROCESSES       # a person waits for this one: the files are prepared on several cores
@@ -192,13 +206,15 @@ def _source(args) -> int:
                                    f"not to a directory. Run `git init` there") from None
     if args.action == "add":
         added = sources.add(args.cwd, args.location, name=args.name, ref=args.ref)
-        print(f"added {added.name} ({added.kind}): {added.location}")
+        print(f"added {added.name} ({added.kind}): {added.location}", flush=True)
+        _index_linked(args.cwd)
     elif args.action == "remove":
         sources.remove(args.cwd, args.name)
         print(f"removed {args.name}")
     elif args.action == "refresh":
         for name, outcome in sources.refresh(args.cwd, args.name).items():
-            print(f"{name}: {outcome}")
+            print(f"{name}: {outcome}", flush=True)
+        _index_linked(args.cwd)
     else:
         rows = sources.describe(gitio.common_dir(args.cwd))
         if args.json:

@@ -180,3 +180,76 @@ export function help(key, context) {
 // What the help area says while no row has the focus.
 export const HELP_HINT = '**Plugin** options apply in Claude Code at once · **Repository** settings are this worktree\'s · **Machine** builds are copied for a terminal.'
 export const HELP_KEYS = '↑↓ moves over the rows; the one under the ring is explained here.'
+
+// ---- how far vectors are made ---------------------------------------------------------------
+// Shown while there is work (the status line under the prompt, a word in the side chat's header, the breakdown in
+// /aleph configure), and nowhere once it is done or where vectors are off: "0% made" would read as a fault. Designed
+// with the advisor and agy: counts over percent, an estimate only from measured progress, "waiting" when nothing moves.
+
+// While vectors are being made or files indexed: the background works in 10-second rounds, and a look costs about what
+// a search's look at the worktree does (330 ms on babel without git's untracked cache), on the server's one thread.
+export const PROGRESS_FAST_MS = 10000
+export const PROGRESS_SLOW_MS = 60000     // caught up: a pull or a linked source may bring more
+export const PROGRESS_OFF_MS = 120000     // vectors off here, or no worker: looked at again in case that changes
+export const STATUS_COLUMNS = 40          // the status line is shared with other plugins
+
+const count = (number) => Number(number || 0).toLocaleString('en-US')
+
+export function etaText(seconds) {
+  if (!(seconds > 0) || !Number.isFinite(seconds)) return ''
+  if (seconds < 60) return '<1 min'
+  const minutes = Math.round(seconds / 60)
+  return minutes < 90 ? '~' + minutes + ' min' : '~' + Math.round(minutes / 60) + ' h'
+}
+
+// What the engine's status says about the work, with the rate measured since `previous` (the last reading) when the
+// server gave none. `now` in milliseconds.
+export function progressOf(status, previous, now) {
+  const vectors = (status && status.vectors) || {}
+  const pending = Number((status && status.pending) || 0)
+  const enabled = Boolean(vectors.enabled) && vectors.worker_installed !== false
+  const chunks = Number(vectors.chunks || 0)
+  const have = Math.min(Number(vectors.with_vector || 0), chunks)
+  const remaining = Math.max(chunks - have, 0)
+  const making = vectors.making || {}
+  let rate = Number(making.chunks_per_second || 0)
+  if (!(rate > 0) && previous && typeof previous.at === 'number' && now > previous.at && previous.remaining > remaining) {
+    rate = (previous.remaining - remaining) / ((now - previous.at) / 1000)    // measured on what is left: a pull adds
+  }
+  const waiting = making.state === 'waiting'
+  const active = enabled && (remaining > 0 || pending > 0)
+  return {
+    at: now, enabled, active, pending, chunks, have, remaining, rate, waiting, reason: making.reason || '',
+    percent: chunks ? Math.floor((have / chunks) * 100) : 0,
+    eta: active && !waiting && rate > 0 ? remaining / rate : null,
+    parts: Array.isArray(vectors.parts) ? vectors.parts : [],
+  }
+}
+
+// The status line, or undefined to clear it.
+export function statusLine(progress) {
+  if (!progress || !progress.active) return undefined
+  // Claude Code puts the plugin's name before it: the line itself starts with what is being done.
+  if (progress.pending > 0 && progress.remaining === 0) return fit('indexing ' + count(progress.pending) + ' files', STATUS_COLUMNS)
+  const tail = progress.waiting ? 'waiting' : etaText(progress.eta)
+  return fit('vectors ' + count(progress.have) + '/' + count(progress.chunks) + (tail ? ' · ' + tail : ''), STATUS_COLUMNS)
+}
+
+// The word for the side chat's header and the settings row.
+export function progressWord(progress) {
+  if (!progress || !progress.active || progress.remaining === 0) return ''
+  return progress.percent + '% made' + (progress.waiting ? ', waiting' : progress.eta ? ', ' + etaText(progress.eta) : '')
+}
+
+export function nextPoll(progress) {
+  return !progress || !progress.enabled ? PROGRESS_OFF_MS : progress.active ? PROGRESS_FAST_MS : PROGRESS_SLOW_MS
+}
+
+// One line a part for the help under "search by meaning": project code, its documentation, each linked source.
+export function partLines(parts) {
+  return (parts || []).map((part) => {
+    const done = Number(part.chunks) > 0 && Number(part.with_vector) >= Number(part.chunks)
+    const name = part.kind === 'code' ? 'code' : part.kind === 'docs' ? 'documentation' : part.name
+    return { name, done, text: count(part.with_vector) + ' of ' + count(part.chunks) + ' chunks' + (done ? '' : ' · ' + Math.floor(100 * Number(part.with_vector) / Math.max(Number(part.chunks), 1)) + '%') }
+  })
+}

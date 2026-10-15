@@ -713,6 +713,11 @@ class Engine:
             "memory": {**self._memory(), **self._memory_counts(view)},
         }
         found["setup"] = firstrun.summary(found)     # what a person could still set up (ADR-013): shown, never acted on
+        # A status that finds vectors missing tells the server's background thread so, as a search does: a source
+        # linked since the last search otherwise waited for one, and a person watching the count saw it stand still.
+        vectors = found["vectors"]
+        if vectors.get("enabled") and vectors.get("with_vector", 0) < vectors.get("chunks", 0):
+            self._vectors_wanted[str(self.default_cwd if cwd is None else cwd)] = True
         return found
 
     # ---- long-term memory -----------------------------------------------------------------------

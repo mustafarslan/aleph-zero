@@ -12,7 +12,8 @@ import {
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
-  CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help, fit, lastLine, machineState, meaning, nextValue, settingKey,
+  CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help,
+  nextPoll, partLines, progressOf, progressWord, statusLine, fit, lastLine, machineState, meaning, nextValue, settingKey,
   valueOf, vectorsRow,
 } from './configure.js'
 
@@ -158,6 +159,58 @@ async function readConfig($) {
   }
 }
 
+// ---- how far vectors are made ------------------------------------------------------------------
+// Read from the running server (fast: it is warm, and it says what its background is doing); where the engine's
+// tools are not allowed, from the engine's own command, less often. Started with an interactive session only: a
+// headless run has no status line, and its measurements must not carry calls of the plugin's own.
+let progress = null          // the last reading (configure.js progressOf)
+let progressTimer = null
+let fallbackAt = 0           // when the command was last run instead of the server
+let quickUntil = 0           // after an action in the settings pane, looked at quickly for a while: the server sees a
+                             // linked source only once its kept view of the sources is renewed (up to five seconds)
+
+async function readProgress($) {
+  let status = null
+  try {
+    const answer = await reach($, 'status', { format: 'json', timeout_ms: 2000 })
+    status = answer ? JSON.parse(resultText(answer)) : null
+  } catch {
+    status = null
+  }
+  if (!status && $.clock.now() - fallbackAt >= 30000) {
+    fallbackAt = $.clock.now()
+    try {
+      const cwd = await cwdOf($)
+      const done = await $.process.run(engineCommand($.plugin.root, cwd, ['status']), { timeoutMs: 20000 })
+      status = done.exitCode === 0 ? JSON.parse(done.stdout) : null
+    } catch {
+      status = null
+    }
+  }
+  if (!status) return progress
+  const before = progress
+  progress = progressOf(status, progress, $.clock.now())
+  $.ui.status(statusLine(progress))
+  if (!before || before.have !== progress.have || before.active !== progress.active || before.pending !== progress.pending) {
+    $.ui.invalidate('ui.render')        // the side chat's header and the settings pane say it too
+  }
+  return progress
+}
+
+function watchProgress($) {
+  try {
+    if (progressTimer) progressTimer.cancel()
+    const quick = $.clock.now() < quickUntil
+    progressTimer = $.clock.after(quick ? 5000 : progress ? nextPoll(progress) : 1000, async () => {
+      progressTimer = null
+      await readProgress($).catch(() => null)
+      watchProgress($)
+    })
+  } catch {
+    progressTimer = null      // no clock here (a test, a host without timers): the count is simply not watched
+  }
+}
+
 // One of the engine's commands for this repository, then the status read again. What it printed last is the note.
 async function runEngine($, args, doing) {
   if (cfg.busy) return
@@ -190,6 +243,16 @@ async function runEngine($, args, doing) {
     await readConfig($)     // still busy until the rows show what the command did
     cfg.busy = ''
     $.ui.invalidate('ui.render')
+    // A linked source or a switch to search by meaning brings vectors to make: look now, not at the next slow poll.
+    if (progressTimer) {
+      try {
+        quickUntil = $.clock.now() + 30000
+      } catch {
+        quickUntil = 0
+      }
+      await readProgress($).catch(() => null)
+      watchProgress($)
+    }
   }
 }
 
@@ -337,6 +400,7 @@ export function register(on, options) {
 
   on('session.start', async ($, e, next) => {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
+    if (e && e.isInteractive) watchProgress($)
     await $.command.register({
       name: 'aleph',
       description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
@@ -445,7 +509,8 @@ export function register(on, options) {
     const label = (MODELS.find((item) => item.value === chat.model) || { label: chat.model }).label
     // Chrome in the light tone, so the conversation is the brightest thing in the pane; the model and effort are on
     // their own keys below.
-    const header = Text({ key: 'header', color: 'subtle', children: ['Aleph side chat · ' + chat.tokens + ' tokens'] })
+    const making = progressWord(progress)
+    const header = Text({ key: 'header', color: 'subtle', children: ['Aleph side chat · ' + chat.tokens + ' tokens' + (making ? ' · vectors ' + making : '')] })
 
     const turns = chat.turns.slice(docked ? -8 : -2).flatMap((turn, index) => [
       Text({ key: 'q' + index, weight: 'semibold', children: ['> ' + turn.question] }),
@@ -626,7 +691,7 @@ export function register(on, options) {
     } else {
       const vectors = vectorsRow(status.vectors, status.main_language)
       row('o-dense', Button({ key: 'b-dense', label: 'search by meaning', hotkey: 'd', plain: true, onPress: () => runEngine($, ['setup', vectors.flag], 'switching search by meaning') }),
-        vectors.value, vectors.note)
+        vectors.value, progressWord(progress) || vectors.note)
       const cached = Boolean(status.untracked_cache)
       // Kept by git's configuration, the cache comes back whatever the index says: no key, and where it is set.
       if (status.untracked_cache_from === 'config') row('o-cache', Text({ key: 'b-cache-config', color: 'subtle', children: ['   untracked cache'] }), 'on', 'set in git\'s configuration')
@@ -730,6 +795,8 @@ export function register(on, options) {
     // moves. A rule with the row's name, what it does in light Markdown, its values with the current one marked, when
     // a change applies, and a word of warning where one is due.
     const about = help(cfg.focused, { options, status, sources: status && Array.isArray(status.sources) ? status.sources : [] })
+    // Under "search by meaning": how far each part is, from the latest reading (the server's, fresher than the pane's).
+    const parts = cfg.focused === 'b-dense' ? partLines((progress && progress.parts.length ? progress.parts : (status && status.vectors && status.vectors.parts)) || []) : []
     const width = Math.max(10, columns - 1)
     const helpRows = about ? [
       Text({ key: 'help-rule', color: 'subtle', children: [fit('── ' + about.title + ' ' + '─'.repeat(width), width)] }),
@@ -742,6 +809,14 @@ export function register(on, options) {
           Box({ key: 'help-v' + index + '-t', flexShrink: 1, children: [Markdown({ dimColor: !item.current, text: item.meaning })] }),
         ],
       })),
+      ...parts.map((part, index) => Box({
+        key: 'help-p' + index, flexDirection: 'row',
+        children: [
+          Box({ key: 'help-p' + index + '-n', width: 14, flexShrink: 0, children: [Text({ color: 'subtle', wrap: 'truncate-end', children: [part.name] })] }),
+          Text({ color: part.done ? 'subtle' : 'text', children: [part.text] }),
+        ],
+      })),
+      ...(progress && progress.waiting && cfg.focused === 'b-dense' ? [Text({ key: 'help-waiting', color: 'warning', children: ['Waiting: ' + (progress.reason || 'the worker is not answering')] })] : []),
       Markdown({ key: 'help-applies', dimColor: true, text: '*' + about.applies + '*' }),
       ...(about.note ? [Text({ key: 'help-note', color: about.note[1] || 'subtle', children: [about.note[0]] })] : []),
     ] : [

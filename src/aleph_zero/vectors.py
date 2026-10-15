@@ -174,7 +174,7 @@ class VectorStore:
         """The coverage by part, for a person watching vectors being made: the worktree's code, its documentation, and
         each linked source (its paths are `name:path`). A blob found in several parts counts in the first of its paths.
         Counted once per state of the view and of the stored vectors, as `coverage` is."""
-        key = (index._view_epoch, self._stored(), id(view))
+        key = (index._view_epoch, self._stored(), view.fingerprint)
         if self._parts is not None and self._parts[0] == key:
             return self._parts[1]
         counts: dict[tuple[str, str], list[int]] = {}
