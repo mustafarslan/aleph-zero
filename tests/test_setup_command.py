@@ -303,3 +303,21 @@ def test_the_vectors_line_says_what_is_known_of_whole_questions_where_the_verdic
     assert _setup(repo) == 0
     out = capsys.readouterr().out
     assert "whole" in out and "every language measured" in out     # the default reads first lines; a whole question is another matter
+
+
+def test_the_worker_is_installed_from_the_home_directory_where_the_readme_s_new_terminal_starts(tmp_path, capsys, monkeypatch):
+    # README "Once per machine": `aleph setup --worker` in a new terminal, before any `cd` into a project. The worker is
+    # the machine's, so the directory it is run from does not matter, and the home directory must not stop it.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    built = []
+    monkeypatch.setattr(embed_setup, "install_binary", lambda source=None, report=None: built.append("binary") or "worker")
+    monkeypatch.setattr(embed_setup, "install_model", lambda local=None, report=None: built.append("model") or "model")
+    assert cli.main(["--cwd", str(home), "setup", "--worker"]) == 0
+    out, err = capsys.readouterr()
+    assert built == ["binary", "model"] and "installed worker and model" in out
+    assert "does not walk" not in err and "Traceback" not in err
+    assert "aleph" in out and "project" in out                     # where the rest of the list is shown
+    assert settings.read(settings.machine_file()).get("setup", {}).get("worker") is None    # a yes: nothing declined
+    assert cli.main(["--cwd", str(home), "setup", "--worker", "--untracked-cache"]) == 2   # a project's flag still needs one

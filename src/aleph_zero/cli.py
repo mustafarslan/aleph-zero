@@ -259,10 +259,6 @@ def _setup(args) -> int:
         return (f"embedded {report.embedded} chunks in {report.seconds:.0f} s; {report.remaining} left"
                 + (f" ({report.reason}); `aleph embed run` continues" if report.reason else ""))
 
-    status, found, steps = now()
-    repo_file = Path(status["index"]).parent / "settings.json"
-    flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
-
     def flag(name: str, do) -> None:
         """One flag's work. What fails is said and counted; the flags after it are still done."""
         try:
@@ -270,6 +266,23 @@ def _setup(args) -> int:
         except firstrun.FAILURES as problem:
             failed.append(name)
             print(f"aleph setup {name}: not done: {problem}", file=sys.stderr)
+
+    # The worker is the machine's, so it is installed first and from wherever this runs: a new terminal starts in the
+    # home directory, which is not walked, and that is where the README's first step runs `setup --worker`.
+    if args.worker:
+        flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
+    try:
+        status, found, steps = now()
+    except plain.Refused:
+        if not args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense:
+            raise                                               # a project's flag needs a project
+        if args.json:
+            print(json.dumps(firstrun.as_json([]), indent=2))
+        else:
+            say("\nThe rest of the list is a project's: run `aleph setup` in one.")
+        return 2 if failed else 0
+    repo_file = Path(status["index"]).parent / "settings.json"
+    flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
 
     def needs_repository(name: str, what: str) -> bool:
         if status.get("repository", True):
@@ -279,8 +292,6 @@ def _setup(args) -> int:
               file=sys.stderr)
         return False
 
-    if args.worker:
-        flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
     for location in args.source or ():
         if needs_repository("--source", "other repositories are linked to a repository, not to a directory"):
             flag("--source", lambda location=location: (say(act("source", location)), settings.answer(repo_file, "sources", None)))
