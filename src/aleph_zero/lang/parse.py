@@ -13,6 +13,7 @@ _PARSERS: dict[str, Parser] = {}
 _LANGUAGES: dict[str, Language] = {}
 _FAILED: dict[str, tuple[float, Exception]] = {}   # grammar -> when it last failed to load, and how
 RETRY_SECONDS = 60.0     # a grammar that could not load (offline, a proxy) is asked for again after this, not per file
+announce = None          # told the grammars about to be downloaded (the command line sets it on a terminal)
 
 
 def parser(profile: LanguageProfile) -> Parser:
@@ -28,6 +29,29 @@ def parser(profile: LanguageProfile) -> Parser:
             raise
         _FAILED.pop(profile.grammar, None)
     return found
+
+
+def fetch_missing(grammars: set[str]) -> None:
+    """Download the grammars of these that are not here yet, in this process and before any file is parsed: one
+    download of only what the files need, said first, instead of a silent wait inside the first file of each language."""
+    now = time.monotonic()
+    wanted = {name for name in grammars
+              if name not in _PARSERS and not (name in _FAILED and now - _FAILED[name][0] < RETRY_SECONDS)}
+    if not wanted:
+        return
+    try:
+        wanted -= set(pack.downloaded_languages())
+    except Exception:  # noqa: BLE001 - the cache cannot be listed: each grammar is then fetched on first use
+        return
+    if not wanted:
+        return
+    if announce is not None:
+        announce(sorted(wanted))
+    try:
+        pack.download(sorted(wanted))
+    except Exception as exc:  # noqa: BLE001 - offline, a proxy: the files are read by windows and read again later
+        for name in wanted:
+            _FAILED[name] = (time.monotonic(), exc)
 
 
 def failed() -> dict[str, str]:

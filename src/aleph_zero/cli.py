@@ -567,6 +567,12 @@ def main(argv: list[str] | None = None) -> int:
 
     _cwd_after_the_command_too(parser)
     args = parser.parse_args(argv)
+    from . import firstrun
+    from .lang import parse
+
+    if args.command != "serve" and firstrun.hint_wanted():
+        parse.announce = lambda names: print(f"aleph: fetching the grammar for {', '.join(names)} (once; uses the network)",
+                                             file=sys.stderr, flush=True)
     try:
         done = args.run(args)
         if args.command not in ("doctor", "serve"):

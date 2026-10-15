@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import hashlib
 import os
 import signal
 import stat
@@ -59,7 +60,8 @@ def socket_path() -> Path:
     if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
         raise Unavailable(f"{short} is not a directory of ours; the worker socket cannot be placed safely")
     os.chmod(short, 0o700)
-    return short / "w.sock"
+    # One socket for each cache directory: two caches (two XDG_CACHE_HOME) have two workers, which must not meet here.
+    return short / f"w-{hashlib.sha256(os.fsencode(path.parent)).hexdigest()[:12]}.sock"
 
 
 def state_file() -> Path:

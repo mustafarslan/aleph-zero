@@ -191,6 +191,10 @@ class Index:
         self.lost_to_collection += len(self._indexed.intersection(missing))
         retry_before = started - RETRY_SECONDS
         todo = [key for key in missing if self._deferred.get(key, retry_before) <= retry_before]
+        if todo:
+            from .lang import parse
+
+            parse.fetch_missing({lang.PROFILES[family].grammar for _, family in todo if family in lang.PROFILES})
         indexed = skipped = 0
         left = len(missing)
         stored: set[Key] = set()

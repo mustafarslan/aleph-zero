@@ -725,3 +725,17 @@ def test_files_read_while_their_grammar_could_not_load_are_read_again_once_it_lo
     assert index.conn.execute("SELECT count(*) FROM blobs WHERE kind = ?", (indexer.NO_GRAMMAR,)).fetchall() == [(0,)]
     assert index.lost_to_collection == 0
     assert index.sync(build_view(repo.root)).indexed == 0               # and then settled
+
+
+def test_only_the_grammars_this_view_needs_are_fetched_and_said_first(repo, monkeypatch):
+    # A new user's first search waited 20 s in silence while nine grammars were fetched for a Python repository.
+    from aleph_zero.lang import parse
+
+    fetched, said = [], []
+    monkeypatch.setattr(parse, "_PARSERS", {})
+    monkeypatch.setattr(parse, "_FAILED", {})
+    monkeypatch.setattr(parse.pack, "downloaded_languages", lambda: [])
+    monkeypatch.setattr(parse.pack, "download", lambda names: fetched.append(sorted(names)) or len(names))
+    monkeypatch.setattr(parse, "announce", said.append)
+    _index(repo).sync(build_view(repo.root))
+    assert fetched == [["python"]] and said == [["python"]]

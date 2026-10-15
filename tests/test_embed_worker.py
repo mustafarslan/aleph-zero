@@ -270,3 +270,14 @@ def test_the_workers_log_does_not_grow_without_end(home, monkeypatch):
         handle.write(b"slot update: a line the server writes for every request\n" * 2000)
     assert log.stat().st_size > 100_000
     assert _wait(lambda: log.stat().st_size < 20_000, seconds=5)
+
+
+def test_two_caches_too_deep_for_a_socket_do_not_share_one(monkeypatch, tmp_path):
+    # Each cache has its own worker; when both fall back to /tmp they must still have their own socket.
+    deep = tmp_path / ("d" * 60)
+    paths = []
+    for name in ("one", "two"):
+        monkeypatch.setenv("XDG_CACHE_HOME", str(deep / name))
+        paths.append(worker.socket_path())
+    assert all(str(path).startswith("/tmp/aleph-zero-") for path in paths)
+    assert paths[0] != paths[1] and all(len(os.fsencode(path)) < 100 for path in paths)
