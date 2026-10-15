@@ -11,7 +11,7 @@ which files must change, and its event stream is read: tokens, tool calls by nam
 time, and whether the files it named are the ones the fix edited.
 
 Arms: `none` (no plugin: Claude Code as it is), `L0` to `L3` (the plugin at that rung;
-L0 is the engine's tools without steering), and `L1n` (rung 1 without the pointer in the
+L0 is the engine's tools without steering), `L1o` (rung 1 with the graph tools off: `L1` has them on, the default since 0.1.9), and `L1n` (rung 1 without the pointer in the
 descriptions of Grep and Glob, which is how the pilot ran rung 1). Arms are interleaved per task, so a task's
 sessions run close together. Every session is bounded by a cost limit and a wall clock.
 
@@ -54,7 +54,7 @@ QUESTION = (
     "answer with one line of JSON and nothing after it, in exactly this form: "
     '{"files": ["path/relative/to/the/repository/root.py"]} listing at most five files, most likely first.'
 )
-ARMS = ("none", "L0", "L1n", "L1", "L2", "L2s", "L3")
+ARMS = ("none", "L0", "L1n", "L1", "L1o", "L2", "L2s", "L3")
 JOB = "A/B run"
 
 
@@ -145,6 +145,8 @@ def command(arm: str, model: str, budget: float, prompt: str) -> list[str]:
             options["grep_pointer"] = "off"  # rung 1 as the pilot ran it: without the pointer in Grep and Glob
         if arm.endswith("s"):
             options["lines"] = "signatures"  # rung 2 with the signature of each file's first result under its line
+        if arm.endswith("o"):
+            options["graph"] = "off"         # the graph tools off: what they add is read against this (DEFERRED 0-graph)
         allowed.append(ENGINE_TOOLS)
         args += ["--plugin-dir", str(PLUGIN),
                  "--settings", json.dumps({"pluginConfigs": {"aleph-zero@inline": {"options": options}}})]

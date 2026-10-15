@@ -463,3 +463,12 @@ def test_whether_the_first_file_opened_was_a_right_one_is_read_paired_over_the_t
     assert found["arms"]["L2"]["first_read_right"] == {"sessions": 4, "right": 1, "rate": 0.25}
     paired = found["arms"]["L2s"]["first_read_right_against_baseline"]
     assert paired["paired_tasks"] == 3 and paired["difference"] == 0.333     # (+1 −1 +1) / 3: t4 is not counted
+
+
+def test_an_arm_can_leave_the_graph_tools_out():
+    # L1 has them on (the default since 0.1.9); L1o is the same rung without them (DEFERRED 0-graph).
+    def options(command):
+        return json.loads(command[command.index("--settings") + 1])["pluginConfigs"]["aleph-zero@inline"]["options"]
+
+    assert options(ab.command("L1o", "sonnet", 1.0, "q")) == {"rung": "1", "graph": "off"}
+    assert options(ab.command("L1", "sonnet", 1.0, "q")) == {"rung": "1"}
