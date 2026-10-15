@@ -47,9 +47,13 @@ class Step:
     suggested: bool            # offered with yes as the answer to a bare return
 
 
-def _state(done: bool, answers: dict, key: str) -> str:
+def _state(done: bool, answers: dict, key: str, wanted: bool = False) -> str:
+    """A 'not-needed' is a no given where no was the suggestion (the machine's worker, asked in a repository whose verdict
+    is against vectors): it holds where nothing wants the step, and the question is open again where something does."""
     kept = answers.get("setup", {}).get(key) if isinstance(answers.get("setup"), dict) else None
-    return "done" if done or kept == "done" else "declined" if kept == "declined" else "open"
+    if done or kept == "done":
+        return "done"
+    return "declined" if kept == "declined" or (kept == "not-needed" and not wanted) else "open"
 
 
 def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
@@ -63,7 +67,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
         Step("claude", "machine", "Connect Claude Code", _state(False, machine, "claude"),
              "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
-        Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker"),
+        Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker", wanted),
              "installed" if found.worker else "not installed; search by meaning needs it" if wanted
              else "not installed; nothing needs it while search is by words and names",
              "" if found.worker else WORKER_COST, "aleph embed setup", wanted),
@@ -256,7 +260,7 @@ class Menu:
                 settings.answer(kept, "worker", None)  # what was declined before is wanted now; done is what is then found
                 self.act("worker")
             else:
-                settings.answer(kept, "worker", "declined")
+                settings.answer(kept, "worker", "declined" if step.suggested else "not-needed")
         elif step.key == "sources":
             added = 0
             while True:

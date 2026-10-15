@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .store import state_dir
 
-ANSWERS = ("done", "declined")
+ANSWERS = ("done", "declined", "not-needed")   # not-needed: a no where no was suggested (see firstrun._state)
 
 
 def machine_file() -> Path:
@@ -66,7 +66,7 @@ def change(path: Path, **values) -> dict:
 
 
 def answer(path: Path, step: str, state: str | None) -> dict:
-    """Keep what was answered for one step of the setup: 'done', 'declined', or None for open again."""
+    """Keep what was answered for one step of the setup: 'done', 'declined', 'not-needed', or None for open again."""
     if state is not None and state not in ANSWERS:
         raise ValueError(f"an answer is one of {', '.join(ANSWERS)} or None, not {state!r}")
     with _one_writer(path):

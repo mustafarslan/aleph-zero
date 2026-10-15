@@ -63,7 +63,7 @@ def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, m
     out = capsys.readouterr().out
     assert "claude" in out and "handbook" in out
     assert "aleph update" in out and "--print-hook" in out         # and how it stays up to date afterwards
-    assert settings.read(settings.machine_file())["setup"] == {"claude": "done", "worker": "declined"}
+    assert settings.read(settings.machine_file())["setup"] == {"claude": "done", "worker": "not-needed"}   # no where no was suggested
     assert gitio.untracked_cache_enabled(repo.root)
     configured = subprocess.run(["git", "-C", str(repo.root), "config", "--get", "core.untrackedCache"], capture_output=True)
     assert configured.stdout.strip() == b""                        # no configuration was changed
@@ -321,3 +321,21 @@ def test_the_worker_is_installed_from_the_home_directory_where_the_readme_s_new_
     assert "aleph" in out and "project" in out                     # where the rest of the list is shown
     assert settings.read(settings.machine_file()).get("setup", {}).get("worker") is None    # a yes: nothing declined
     assert cli.main(["--cwd", str(home), "setup", "--worker", "--untracked-cache"]) == 2   # a project's flag still needs one
+
+
+def test_a_no_to_the_worker_where_nothing_needed_it_is_asked_again_where_vectors_help(repo, tmp_path, make_repo, capsys, monkeypatch):
+    # The worker is the machine's. Declined with Enter at "[y/N]" in a Python repository, where the verdict is
+    # against vectors, it must not silence the question in a repository whose verdict is for them.
+    _terminal(monkeypatch, "y", "", "", "n")                       # Claude Code; worker: Enter (no); sources; git's cache
+    assert _setup(repo) == 0
+    assert _states(repo, capsys)["worker"] == "declined"
+    other = make_repo(tmp_path / "web")
+    other.write("src/app.py", "def handler(request):\n    return request\n")
+    other.commit("app")
+    monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})      # vectors help here
+    states = _states(other, capsys)
+    assert states["worker"] == "open" and states["vectors"] != "declined"
+    asked, left = _terminal(monkeypatch, "n", "", "n")             # asked again; a no where yes was suggested is final
+    assert cli.main(["--cwd", str(other.root), "setup"]) == 0
+    assert "embedding worker" in asked[0] and "[Y/n]" in asked[0] and left == []
+    assert _states(other, capsys)["worker"] == "declined"
