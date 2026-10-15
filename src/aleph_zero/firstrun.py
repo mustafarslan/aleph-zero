@@ -6,6 +6,8 @@ anything; the commands that do are named in each step.
 """
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import sys
 from dataclasses import asdict, dataclass
@@ -33,6 +35,7 @@ class Found:
     repository: bool           # a git repository: sources are linked to one, and git's cache is its own
     aleph: str = "aleph"       # how this engine is started: where it is, when that is known
     files: int = 0             # files of the worktree itself, linked sources not counted
+    plugin: bool = False       # Claude Code has the aleph-zero plugin installed: it starts the engine itself
 
 
 @dataclass(frozen=True)
@@ -61,11 +64,13 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
     asked_for = repo.get("dense") if isinstance(repo.get("dense"), bool) else None   # the person's own choice, if they made one
     wanted = found.verdict if asked_for is None else asked_for
     # `--scope user`: for every project, as the answer is kept for the machine. Claude Code's own default is one project.
-    connect = f"`claude mcp add --scope user aleph-zero -- {found.aleph} serve`" + (
-        f" (or, for one session and with the steering: `claude --plugin-dir {found.plugin_dir}`)" if found.plugin_dir else "")
+    connect = (f"`claude plugin marketplace add mustafarslan/aleph-zero` and `claude plugin install aleph-zero@aleph-zero` "
+               f"(with the steering), or `claude mcp add --scope user aleph-zero -- {found.aleph} serve` (the tools only)") + (
+        f" (or, for one session: `claude --plugin-dir {found.plugin_dir}`)" if found.plugin_dir else "")
     steps = [
-        Step("claude", "machine", "Connect Claude Code", _state(False, machine, "claude"),
-             "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
+        Step("claude", "machine", "Connect Claude Code", _state(found.plugin, machine, "claude"),
+             "the aleph-zero plugin is installed in Claude Code" if found.plugin
+             else "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
         Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker", wanted),
              "installed" if found.worker else "not installed; search by meaning needs it" if wanted
@@ -127,6 +132,18 @@ def _plugin_dir() -> str | None:
     return str(found) if (found / ".claude-plugin" / "plugin.json").exists() else None
 
 
+def plugin_installed() -> bool:
+    """Claude Code lists the aleph-zero plugin among its installed ones (in any scope). Read from its own file, not
+    by running `claude`: this is asked on every setup list and every agent's status."""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        listed = json.loads((root / "plugins" / "installed_plugins.json").read_text())
+    except (OSError, ValueError):
+        return False
+    plugins = listed.get("plugins") if isinstance(listed, dict) else None
+    return isinstance(plugins, dict) and any(name.split("@")[0] == "aleph-zero" for name in plugins)
+
+
 def engine_path() -> str:
     """How this engine is started from somewhere that does not have this shell's PATH (Claude Code, a git hook):
     the `aleph` beside the Python it runs under. Under `uv run` the name alone is on PATH and elsewhere it is
@@ -151,6 +168,7 @@ def look(status: dict) -> Found:
     verdict, why = dense_policy.decide(None, status.get("main_language"))
     vectors = status.get("vectors") or {}
     return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
+                 plugin=plugin_installed(),
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),
@@ -287,5 +305,4 @@ class Menu:
                 settings.answer(kept, "untracked_cache", None)
                 self.act("untracked_cache")
             else:
-                self.say("  by hand, for every repository of yours: git config --global core.untrackedCache true")
                 settings.answer(kept, "untracked_cache", "declined")

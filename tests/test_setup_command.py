@@ -339,3 +339,24 @@ def test_a_no_to_the_worker_where_nothing_needed_it_is_asked_again_where_vectors
     assert cli.main(["--cwd", str(other.root), "setup"]) == 0
     assert "embedding worker" in asked[0] and "[Y/n]" in asked[0] and left == []
     assert _states(other, capsys)["worker"] == "declined"
+
+
+def test_with_the_plugin_installed_claude_code_is_connected_and_no_second_server_is_suggested(repo, tmp_path, capsys, monkeypatch):
+    # `claude mcp add` beside the plugin would start a second engine for every session.
+    plugins = tmp_path / "claude" / "plugins"
+    plugins.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    assert _states(repo, capsys)["claude"] == "open"
+    assert _setup(repo) == 0
+    assert "claude plugin install aleph-zero@aleph-zero" in capsys.readouterr().out    # the plugin is offered beside it
+    (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {"aleph-zero@aleph-zero": [{"scope": "user"}]}}))
+    assert _states(repo, capsys)["claude"] == "done"
+    assert _setup(repo) == 0
+    out = capsys.readouterr().out
+    assert "plugin" in out and "claude mcp add" not in out
+
+
+def test_a_no_to_git_s_untracked_cache_is_not_answered_with_advice_to_change_git_s_configuration(repo, capsys, monkeypatch):
+    _terminal(monkeypatch, "y", "n", "", "n")
+    assert _setup(repo) == 0
+    assert "git config --global" not in capsys.readouterr().out

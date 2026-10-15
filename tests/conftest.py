@@ -97,6 +97,7 @@ def fake_worker():
 def _no_real_worker(monkeypatch, tmp_path_factory):
     """Tests never see the embedding worker installed on this machine, nor its cache."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("cache")))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("claude")))    # nor its Claude Code plugins
     monkeypatch.delenv("ALEPH_DENSE", raising=False)
 
 
