@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from . import archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources, vectorfile
+from . import aeon_setup, archfacts, callgraph, decisions, doctor, gitio, indexers, outline, plain, render, scipstore, sources, vectorfile
 from .engine import Engine
 from .indexer import PREPARE_PROCESSES, Index, collect_garbage
 from .store import StoreError, index_file, open_db
@@ -281,8 +281,12 @@ def _setup(args) -> int:
     # home directory, which is not walked, and that is where the README's first step runs `setup --worker`.
     if args.worker:
         flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
+    if args.memory or args.aeon_source:
+        flag("--memory", lambda: say(f"installed Aeon's core in {aeon_setup.install(args.aeon_source, say)}: memories are "
+                                     f"recalled by meaning from now on"))
+    machine_flags = bool(args.worker or args.memory or args.aeon_source)
     project_flags = bool(args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
-    if args.worker and not project_flags and not _in_repository(args.cwd):
+    if machine_flags and not project_flags and not _in_repository(args.cwd):
         # Not a project (the home directory, ~/Downloads): nothing of it is walked for a list that is a project's.
         if args.json:
             print(json.dumps(firstrun.as_json([]), indent=2))
@@ -291,7 +295,7 @@ def _setup(args) -> int:
         return 2 if failed else 0
     status, found, steps = now()
     repo_file = Path(status["index"]).parent / "settings.json"
-    flagged = bool(args.worker or args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
+    flagged = bool(machine_flags or project_flags)
 
     def needs_repository(name: str, what: str) -> bool:
         if status.get("repository", True):
@@ -521,6 +525,9 @@ def main(argv: list[str] | None = None) -> int:
                                                              "(a running server then makes the vectors in the background; --embed makes them now)")
     chosen.add_argument("--no-dense", action="store_true", help="do not use search by meaning in this repository")
     first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this worktree's index (no configuration is changed)")
+    first.add_argument("--memory", action="store_true", help="build Aeon's core, so that memories are recalled by meaning (a few minutes; "
+                                                             "uses the network unless --aeon-source is given)")
+    first.add_argument("--aeon-source", type=Path, metavar="DIR", help="an Aeon checkout to build --memory from, without the network")
     first.set_defaults(run=_setup)
 
     fresh = commands.add_parser("update", help="bring this repository up to date in one go: fetched sources, the index, facts and vectors "

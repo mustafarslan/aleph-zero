@@ -1,6 +1,6 @@
 [project]
 name = "aleph-zero"
-version = "0.1.4"
+version = "0.1.5"
 description = "Local-first code intelligence for coding agents"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -13,6 +13,8 @@ dependencies = [
   "tree-sitter-language-pack>=1.21,<2",
   "numpy>=2.0",
   "apsw>=3.53",
+  # Headers and CMake files only (about 1 MB): `aleph setup --memory` builds Aeon's core against this Python with it.
+  "nanobind>=2.0",
 ]
 
 [project.urls]

@@ -383,3 +383,102 @@ def test_status_does_not_create_the_memory_directory(repo, monkeypatch):
     status = Engine(repo.root, dense=False).status()
     assert status["memory"]["memories"] == 0 and "private_mb" in status["memory"]
     assert not (state_dir(repo.root / ".git") / "memory").exists()
+
+
+# ---- forgetting inside the vector store (0.1.5) -----------------------------------------------------
+
+class Erasing(StandIn):
+    """A store that numbers its events, as Aeon does, and can erase them."""
+
+    def __init__(self):
+        super().__init__()
+        self.next, self.event_of, self.erased, self.cleared = 1, {}, [], 0
+
+    def append(self, memory_id, session, text, vector, when):
+        super().append(memory_id, session, text, vector, when)
+        self.event_of[memory_id], self.next = self.next, self.next + 1
+        return self.event_of[memory_id]
+
+    def erase(self, event_ids):
+        self.erased.extend(event_ids)
+
+    def clear(self):
+        self.cleared += 1
+
+
+def test_forgetting_erases_the_event_in_the_store_too_and_forgetting_all_clears_it(repo):
+    store = Erasing()
+    mem = fresh(repo, store)
+    gone = mem.remember("chat", "forget me", session="s1", vector=unit(51))
+    mem.remember("chat", "keep me", session="s1", vector=unit(52))
+    assert mem.forget(gone)
+    assert store.erased == [store.event_of[gone]]                     # by the store's own id, kept in the catalogue
+    assert mem.forget_all() == 1 and store.cleared == 1
+
+
+def test_a_catalogue_from_before_the_store_s_ids_gains_the_column_and_keeps_its_memories(repo):
+    import apsw
+
+    path = memory.catalogue_file(state_dir(repo.root / ".git"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old = apsw.Connection(str(path))
+    old.execute(memory._CATALOGUE.replace("    aeon_id    INTEGER,           -- the store's own id of its event, when it gave one\n", ""))
+    old.execute("INSERT INTO memories(memory_id, kind, session, created_at, text) VALUES ('m1', 'chat', 's', 1, 'older')")
+    old.close()
+    mem = fresh(repo, Erasing())
+    assert [row["text"] for row in mem.list()] == ["older"]
+    assert mem.forget("m1")                                            # no id in the store: nothing to erase there
+
+
+@needs_aeon
+def test_forgetting_all_leaves_no_store_file_behind(repo, aeon):
+    mem = fresh(repo, aeon)
+    mem.remember("chat", "SECRET-" + "y" * 100, session="s1", vector=unit(61))
+    assert mem.forget_all() == 1
+    left = [path for path in aeon.path.parent.glob("trace*") if path.stat().st_size > 0 and not path.name.endswith(".lock")]
+    assert left == []
+
+
+@needs_aeon
+def test_a_forgotten_memory_is_not_recalled_by_meaning_and_its_text_is_gone_where_aeon_can_erase(repo, aeon):
+    if not aeon.can_erase():
+        pytest.skip("this build of Aeon cannot tombstone an event")
+    mem = fresh(repo, aeon)
+    gone = mem.remember("chat", "ERASEME-" + "z" * 100, session="s1", vector=unit(71))
+    kept = mem.remember("chat", "kept", session="s1", vector=unit(72))
+    assert mem.forget(gone)
+    assert gone not in aeon.nearest(unit(71), 10) and kept in aeon.nearest(unit(72), 10)
+    held = b"".join(path.read_bytes() for path in aeon.path.parent.glob("trace*") if path.is_file())
+    assert b"ERASEME-" not in held
+
+
+def test_a_memory_kept_without_a_vector_waits_for_one_and_gets_it_later(repo):
+    store = Erasing()
+    mem = fresh(repo, store)
+    waiting = mem.remember("chat", "kept while the worker was down", session="s1")
+    gone = mem.remember("chat", "forgotten before it got one", session="s1")
+    mem.forget(gone)
+    assert [row[0] for row in mem.pending_vectors(10)] == [waiting]
+    memory_id, session, text, when = mem.pending_vectors(10)[0]
+    assert mem.add_vector(memory_id, session, text, unit(81), when)
+    assert mem.pending_vectors(10) == [] and mem.counts()["with_vector"] == 1
+    assert mem.recall("", vector=unit(81), k=1)[0].memory_id == waiting
+    mem.forget(waiting)
+    assert store.erased == [store.event_of[waiting]]          # its store id was kept when the vector came
+
+
+def test_embed_run_gives_waiting_memories_their_vectors(repo, fake_worker, monkeypatch):
+    from aleph_zero.embed import setup as embed_setup
+    from aleph_zero.embed import worker
+    from aleph_zero.engine import Engine
+
+    engine = Engine(repo.root)
+    engine.remember("chat", "a memory from a session without the worker")    # nothing running: no vector
+    assert engine.status()["memory"]["with_vector"] == 0
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    monkeypatch.setattr(worker, "available", lambda wait=2.0: fake_worker)
+    monkeypatch.setattr(worker, "socket_path", lambda: fake_worker)
+    monkeypatch.setattr(worker, "ensure", lambda: fake_worker)
+    monkeypatch.setattr(memory, "open_store", lambda state: StandIn())
+    engine.embed()
+    assert engine.status()["memory"]["with_vector"] == 1

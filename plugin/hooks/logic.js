@@ -36,6 +36,8 @@ export const SECTION = [
   '- To find where a name is defined, call `symbol`. To see what a file contains without reading it, call `outline`.',
   '- Use grep for an exact string whose every occurrence matters (a rename, a log message) and to check that '
     + 'something is gone. Do not start with a recursive grep or by reading whole files to locate code.',
+  '- Answers and notes from earlier sessions about this repository are kept: when the user refers to an earlier '
+    + 'discussion or decision, call `recall` before working it out again.',
 ].join('\n')
 
 // ---- what the engine answered --------------------------------------------------------------

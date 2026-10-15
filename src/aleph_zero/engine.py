@@ -320,10 +320,47 @@ class Engine:
             return embedder.EmbedReport(0, total - have, 0.0, str(exc))
         pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=worker.slots())
         try:
-            return embedder.embed_pending(index, store, pool, budget_seconds, batch or embedder.BATCH * worker.slots(),
-                                          stop, progress)
+            report = embedder.embed_pending(index, store, pool, budget_seconds, batch or embedder.BATCH * worker.slots(),
+                                            stop, progress)
+            self._embed_memories(view, pool)
+            return report
         finally:
             pool.close()
+
+    def embed_memories(self, cwd: Path | str | None = None) -> int:
+        """Give this repository's memories that have no vector theirs, and nothing else: for a repository where code
+        is not searched by meaning. Starts the worker. How many were given one."""
+        from .embed import worker
+        from .embed.client import EmbedPool, Unavailable
+
+        try:
+            sock = worker.ensure()
+        except Unavailable:
+            return 0
+        pool = EmbedPool(sock, capacity=worker.capacity_tokens(), connections=1)
+        try:
+            return self._embed_memories(self._view(cwd), pool)
+        finally:
+            pool.close()
+
+    def _embed_memories(self, view: View, pool) -> int:
+        """Give memories kept without a vector theirs, while the worker is up anyway (`embed run`, `update`). Only
+        where there is a store to keep them in. Never raises: how many were given one."""
+        try:
+            memories = self._memories(view, create=False)
+            if memories is None or memories.store is None:
+                return 0
+            given = 0
+            while waiting := memories.pending_vectors(64):
+                vectors = pool.embed([text[:4000] for _, _, text, _ in waiting], kind="document")
+                done = [memories.add_vector(memory_id, session, text, vector, when)
+                        for (memory_id, session, text, when), vector in zip(waiting, vectors)]
+                given += sum(done)
+                if not all(done):
+                    break       # the store refused one: not asked again and again in this run
+            return given
+        except Exception:  # noqa: BLE001 - memory works without vectors
+            return 0
 
     @_rebuilding
     def symbol(self, name: str, k: int = 20, cwd: Path | str | None = None,

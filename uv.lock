@@ -4,10 +4,11 @@ requires-python = "==3.13.*"
 
 [[package]]
 name = "aleph-zero"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "apsw" },
+    { name = "nanobind" },
     { name = "numpy" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
@@ -29,6 +30,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "apsw", specifier = ">=3.53" },
+    { name = "nanobind", specifier = ">=2.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "tree-sitter", specifier = ">=0.25.2,<0.26" },
     { name = "tree-sitter-language-pack", specifier = ">=1.21,<2" },

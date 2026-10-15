@@ -242,7 +242,9 @@ def as_json(steps: list[Step]) -> dict:
 def _failures() -> tuple:
     from .embed.setup import SetupError
 
-    return (SetupError, sources.SourceError, gitio.GitError, OSError)
+    from .aeon_setup import SetupError as AeonSetupError
+
+    return (SetupError, AeonSetupError, sources.SourceError, gitio.GitError, OSError)
 
 
 FAILURES = _failures()     # what a step may run into without the rest of the setup being lost to it

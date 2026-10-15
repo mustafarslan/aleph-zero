@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at INTEGER NOT NULL,       -- unix seconds
     text       TEXT NOT NULL,          -- emptied when the memory is forgotten
     terms      TEXT NOT NULL DEFAULT '',   -- its words as search reads them, so recall does not tokenise every text again
+    aeon_id    INTEGER,           -- the store's own id of its event, when it gave one
     deleted    INTEGER NOT NULL DEFAULT 0,
     embedded   INTEGER NOT NULL DEFAULT 0  -- whether the vector store holds a vector for it
 ) WITHOUT ROWID;
@@ -88,6 +89,13 @@ def open_catalogue(state: Path, create: bool = True) -> apsw.Connection | None:
             conn.execute(_CATALOGUE)
 
     _retry_while_busy(create_schema)
+
+    def add_store_ids() -> None:     # a catalogue made before the store's ids were kept
+        with transaction(conn):
+            if "aeon_id" not in [row[1] for row in conn.execute("PRAGMA table_info(memories)")]:
+                conn.execute("ALTER TABLE memories ADD COLUMN aeon_id INTEGER")
+
+    _retry_while_busy(add_store_ids)
     return conn
 
 
@@ -142,13 +150,29 @@ class Memory:
             self.conn.executemany(
                 "INSERT OR IGNORE INTO memory_cites(memory_id, path, blob_oid, start_line, end_line) VALUES (?, ?, ?, ?, ?)",
                 ((memory_id, cite.path, cite.blob_oid, cite.start_line, cite.end_line) for cite in cites or ()))
-        if vector is not None and self.store is not None:
-            try:
-                self.store.append(memory_id, session, text, vector, when)
-            except Exception:  # noqa: BLE001 - the store is a convenience; the memory is already kept
-                return memory_id
-            self.conn.execute("UPDATE memories SET embedded = 1 WHERE memory_id = ?", (memory_id,))
+        if vector is not None:
+            self.add_vector(memory_id, session, text, vector, when)
         return memory_id
+
+    def add_vector(self, memory_id: str, session: str, text: str, vector, when: int) -> bool:
+        """Give a kept memory its vector in the store (now, or later for one kept without). False when there is no
+        store or it failed: the memory is kept either way."""
+        if self.store is None:
+            return False
+        try:
+            event = self.store.append(memory_id, session, text, vector, when)
+        except Exception:  # noqa: BLE001 - the store is a convenience; the memory is already kept
+            return False
+        self.conn.execute("UPDATE memories SET embedded = 1, aeon_id = ? WHERE memory_id = ? AND deleted = 0",
+                          (event if isinstance(event, int) else None, memory_id))
+        return True
+
+    def pending_vectors(self, limit: int = 200) -> list[tuple[str, str, str, int]]:
+        """Memories kept without a vector (the worker was not running, or the store was installed later), oldest
+        first: (memory_id, session, text, created_at)."""
+        return [tuple(row) for row in self.conn.execute(
+            "SELECT memory_id, session, text, created_at FROM memories WHERE deleted = 0 AND embedded = 0 "
+            "ORDER BY created_at, memory_id LIMIT ?", (limit,))]
 
     def recall(self, query: str, vector=None, k: int = 5, view: View | None = None) -> list[Recalled]:
         """The memories that fit the query best: by meaning when a vector and a store are
@@ -199,13 +223,20 @@ class Memory:
         return Recalled(row[0], row[1], row[2], row[3], row[4], tuple(cites), any(cite.stale for cite in cites))
 
     def forget(self, memory_id: str) -> bool:
-        """Remove a memory's text and never recall it again. The vector store may keep its
-        event until it can delete one (ADR-006); the catalogue is what recall obeys."""
+        """Remove a memory's text and never recall it again, and erase its event in the vector store where the store
+        can (Aeon with tombstones: the event is left out of its search and its text overwritten). The catalogue is what
+        recall obeys in any case."""
+        found = self.conn.execute("SELECT aeon_id FROM memories WHERE memory_id = ? AND deleted = 0", (memory_id,)).fetchall()
         with transaction(self.conn):
             self.conn.execute("UPDATE memories SET deleted = 1, text = '', terms = '' WHERE memory_id = ? AND deleted = 0", (memory_id,))
             changed = self.conn.changes()
             self.conn.execute("DELETE FROM memory_cites WHERE memory_id = ?", (memory_id,))
         self._scrub()
+        if found and found[0][0] is not None and hasattr(self.store, "erase"):
+            try:
+                self.store.erase([found[0][0]])
+            except Exception:  # noqa: BLE001 - the catalogue has forgotten it; the store is best effort
+                pass
         return bool(changed)
 
     def forget_all(self) -> int:
@@ -214,6 +245,11 @@ class Memory:
             changed = self.conn.changes()
             self.conn.execute("DELETE FROM memory_cites")
         self._scrub()
+        if hasattr(self.store, "clear"):
+            try:
+                self.store.clear()     # every event, text and vector: the store's files go
+            except Exception:  # noqa: BLE001
+                pass
         return changed
 
     def _scrub(self) -> None:
@@ -244,11 +280,13 @@ _loaded: dict[str, object] = {}
 
 def _aeon_core():
     """Aeon's extension module, or None. Found in the directory `ALEPH_AEON_LIB` names (a
-    build of Aeon's core: a file `core.cpython-*.so`), else as the installed package.
-    Aleph never builds or installs it. The extension is loaded from its own file under a
-    name of its own: nothing is put on the import path, and an unrelated module that
-    happens to be called `core` is never taken for it."""
-    directory = os.environ.get("ALEPH_AEON_LIB")
+    build of Aeon's core: a file `core.cpython-*.so`), else in the build `aleph setup --memory`
+    made in the cache directory, else as the installed package. The extension is loaded from
+    its own file under a name of its own: nothing is put on the import path, and an unrelated
+    module that happens to be called `core` is never taken for it."""
+    from . import aeon_setup
+
+    directory = os.environ.get("ALEPH_AEON_LIB") or (str(aeon_setup.lib_dir()) if aeon_setup.installed() else "")
     if directory:
         if directory not in _loaded:
             found = None
@@ -316,11 +354,34 @@ class AeonStore:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def append(self, memory_id: str, session: str, text: str, vector, when: int) -> None:
+    def append(self, memory_id: str, session: str, text: str, vector, when: int) -> int | None:
+        """Keep the vector and text; returns Aeon's id of the event (kept by the catalogue, for erasing it)."""
         values = [float(value) for value in vector]
         # Session ids are cut to 35 bytes inside Aeon and then mismatch; 32 are kept here.
-        self._with(lambda trace: trace.append_event(session[:32], 1, f"{memory_id}\n{text}", embedding=values,
-                                                    event_time=int(when) * 1_000_000) and None, create=True)
+        event = self._with(lambda trace: trace.append_event(session[:32], 1, f"{memory_id}\n{text}", embedding=values,
+                                                            event_time=int(when) * 1_000_000), create=True)
+        return int(event) if isinstance(event, int) else None
+
+    def can_erase(self) -> bool:
+        """This build of Aeon can tombstone an event and overwrite its text (Aeon's branch with Aleph's fixes)."""
+        return hasattr(self.core.TraceManager, "tombstone_event")
+
+    def erase(self, event_ids) -> None:
+        if not self.can_erase():
+            return
+        self._with(lambda trace: [trace.tombstone_event(int(event), erase_text=True) for event in event_ids])
+
+    def clear(self) -> None:
+        """Remove the store's files (the events, their texts and vectors, the log), under the store's lock."""
+        if not self.path.parent.is_dir():
+            return
+        with open(f"{self.path}.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                for suffix in ("", ".blobs", ".wal"):
+                    Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
     def nearest(self, vector, limit: int) -> list[str]:
         values = [float(value) for value in vector]

@@ -155,12 +155,18 @@ def _round(cwd: Path, view, report: dict, part, engine_of, dense: bool | None, d
         # Never switched on here: a nightly hook would otherwise switch it on in every repository.
         engine = engine_of(cwd, dense=dense)
         try:
-            status = engine.status(cwd)["vectors"]
+            everything = engine.status(cwd)
+            status = everything["vectors"]
+            kept = everything.get("memory") or {}
+            # Memories kept without a vector (the worker was down, or Aeon came later) get theirs in the same run.
+            memories_waiting = kept.get("store") == "aeon" and kept.get("memories", 0) > kept.get("with_vector", 0)
             made = report["vectors"]["made"]
             if not status["enabled"]:
                 report["vectors"] = {"made": made, "left": 0, "why": status["why"]}
+                if memories_waiting:
+                    report["memories_given_vectors"] = engine.embed_memories(cwd)
                 return
-            if status["with_vector"] >= status["chunks"]:
+            if status["with_vector"] >= status["chunks"] and not memories_waiting:
                 # Nothing to make: the worker is not started for it. After most pulls this is the case, and
                 # starting it loads a model of 300 MB to be told so.
                 report["vectors"] = {"made": made, "left": 0, "why": ""}
