@@ -36,7 +36,8 @@ function world(on: any, options: { status?: any, engine?: number, denied?: strin
   })
   on('process.spawn', async function* ($: any, e: any) {
     seen.spawns.push([...e.argv])
-    yield { stream: 'stdout', text: 'done: ' + e.argv.slice(-2).join(' ') + '\n' }
+    yield { stream: 'stdout', text: 'done: ' + e.argv.slice(-2).join(' ') }
+    yield { stream: 'stdout', text: '\n' }                     // a line can arrive in pieces
     return { value: { code: 0, signal: null } }
   })
   on('config.set', ($: any, e: any) => {
@@ -175,7 +176,9 @@ test('the rules: values, steps, meanings and commands for a terminal', () => {
   expect(valueOf({ rung: 'nine' }, rung)).toBe('1')
   expect(nextValue(rung, '3')).toBe('0')
   expect(meaning(graph, 'on')).toMatch(/next session/)
-  expect(vectorsRow({ chosen: null, verdict: { helps: true } }).flag).toBe('--dense')
+  expect(vectorsRow({ chosen: null, verdict: { helps: true } }, 'typescript').flag).toBe('--dense')
+  expect(vectorsRow({ chosen: null, verdict: { helps: false } }, null).value).toBe('off until indexed')
+  expect(vectorsRow({ chosen: null, verdict: { helps: false } }, 'python').value).toBe('off, as measured')
   expect(vectorsRow({ chosen: true, worker_installed: false }).note).toMatch(/needs the embedding worker/)
   expect(vectorsRow({ chosen: true }).flag).toBe('--no-dense')
   expect(vectorsRow({ chosen: false }).flag).toBe('--auto-dense')

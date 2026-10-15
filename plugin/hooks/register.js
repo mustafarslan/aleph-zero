@@ -36,6 +36,13 @@ let server = null
 // Where the session was started, as session.start reports it.
 let sessionCwd = ''
 
+// The session's directory: session.start's, or asked for when the mod was loaded again without one (a changed
+// option reloads it mid-session). Never raises.
+async function cwdOf($) {
+  if (!sessionCwd) sessionCwd = String((await $.session.cwd().catch(() => '')) || '')
+  return sessionCwd
+}
+
 async function reach($, tool, args) {
   if (server === null) {
     const connected = await $.mcp.connect(SERVER)
@@ -44,7 +51,8 @@ async function reach($, tool, args) {
   }
   // The engine answers for the directory it is asked about; without one, for wherever its
   // own process was started. The session may be in a subdirectory or another worktree.
-  return $.mcp.call(server, tool, sessionCwd ? { ...args, cwd: sessionCwd } : args)
+  const cwd = await cwdOf($)
+  return $.mcp.call(server, tool, cwd ? { ...args, cwd } : args)
 }
 
 // One call to the engine that can never hold up its hook: time inside a mods API call does
@@ -70,12 +78,17 @@ const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: 
 // ---- /aleph configure ------------------------------------------------------------------------
 // What the pane last read from the engine. Module state: a changed plugin option loads the mod again, and the pane
 // then reads it all again, which is what it should show anyway.
-const cfg = { status: undefined, error: '', loading: false, busy: '', note: '', command: '', removing: null, enginePath: '', draft: '' }
+const cfg = { status: undefined, error: '', loading: false, again: false, busy: '', note: '', command: '', removing: null, enginePath: '', draft: '' }
 
 // The engine's status for the session's directory, and the engine's path for the commands it copies. Never raises.
 async function readConfig($) {
-  if (cfg.loading) return
+  if (cfg.loading) {
+    cfg.again = true    // asked for after a change: what is being read may be from before it
+    while (cfg.loading) await $.clock.sleep(50)
+    return
+  }
   cfg.loading = true
+  cfg.again = false
   try {
     const cwd = await $.session.cwd()
     const [status, path] = await Promise.all([
@@ -95,6 +108,7 @@ async function readConfig($) {
     cfg.error = 'the engine could not be asked: ' + (error && error.message ? error.message : String(error))
   } finally {
     cfg.loading = false
+    if (cfg.again) await readConfig($)
     $.ui.invalidate('ui.render')
   }
 }
@@ -110,21 +124,27 @@ async function runEngine($, args, doing) {
     const cwd = await $.session.cwd()
     const stream = $.process.spawn({ argv: engineCommand($.plugin.root, cwd, args), cwd })
     let said = ''
+    let pending = ''    // a piece may end in the middle of a line
     for await (const piece of stream) {
-      const line = lastLine(piece.text)
+      pending += piece.text
+      const cut = pending.lastIndexOf('\n')
+      const line = cut < 0 ? '' : lastLine(pending.slice(0, cut))
+      if (cut >= 0) pending = pending.slice(cut + 1)
       if (line) {
         said = line
         cfg.busy = doing + ' · ' + line
         $.ui.invalidate('ui.render')
       }
     }
+    said = lastLine(pending) || said
     const ended = await stream.result
     cfg.note = ended && ended.code === 0 ? said || 'done' : 'failed: ' + (said || 'exit ' + (ended && ended.code))
   } catch (error) {
     cfg.note = 'failed: ' + (error && error.message ? error.message : String(error))
   } finally {
+    await readConfig($)     // still busy until the rows show what the command did
     cfg.busy = ''
-    await readConfig($)
+    $.ui.invalidate('ui.render')
   }
 }
 
@@ -492,6 +512,7 @@ export function register(on, options) {
       ],
     }))
     const say = (key, text) => rows.push(Text({ key, dimColor: true, children: [fit(text, columns)] }))
+    const tell = (key, text) => rows.push(Text({ key, dimColor: true, children: [String(text)] }))   // whole, wrapped: a reason
 
     // The plugin's options: through Claude Code's settings, as /plugin would; they need neither the engine nor its tools.
     heading('h-plugin', 'Plugin')
@@ -500,6 +521,12 @@ export function register(on, options) {
       row('o-' + option.key, Button({
         key: 'b-' + option.key, label: option.label, hotkey: option.hotkey, plain: true,
         onPress: async () => {
+          // A changed option loads the mod again, which ends a command still running (a clone): not while one runs.
+          if (cfg.busy) {
+            cfg.note = 'wait for ' + cfg.busy.split(' · ')[0] + ' to finish'
+            $.ui.invalidate('ui.render')
+            return
+          }
           const to = nextValue(option, value)
           const set = await $.config.set({ key: settingKey(option), value: to }).catch((error) => ({ deny: error && error.message ? error.message : String(error) }))
           // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
@@ -518,11 +545,11 @@ export function register(on, options) {
     if (status === undefined || (status === null && cfg.loading)) {
       say('r-reading', 'reading the engine\'s status…')
     } else if (status === null) {
-      say('r-error', cfg.error)
+      tell('r-error', cfg.error)
     } else if (status.repository === false) {
       say('r-plain', 'not a git repository: search by meaning, linked sources and git\'s cache are set in one')
     } else {
-      const vectors = vectorsRow(status.vectors)
+      const vectors = vectorsRow(status.vectors, status.main_language)
       row('o-dense', Button({ key: 'b-dense', label: 'search by meaning', hotkey: 'd', plain: true, onPress: () => runEngine($, ['setup', vectors.flag], 'switching search by meaning') }),
         vectors.value, vectors.note)
       const cached = Boolean(status.untracked_cache)
@@ -538,8 +565,9 @@ export function register(on, options) {
           } catch (error) {
             cfg.note = 'git could not be run: ' + (error && error.message ? error.message : String(error))
           } finally {
-            cfg.busy = ''
             await readConfig($)
+            cfg.busy = ''
+            $.ui.invalidate('ui.render')
           }
         },
       }), cached ? 'on' : 'off', 'git\'s; a faster look at the worktree')
@@ -618,7 +646,7 @@ export function register(on, options) {
     }
 
     if (cfg.busy) rows.push(Text({ key: 'busy', color: 'gray', children: [fit('✻ ' + cfg.busy, columns)] }))
-    else if (cfg.note) say('note', cfg.note)
+    else if (cfg.note) tell('note', cfg.note)
     if (!cfg.busy && cfg.command) rows.push(Text({ key: 'command', children: [cfg.command] }))   // whole, to select by hand too
     rows.push(Text({ key: 'footer', dimColor: true, children: [fit('A key changes its row · Esc closes · ctrl+x tab: prompt', FOOTER_COLUMNS)] }))
     return Box({ key: 'configure', flexDirection: 'column', children: rows })
@@ -718,7 +746,7 @@ export function register(on, options) {
   on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
     const result = await next(e)
     if (rung < 3) return result
-    const read = readGrepTool(e, sessionCwd)
+    const read = readGrepTool(e, await cwdOf($))
     if (!read || !grepToolFoundNothing(result)) return result
     const hits = hitsOf(await ask($, 'search', { query: read.query, k: 5 }))
     if (!hits.length) return result

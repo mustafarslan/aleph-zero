@@ -52,12 +52,13 @@ export function settingKey(option) {
 
 // Search by meaning in this repository: the repository's own choice if it made one, else the benchmark's verdict.
 // The key steps verdict → on → off → verdict.
-export function vectorsRow(vectors) {
+export function vectorsRow(vectors, language) {
   const v = vectors || {}
   const helps = Boolean(v.verdict && v.verdict.helps)
   const chosen = typeof v.chosen === 'boolean' ? v.chosen : null
   const on = chosen === null ? helps : chosen
-  const value = chosen === null ? (helps ? 'on' : 'off') + ', as measured' : (chosen ? 'on' : 'off') + ', chosen'
+  // Before a first index the main language is not known, nor its verdict: off for now, not "measured off".
+  const value = chosen === null ? (language ? (helps ? 'on' : 'off') + ', as measured' : 'off until indexed') : (chosen ? 'on' : 'off') + ', chosen'
   const notes = []
   if (on && v.worker_installed === false) notes.push('needs the embedding worker: w')
   else if (on && Number(v.chunks) > 0) notes.push(Number(v.with_vector || 0).toLocaleString('en-US') + ' of ' + Number(v.chunks).toLocaleString('en-US') + ' chunks have one')
