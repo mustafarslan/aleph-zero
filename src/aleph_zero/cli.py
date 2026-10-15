@@ -407,7 +407,7 @@ def _version() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="aleph", description="Local code search for coding agents.")
+    parser = argparse.ArgumentParser(prog=COMMAND, description="Local code search for coding agents.")
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="a directory inside the repository")
     parser.add_argument("--version", action="version", version=f"aleph-zero {_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -557,11 +557,13 @@ def main(argv: list[str] | None = None) -> int:
     gc.add_argument("--days", type=float, default=30.0)
     gc.set_defaults(run=_gc)
 
+    _cwd_after_the_command_too(parser)
     args = parser.parse_args(argv)
     try:
         done = args.run(args)
         if args.command not in ("doctor", "serve"):
             _grammar_notice()
+        sys.stdout.flush()      # here, where a closed pipe is caught, not at exit, where Python reports it
         if args.command in HINTED:
             from . import firstrun
 
@@ -573,6 +575,30 @@ def main(argv: list[str] | None = None) -> int:
     except (gitio.GitError, StoreError, outline.OutlineError, ValueError, RuntimeError) as exc:
         print(f"aleph: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print(f"\naleph: interrupted; what was done is kept, and the next `{COMMAND} {args.command}` continues from there",
+              file=sys.stderr)
+        return 130
+    except BrokenPipeError:
+        # The reader went away (`| head`): there is nothing to say, and nowhere to say it.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 141
+    except OSError as exc:
+        print(f"aleph: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cwd_after_the_command_too(parser: argparse.ArgumentParser) -> None:
+    """`aleph search x --cwd DIR` as well as `aleph --cwd DIR search x`: each command also takes --cwd, which when
+    given there replaces the one given before it."""
+    pending = [parser]
+    while pending:
+        for action in pending.pop()._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for command in action.choices.values():
+                    if not any("--cwd" in a.option_strings for a in command._actions):
+                        command.add_argument("--cwd", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+                    pending.append(command)
 
 
 def _grammar_notice() -> None:

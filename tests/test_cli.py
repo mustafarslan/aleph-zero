@@ -122,3 +122,33 @@ def test_started_as_aleph_zero_it_names_aleph_zero_in_what_it_tells_a_person_to_
         started[name] = subprocess.run([str(bin_dir / name), "doctor"], cwd=tmp_path, capture_output=True, text=True, env=env).stdout
     assert "`aleph-zero embed setup`" in started["aleph-zero"] and "`aleph embed" not in started["aleph-zero"]
     assert "`aleph embed setup`" in started["aleph"]
+
+
+def test_ctrl_c_says_one_line_and_keeps_what_was_done(repo, capsys, monkeypatch):
+    def interrupted(args):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(cli, "_index", interrupted)
+    assert cli.main(["--cwd", str(repo.root), "index"]) == 130
+    err = capsys.readouterr().err
+    assert "interrupted" in err and err.count("\n") <= 2
+
+
+def test_an_operating_system_error_is_one_line_not_a_traceback(repo, capsys, monkeypatch):
+    def refused(args):
+        raise PermissionError(13, "Permission denied", "/some/file")
+    monkeypatch.setattr(cli, "_index", refused)
+    assert cli.main(["--cwd", str(repo.root), "index"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("aleph: ") and "/some/file" in err and "Traceback" not in err
+
+
+def test_a_reader_that_goes_away_is_not_an_error(repo, tmp_path):
+    # `aleph search ... | head -1`: the pipe closes while results are still being written.
+    done = subprocess.run(f"{sys.executable} -m aleph_zero.cli --cwd {repo.root} search refresh -k 50 --detail full | head -c 1",
+                          shell=True, capture_output=True, text=True, env={"XDG_CACHE_HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert "BrokenPipeError" not in done.stderr and "Exception ignored" not in done.stderr
+
+
+def test_cwd_is_taken_after_the_command_too(repo, capsys):
+    assert cli.main(["search", "refresh token", "--cwd", str(repo.root)]) == 0
+    assert "token_store.py" in capsys.readouterr().out
