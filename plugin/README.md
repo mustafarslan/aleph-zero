@@ -21,7 +21,7 @@ Then, optionally: `aleph-zero setup --worker` once (the embedding server and mod
 ## What it adds
 
 - The engine's tools: `search`, `symbol`, `outline`, `status`, `recall`, `remember`, and with
-  the `graph` option (on by default; not yet measured to help) `references`, `facts` and `decisions`.
+  the `graph` option (on by default; measured once and not shown to help) `references`, `facts` and `decisions`.
 - Steering, by the `rung` option (default `1`): tool descriptions and a short instruction to
   search before a recursive grep; at `2`, ranked locations with the first prompt of a
   session; at `3`, ranked locations after a grep (the Grep tool's or a shell's) that found nothing. No rung has yet been

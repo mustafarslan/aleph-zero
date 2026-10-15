@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.14
+
+- The call graph and the knowledge graph measured, by rules written first (DEFERRED entry 0-graph, ADR-011):
+  - **The call graph** reaches answers search misses (+10.8 points of recall@10 one step from search's first five
+    results, over 1,398 questions in six languages), but adding its neighbours to search's results gains nothing
+    without a way to rank them (−0.5, interval through zero).
+  - **Facts** (the knowledge graph) add +4.0 points (+0.8 to +7.9) to search on where a route is handled or an
+    environment name read, over 137 questions in seven open-source repositories, and put the right file first far
+    more often; under the 10 points asked for. The gain is where `facts` reads the framework (gin, echo).
+  - **In real sessions** (120, sonnet, two passes) the agent never called the graph tools though they were offered:
+    not shown to help, at +3% tokens with an interval through no change. They stay on by the owner's decision;
+    `graph=off` is as defensible. The option's description says so.
+- The A/B harness has an arm with the graph tools off (`L1o`); the benchmarks that made these readings are kept
+  (`bench/eval/graph_expand.py`, `facts_bench.py`, `facts_questions.py` and its 137 questions).
+
 ## 0.1.13
 
 - Functions defined inside functions are found by `symbol` and shown by `outline` (the owner's decision). `symbol` lists

@@ -214,6 +214,22 @@ The owner said yes to a paid test of how rung 2 shows its files: as now (a file'
 - **Asked for free first: how many tasks could differ at all.** For the 40 tasks the run would take (`--count 40 --seed 11`), the engine was asked offline as the mod asks it (code, 15 hits): 3 tasks' commits are not in the prepared clones; of the 37, rung 2 gives locations in 21; in 19 of those at least one listed file's first result has a signature (8 of the 21 top results are modules, which have none). Where a signature is shown it is on 1 to 3 of 5 lines in most tasks. So **19 of 40 pairs would differ at all**, and pass 1 had already shown rung 2 putting a right file first in 10 of 30 sessions against 2 of 30 without it: the gap a signature line could still close is small, and 19 pairs show only a difference of 25 points or more.
 - **Not run.** The bar set before the count was "fewer than about 25 differing tasks of 40: do not spend". $32.90 of the limit stays unspent. *The advisor:* do not spend below that bar. *agy:* do not spend at all; Loc-Bench's agent finds a right file in a median of four calls without help. *Mine:* the same, by the count. **What it costs if wrong:** a gain from signatures stays unseen. **Asked again, and the owner's answer.** An automatic check objected that an approved item was left undone. A larger free draw (100 tasks, the same seed) found 45 that differ: 90 sessions, about $18 at pass 1's mean of $0.20 a session, capped at $32. Put to the owner with the advisor's and agy's expectation that it would show nothing: **"keep the money"** (2026-10-14, 11:00). **What would run it:** a set where rung 2 gives locations for most tasks and the top results are definitions, at least about 50 differing pairs drawn from more tasks, the decision on `first_read_right` written down before the first session.
 
+## The run of 2026-10-16: the graph tools on against off
+
+On the owner's go-ahead ("go ahead and test in full a/b test"), by the rule written first in DEFERRED entry 0-graph. Arms `L1` (rung 1 with the graph tools: `references`, `facts`, `decisions`, and the standing instruction's line naming them; the default since 0.1.9) and `L1o` (rung 1 without them). 30 Loc-Bench tasks by the harness's seed, sonnet, two passes; 120 sessions, 112 completed (two tasks could not start in either arm), $20.39.
+
+| | `L1` (graph on) | `L1o` (graph off) | Ratio on / off (95%) |
+|---|---|---|---|
+| Tokens, median | 191,360 | 184,974 | 1.031 (0.947 to 1.129) |
+| Tool calls, median | 6 | 5 | 1.006 (0.908 to 1.112) |
+| Right file named | 27 of 28 | 27 of 28 | |
+| First file read right | 75% | 75% | |
+| Graph tools called | 0 in 56 sessions | (not offered) | |
+| Aleph's search first | 16 | 12 | |
+
+- **Not shown to help, and not used.** Both intervals hold 1. The tools were listed to the agent (a session started with the harness's arguments shows them; checked), and the instruction named them, but no session called one: the same shape as the pilot's finding that rung 1's instruction is mostly not followed. Search first in 16 against 12 is within the noise.
+- **Read beside the two retrieval benchmarks of the same entry:** the call graph reaches answers search misses (+10.8 points one step from its first five results) but does not turn them into a gain without a way to rank them; `facts` adds +4.0 points where it reads the framework and puts the right file first more often (MRR +0.21). What an agent is not shown, it does not use: if the graph is to help, it would be by being shown (added at rung 2), once its neighbours can be ranked.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.
