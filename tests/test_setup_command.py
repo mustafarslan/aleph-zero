@@ -395,3 +395,26 @@ def test_memory_by_meaning_is_on_the_list_after_the_worker_and_suggested_where_t
     assert _setup(repo) == 0
     assert any("Memory by meaning" in question or "Aeon" in question for question in asked) and built == [None]
     assert "[Y/n]" in next(question for question in asked if "Aeon" in question)
+
+
+def test_search_by_meaning_is_switched_in_one_line_without_indexing_and_can_go_back_to_the_verdict(repo, capsys, monkeypatch):
+    # For /aleph configure: a switch, not a 30-second pass over the repository and a 15-line list.
+    from aleph_zero import cli as cli_module
+
+    monkeypatch.setattr(firstrun, "on_terminal", lambda: False)
+    monkeypatch.setattr(cli_module, "_open", lambda cwd: pytest.fail("indexed for a switch"))
+    for flag, chosen in (("--dense", True), ("--no-dense", False), ("--auto-dense", None)):
+        assert _setup(repo, flag) == 0
+        out = capsys.readouterr().out.strip()
+        assert out.count("\n") == 0 and "search by meaning" in out
+        assert settings.read(settings.repo_file(gitio.common_dir(repo.root))).get("dense") is chosen
+
+
+def test_the_status_says_the_verdict_the_choice_and_whether_the_worker_is_there(repo):
+    Engine(repo.root).search("refresh token")                           # indexed: its main language is known
+    vectors = Engine(repo.root).status()["vectors"]
+    assert vectors["chosen"] is None and vectors["verdict"]["helps"] is False and "python" in vectors["verdict"]["why"]
+    assert vectors["worker_installed"] is False
+    settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
+    vectors = Engine(repo.root).status()["vectors"]
+    assert vectors["chosen"] is True and "python" in vectors["verdict"]["why"]      # the verdict is still said

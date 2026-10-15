@@ -232,8 +232,16 @@ def _setup(args) -> int:
     from . import firstrun, settings
     from .embed import setup as embed_setup
 
-    if args.embed and args.no_dense:
-        raise SystemExit("aleph setup: --embed makes this repository's vectors in order to use them; it does not go with --no-dense")
+    if args.embed and (args.no_dense or args.auto_dense):
+        raise SystemExit("aleph setup: --embed makes this repository's vectors in order to use them; it goes with --dense only")
+    others = bool(args.worker or args.memory or args.aeon_source or args.embed or args.source or args.untracked_cache or args.again)
+    if (args.dense or args.no_dense or args.auto_dense) and not others and not args.json and _in_repository(args.cwd):
+        # A switch (for a person, or /aleph configure): one line, no pass over the repository, no list.
+        repo_file = settings.repo_file(gitio.common_dir(args.cwd))
+        settings.change(repo_file, dense=True if args.dense else False if args.no_dense else None, hint_shown=True)
+        print("search by meaning: " + ("on in this repository" if args.dense else "off in this repository" if args.no_dense
+                                       else "as the language's benchmark verdict says, for this repository"))
+        return 0
     # With --json standard output is the list and nothing else: what was done is said beside it.
     say = lambda text: print(text, file=sys.stderr if args.json else sys.stdout, flush=True)  # noqa: E731
     failed: list[str] = []
@@ -297,7 +305,7 @@ def _setup(args) -> int:
         return 2 if failed else 0
     status, found, steps = now()
     repo_file = Path(status["index"]).parent / "settings.json"
-    flagged = bool(machine_flags or project_flags)
+    flagged = bool(machine_flags or project_flags or args.auto_dense)
 
     def needs_repository(name: str, what: str) -> bool:
         if status.get("repository", True):
@@ -314,8 +322,8 @@ def _setup(args) -> int:
         failed.append("--embed")
         print("aleph setup --embed: the embedding worker is not installed, so no vectors can be made: "
               f"`{COMMAND} setup --worker` first (310 MB; uses the network)", file=sys.stderr)
-    elif args.dense or args.no_dense or args.embed:
-        settings.change(repo_file, dense=not args.no_dense)     # kept for the repository: vectors made are then used
+    elif args.dense or args.no_dense or args.embed or args.auto_dense:
+        settings.change(repo_file, dense=None if args.auto_dense else not args.no_dense)     # kept for the repository
         if args.embed:
             flag("--embed", lambda: say(act("embed")))
     if args.untracked_cache and needs_repository("--untracked-cache", "git's untracked cache is a repository's"):
@@ -527,6 +535,8 @@ def main(argv: list[str] | None = None) -> int:
     chosen.add_argument("--dense", action="store_true", help="use search by meaning in this repository, whatever its language's verdict "
                                                              "(a running server then makes the vectors in the background; --embed makes them now)")
     chosen.add_argument("--no-dense", action="store_true", help="do not use search by meaning in this repository")
+    chosen.add_argument("--auto-dense", action="store_true", help="forget this repository's choice: search by meaning as its "
+                                                                  "language's benchmark verdict says")
     first.add_argument("--untracked-cache", action="store_true", help="git's untracked cache, in this worktree's index (no configuration is changed)")
     first.add_argument("--memory", action="store_true", help="build Aeon's core, so that memories are recalled by meaning (a few minutes; "
                                                              "uses the network unless --aeon-source is given)")

@@ -818,11 +818,23 @@ class Engine:
     def _vector_status(self, index: Index, view: View) -> dict:
         from .embed.client import VECTOR_KIND
 
+        from .embed import setup
+
         store = self._store(index, view)
         have, total = store.coverage(index)
         enabled, why = self._dense_decision(index)
+        # What a settings pane shows beside the outcome: the repository's own choice (None: none), the verdict of its
+        # main language whatever was chosen, and whether there is a worker to make vectors with.
+        chosen_file = Path(index.conn.filename).parent / "settings.json" if index.conn.filename else None
+        chosen = settings.read(chosen_file).get("dense") if chosen_file is not None else None
+        helps, verdict_why = dense_policy.decide(None, next(iter(index.languages()), None))
+        try:
+            worker_there = setup.installed()
+        except OSError:
+            worker_there = None     # the cache directory cannot be read: the status still answers
         return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total,
-                **store.rows()}
+                "chosen": chosen if isinstance(chosen, bool) else None, "verdict": {"helps": helps, "why": verdict_why},
+                "worker_installed": worker_there, **store.rows()}
 
     def _dense_decision(self, index: Index) -> tuple[bool, str]:
         """Whether vectors take part for the worktree this index is synced to, and why. A flag or ALEPH_DENSE
