@@ -744,3 +744,38 @@ def test_only_the_grammars_this_view_needs_are_fetched_and_said_first(repo, monk
     monkeypatch.setattr(parse, "announce", said.append)
     _index(repo).sync(build_view(repo.root))
     assert fetched == [["python"]] and said == [["python"]]
+
+
+def test_files_without_their_grammar_are_read_again_in_each_view_and_an_unfinished_one_is_not_forgotten(make_repo, tmp_path, monkeypatch):
+    # Review of 0.1.2: a switch to a view with nothing to read again must not forget the view that still has some,
+    # and rows of a view nobody is on must not keep every sync from its shortcut.
+    from aleph_zero import indexer
+    from aleph_zero.lang import parse
+
+    repo = make_repo(tmp_path / "r")
+    repo.write("README.md", "# r\n")
+    repo.commit("readme")
+    repo.git("checkout", "-q", "-b", "first")                          # a view with nothing to read again
+    repo.git("checkout", "-q", "-b", "other")
+    repo.write("a.py", "def alpha():\n    return 1\n")
+    repo.write("b.py", "def beta():\n    return 2\n")
+    repo.commit("code")
+    real = parse.pack.get_parser
+    monkeypatch.setattr(parse.pack, "get_parser", lambda name: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr(parse, "RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(indexer, "GRAMMAR_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(parse, "_PARSERS", {})
+    monkeypatch.setattr(parse, "_FAILED", {})
+    index = _index(repo)
+    index.sync(build_view(repo.root))                                   # 'other': a.py and b.py without definitions
+    monkeypatch.setattr(parse.pack, "get_parser", real)
+    monkeypatch.setattr(indexer, "GRAMMAR_RETRY_SECONDS", 3600.0)        # one look only in this test
+    index.sync(build_view(repo.root), budget_seconds=0.0)                # looks, finds python, reads nothing yet
+    repo.git("checkout", "-q", "first")
+    index.sync(build_view(repo.root), budget_seconds=0.0)                # a view with no such file
+    repo.git("checkout", "-q", "other")
+    index.sync(build_view(repo.root))                                   # back: read again, though no new look is due
+    names = {row[0] for row in index.conn.execute("SELECT name FROM symbols")}
+    assert {"alpha", "beta"} <= names
+    assert index._collections == indexer.collections(index.conn)       # its own replacements do not look like another's
+    assert index.sync(build_view(repo.root)).indexed == 0

@@ -157,7 +157,8 @@ class Index:
         self._collections = -1       # the index's count of removals when the list of chunks was built
         self._touched_at = 0.0
         self._grammar_look_at = 0.0     # when to look next whether a grammar that could not load has arrived
-        self._regrammar: list[str] = []     # families whose grammar arrived, while their window-chunked files are re-read
+        self._regrammar: list[str] = []     # families whose grammar arrived, as the last look found them
+        self._again_left = False            # this view still has files of those families to read again
 
     def sync(self, view: View, budget_seconds: float = 5.0,
              stop: Callable[[], bool] | None = None) -> SyncReport:
@@ -168,10 +169,11 @@ class Index:
         collected this view's content, or indexed what was pending here."""
         started = time.monotonic()
         changed = view.fingerprint != self._fingerprint
-        regrammar = self._grammars_arrived()
+        looked = self._look_for_grammars()
+        regrammar = self._regrammar
         # Read before looking: a commit by another session after this point is seen as a change next time.
         version = self.conn.pragma("data_version")
-        if (not changed and not regrammar and version == self._version and self._missing == self._unreadable
+        if (not changed and not looked and not self._again_left and version == self._version and self._missing == self._unreadable
                 and all(asked > started - RETRY_SECONDS for asked in self._deferred.values())):
             # The same view, nothing pending, and no other session has written: the index is as it was.
             self._touch()
@@ -267,16 +269,13 @@ class Index:
                         self._deferred[key] = time.monotonic()
                 if prepared:
                     store(prepared)
+        removals = collections(self.conn)     # again: storing may have replaced rows, here or in another session
         if changed or indexed or skipped or frozenset(missing) != self._missing or removals != self._collections:
             # Also when another session indexed something of this view, or content was removed:
             # the same blobs may be back under new chunk ids.
             self._refresh_view_chunks()
             self._collections = removals
-        if regrammar and again_keys <= stored:
-            self._regrammar = []        # this view is read again; another view's files are when it is synced
-            with transaction(self.conn):
-                if not self.conn.execute("SELECT 1 FROM blobs WHERE kind = ? LIMIT 1", (NO_GRAMMAR,)).fetchall():
-                    self.conn.execute("DELETE FROM meta WHERE key = 'no_grammar'")
+        self._again_left = bool(again_keys - stored)    # the next sync goes on with them, whenever the next look is
         self._missing = frozenset(missing) - stored
         self._indexed = self._keys - self._missing if self._missing else self._keys  # no copy on the usual path
         # What git could not supply is not waited for: it is asked for again in a minute,
@@ -517,25 +516,32 @@ class Index:
                     self.prepared_elsewhere += 1
             yield prepared, unread
 
-    def _grammars_arrived(self) -> list[str]:
-        """The families whose grammar could not load when some of their files were read, and loads now: their files
-        are read again. Looked at once in GRAMMAR_RETRY_SECONDS at most, and only while the index holds any such file
-        (a flag in `meta`, so that the usual case costs one lookup); kept until this view's files are all read again."""
-        if self._regrammar:
-            return self._regrammar
+    def _look_for_grammars(self) -> bool:
+        """Which families had files read while their grammar could not load, and load now (`self._regrammar`): their
+        files are read again, in each view as it is synced. Looked at once in GRAMMAR_RETRY_SECONDS at most, and only
+        while the index holds any such file (a flag in `meta`, so that the usual case costs one lookup). True when
+        this look found some: the sync then looks at its whole view. The flag goes when no such file is left (read
+        again, or collected with an old view)."""
         now = time.monotonic()
         if now < self._grammar_look_at:
-            return []
+            return False
         self._grammar_look_at = now + GRAMMAR_RETRY_SECONDS
         if not self.conn.execute("SELECT 1 FROM meta WHERE key = 'no_grammar'").fetchall():
-            return []
+            self._regrammar = []
+            return False
+        families = [row[0] for row in self.conn.execute("SELECT DISTINCT family FROM blobs WHERE kind = ?", (NO_GRAMMAR,))]
+        if not families:
+            with transaction(self.conn):
+                if not self.conn.execute("SELECT 1 FROM blobs WHERE kind = ? LIMIT 1", (NO_GRAMMAR,)).fetchall():
+                    self.conn.execute("DELETE FROM meta WHERE key = 'no_grammar'")
+            self._regrammar = []
+            return False
         from .lang import parse
 
-        families = [row[0] for row in self.conn.execute("SELECT DISTINCT family FROM blobs WHERE kind = ?", (NO_GRAMMAR,))]
         known = [family for family in families if family in lang.PROFILES]
         parse.fetch_missing({lang.PROFILES[family].grammar for family in known})     # said first, on a terminal
         self._regrammar = [family for family in known if parse.loads(lang.PROFILES[family])]
-        return self._regrammar
+        return bool(self._regrammar)
 
     def _store(self, item: _Prepared) -> bool:
         """Write one blob. False if another session had already written it."""
