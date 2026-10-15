@@ -181,7 +181,7 @@ test('the pane says how to close it and how to change its settings, and has keys
   await $.command.run({ command: 'aleph', args: '' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Esc/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\/plugin/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\/aleph configure/ })).toBeDefined()
   await ui.press({ key: 'model-next' })
   await ui.press({ key: 'effort-next' })
   expect(saved.get('aleph-zero.chat-settings')).toEqual({ model: 'sonnet', effort: 'high' })

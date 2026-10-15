@@ -127,3 +127,14 @@ def test_the_engine_launcher_passes_its_arguments_for_the_configure_pane(tmp_pat
     done = subprocess.run(["sh", str(serve.with_name("engine.sh")), "--cwd", "/repo", "source", "list", "--json"],
                           capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "UV_TOOL_BIN_DIR": str(bin_dir)})
     assert done.stdout.strip() == "stub --cwd /repo source list --json"
+
+
+def test_the_engine_launcher_names_the_engine_it_would_run(tmp_path):
+    # /aleph configure drafts `! <engine> setup --worker`: the path, as a person's PATH may not have it, and never TeX's.
+    serve = _installed_copy(tmp_path)
+    bin_dir = tmp_path / "uv-bin"
+    _stub(bin_dir)
+    _stub(tmp_path / "texbin", name="aleph", says="tex")
+    done = subprocess.run(["sh", str(serve.with_name("engine.sh")), "--path"], capture_output=True, text=True,
+                          env={"PATH": f"{tmp_path / 'texbin'}:/usr/bin:/bin", "HOME": str(tmp_path), "UV_TOOL_BIN_DIR": str(bin_dir)})
+    assert done.returncode == 0 and done.stdout.strip() == str(bin_dir / "aleph-zero")

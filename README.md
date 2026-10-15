@@ -136,6 +136,11 @@ aleph status
   worktree several times faster.
 - `aleph status` shows the main language, whether vectors are on and why, and the linked
   sources. In Claude Code, `/aleph check` tests the plugin's connection to the engine.
+- In Claude Code, `/aleph configure` opens the same settings in a pane: the plugin's options
+  below, search by meaning and git's untracked cache for this project, linked sources (a
+  path or URL to link, a digit to unlink), and whether the worker and Aeon are built on this
+  machine. A build takes minutes, so for those a key copies the command (`… setup --worker`,
+  `… setup --memory`) for you to run in a terminal.
 
 Nothing else is needed afterwards. Edits, pulls and branch switches are picked up at the
 next question, in the docs too, and missing vectors are made in the background.
@@ -150,8 +155,9 @@ claude plugin update aleph-zero@aleph-zero
 
 ### Plugin options
 
-Set at install (`--config KEY=VALUE`), later with
-`claude plugin configure aleph-zero@aleph-zero`, or with `/plugin` in Claude Code.
+Set at install (`--config KEY=VALUE`), later with `/aleph configure` or `/plugin` in Claude
+Code, or with `claude plugin configure aleph-zero@aleph-zero`. A change applies at once,
+except `graph`, which the engine reads when Claude Code starts it: from the next session.
 
 | Option | Values | What it does |
 |---|---|---|

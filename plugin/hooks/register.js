@@ -11,6 +11,10 @@ import {
   grepToolFoundNothing, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
+import {
+  CONFIG_PANE, FOOTER_COLUMNS, LABEL_COLUMNS, OPTIONS, commandLine, engineCommand, fit, lastLine, machineState, meaning, nextValue, settingKey,
+  valueOf, vectorsRow,
+} from './configure.js'
 
 const SERVER = 'aleph'
 const ENGINE_MS = 400   // what the engine is given to answer
@@ -62,6 +66,67 @@ const CHAT_USE = 'aleph-zero.chat-use'             // how often answers were cit
 const CHAT_ENGINE_MS = 2500                        // the chat may wait longer for the engine than a hook may
 const SESSION = 'chat-' + Math.random().toString(16).slice(2, 14)   // names this load of the mod in what it remembers
 const chat = { turns: [], busy: null, serial: 0, model: DEFAULTS.model, effort: DEFAULTS.effort, tokens: 0, loaded: false, note: '', draft: '' }
+
+// ---- /aleph configure ------------------------------------------------------------------------
+// What the pane last read from the engine. Module state: a changed plugin option loads the mod again, and the pane
+// then reads it all again, which is what it should show anyway.
+const cfg = { status: undefined, error: '', loading: false, busy: '', note: '', command: '', removing: null, enginePath: '', draft: '' }
+
+// The engine's status for the session's directory, and the engine's path for the commands it copies. Never raises.
+async function readConfig($) {
+  if (cfg.loading) return
+  cfg.loading = true
+  try {
+    const cwd = await $.session.cwd()
+    const [status, path] = await Promise.all([
+      $.process.run(engineCommand($.plugin.root, cwd, ['status']), { timeoutMs: 20000 }),
+      cfg.enginePath ? null : $.process.run(['sh', $.plugin.root + '/scripts/engine.sh', '--path'], { timeoutMs: 5000 }).catch(() => null),
+    ])
+    if (path && path.exitCode === 0) cfg.enginePath = path.stdout.trim()
+    if (status.exitCode === 0) {
+      cfg.status = JSON.parse(status.stdout)
+      cfg.error = ''
+    } else {
+      cfg.status = null
+      cfg.error = lastLine(status.stderr) || 'the engine did not answer (exit ' + status.exitCode + ')'
+    }
+  } catch (error) {
+    cfg.status = null
+    cfg.error = 'the engine could not be asked: ' + (error && error.message ? error.message : String(error))
+  } finally {
+    cfg.loading = false
+    $.ui.invalidate('ui.render')
+  }
+}
+
+// One of the engine's commands for this repository, then the status read again. What it printed last is the note.
+async function runEngine($, args, doing) {
+  if (cfg.busy) return
+  cfg.busy = doing
+  cfg.note = ''
+  cfg.command = ''
+  $.ui.invalidate('ui.render')
+  try {
+    const cwd = await $.session.cwd()
+    const stream = $.process.spawn({ argv: engineCommand($.plugin.root, cwd, args), cwd })
+    let said = ''
+    for await (const piece of stream) {
+      const line = lastLine(piece.text)
+      if (line) {
+        said = line
+        cfg.busy = doing + ' · ' + line
+        $.ui.invalidate('ui.render')
+      }
+    }
+    const ended = await stream.result
+    cfg.note = ended && ended.code === 0 ? said || 'done' : 'failed: ' + (said || 'exit ' + (ended && ended.code))
+  } catch (error) {
+    cfg.note = 'failed: ' + (error && error.message ? error.message : String(error))
+  } finally {
+    cfg.busy = ''
+    await readConfig($)
+  }
+}
 
 // One engine call for the chat: as in `ask`, never longer than its limit, and null for any failure.
 async function lookup($, tool, args) {
@@ -205,8 +270,8 @@ export function register(on, options) {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
     await $.command.register({
       name: 'aleph',
-      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
-      argumentHint: '[stats [last] | check [model]]',
+      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
+      argumentHint: '[configure | stats [last] | check [model]]',
       immediate: true,
     })
     return next(e)
@@ -230,10 +295,21 @@ export function register(on, options) {
       }
       return {}
     }
+    if (args === 'configure' || args === 'config') {
+      cfg.note = ''
+      cfg.command = ''
+      cfg.removing = null
+      void readConfig($)
+      const opened = await $.ui.open({ id: CONFIG_PANE, title: 'Aleph configure', focus: true, closeOnEscape: true, columns: 64 })
+      if (opened && opened.isPlaced === false) {
+        return { text: 'The settings could not be opened here: ' + (opened.reason || 'this surface draws no panes') }
+      }
+      return {}
+    }
     if (!['stats', 'stats last', 'check', 'check model'].includes(args)) {
       // A question typed after the command would be answered with a report, and the row
       // would enter the conversation. Questions go into the pane.
-      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `stats`, `stats last`, `check` and `check model`.' }
+      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `configure`, `stats`, `stats last`, `check` and `check model`.' }
     }
     if (args === 'stats last') {
       // The session before this one (any session on this machine): a headless run cannot be asked afterwards.
@@ -312,7 +388,7 @@ export function register(on, options) {
     ])
     const empty = [
       Text({ key: 'hello', dimColor: true, children: ['Ask about this repository: where something is handled, how it works, what its documentation says. Answers cite path:line.'] }),
-      Text({ key: 'hello-keys', dimColor: true, children: ['ctrl+x tab moves between the conversation and this pane; /aleph opens it again; /plugin configures the plugin. Answers are kept for later sessions: `aleph-zero memory list`, and `forget`.'] }),
+      Text({ key: 'hello-keys', dimColor: true, children: ['ctrl+x tab moves between the conversation and this pane; /aleph opens it again; /aleph configure sets Aleph up. Answers are kept for later sessions: `aleph-zero memory list`, and `forget`.'] }),
     ]
     const messages = Box({
       key: 'messages', flexDirection: 'column', rowGap: 1,
@@ -395,6 +471,157 @@ export function register(on, options) {
         Box({ key: 'footer', flexDirection: 'row', columnGap: 2, children: [Text({ key: 'footer-hint', dimColor: true, children: ['Enter asks · Esc for keys:'] }), ...keys] }),
       ],
     })
+  })
+
+  // ---- /aleph configure's pane -----------------------------------------------------------------
+
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== CONFIG_PANE) return next(e)
+    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    if (cfg.status === undefined && !cfg.loading) void readConfig($)   // loaded again after an option changed
+    const columns = Math.max(30, Number((e.props || {}).bodyColumns) || 60)
+    const rows = []
+    const heading = (key, text) => rows.push(Text({ key, bold: true, children: [text] }))
+    // One line a row: the key and name in a column of their own, the value whole, what it means cut to what fits.
+    const row = (key, control, value, detail) => rows.push(Box({
+      key, flexDirection: 'row', columnGap: 1,
+      children: [
+        Box({ key: key + '-k', width: LABEL_COLUMNS, flexShrink: 0, children: [control] }),
+        Box({ key: key + '-vb', flexShrink: 0, children: [Text({ key: key + '-v', children: [value] })] }),
+        ...(detail ? [Text({ key: key + '-d', dimColor: true, wrap: 'truncate-end', children: [detail] })] : []),
+      ],
+    }))
+    const say = (key, text) => rows.push(Text({ key, dimColor: true, children: [fit(text, columns)] }))
+
+    // The plugin's options: through Claude Code's settings, as /plugin would; they need neither the engine nor its tools.
+    heading('h-plugin', 'Plugin')
+    for (const option of OPTIONS) {
+      const value = valueOf(options, option)
+      row('o-' + option.key, Button({
+        key: 'b-' + option.key, label: option.label, hotkey: option.hotkey, plain: true,
+        onPress: async () => {
+          const to = nextValue(option, value)
+          const set = await $.config.set({ key: settingKey(option), value: to }).catch((error) => ({ deny: error && error.message ? error.message : String(error) }))
+          // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
+          if (set && set.deny) {
+            cfg.note = option.label + ' was not changed: ' + set.deny
+            $.ui.invalidate('ui.render')
+          }
+        },
+      }), value, meaning(option, value))
+    }
+
+    // This repository: the engine's settings for it and its linked sources.
+    const status = cfg.status
+    heading('h-repo', 'Repository' + (status && status.root ? ' · ' + fit(String(status.root).split('/').filter(Boolean).pop() || status.root, columns - 13) : ''))
+    const removable = []
+    if (status === undefined || (status === null && cfg.loading)) {
+      say('r-reading', 'reading the engine\'s status…')
+    } else if (status === null) {
+      say('r-error', cfg.error)
+    } else if (status.repository === false) {
+      say('r-plain', 'not a git repository: search by meaning, linked sources and git\'s cache are set in one')
+    } else {
+      const vectors = vectorsRow(status.vectors)
+      row('o-dense', Button({ key: 'b-dense', label: 'search by meaning', hotkey: 'd', plain: true, onPress: () => runEngine($, ['setup', vectors.flag], 'switching search by meaning') }),
+        vectors.value, vectors.note)
+      const cached = Boolean(status.untracked_cache)
+      row('o-cache', Button({
+        key: 'b-cache', label: 'untracked cache', hotkey: 'u', plain: true,
+        onPress: async () => {
+          if (cfg.busy) return
+          cfg.busy = 'changing git\'s untracked cache'
+          $.ui.invalidate('ui.render')
+          try {
+            const done = await $.process.run(['git', 'update-index', cached ? '--no-untracked-cache' : '--untracked-cache'], { cwd: await $.session.cwd(), timeoutMs: 60000 })
+            cfg.note = done.exitCode === 0 ? lastLine(done.stderr) || 'git\'s untracked cache is ' + (cached ? 'off' : 'on') : 'git: ' + lastLine(done.stderr)
+          } catch (error) {
+            cfg.note = 'git could not be run: ' + (error && error.message ? error.message : String(error))
+          } finally {
+            cfg.busy = ''
+            await readConfig($)
+          }
+        },
+      }), cached ? 'on' : 'off', 'git\'s; a faster look at the worktree')
+      const linked = Array.isArray(status.sources) ? status.sources : []
+      say('s-head', linked.length ? 'Linked sources, searched with it (a digit unlinks):' : 'No linked sources: docs or code elsewhere, searched with it.')
+      linked.slice(0, 9).forEach((source, index) => {
+        const name = String(source.name)
+        removable.push(name)
+        row('src-' + index, Button({
+          key: 'b-src-' + index, label: name, hotkey: String(index + 1), plain: true, dimColor: true,
+          onPress: () => {
+            cfg.removing = name
+            $.ui.invalidate('ui.render')
+          },
+        }), (source.files || 0) + (source.files === 1 ? ' file' : ' files'), String(source.location || '') + (source.last_error ? ' · ' + source.last_error : ''))
+      })
+      if (cfg.removing && removable.includes(cfg.removing)) {
+        const name = cfg.removing
+        rows.push(Box({
+          key: 'confirm', flexDirection: 'row', columnGap: 2,
+          children: [
+            Text({ key: 'confirm-q', children: ['Unlink ' + name + '? Its files leave the index.'] }),
+            Button({ key: 'b-yes', label: 'unlink', hotkey: 'y', plain: true, onPress: () => { cfg.removing = null; return runEngine($, ['source', 'remove', name], 'unlinking ' + name) } }),
+            Button({ key: 'b-no', label: 'keep', hotkey: 'n', plain: true, onPress: () => { cfg.removing = null; $.ui.invalidate('ui.render') } }),
+          ],
+        }))
+      }
+      // The field is not focused on opening, or the keys above would be typed into it; a moves the focus onto it (Tab
+      // leaves the pane for the prompt), Esc back out of it.
+      const field = Input({
+        key: 'source', placeholder: 'a path or a git URL; Enter links it', value: cfg.draft, submitLabel: 'link',
+        onInput: (value) => { cfg.draft = String(value || '') },
+        onSubmit: async (value) => {
+          const location = String(value || '').trim()
+          if (!location || cfg.busy) return
+          cfg.draft = ''
+          await runEngine($, ['source', 'add', location], 'linking ' + location + (/^[a-z]+:\/\/|^git@/.test(location) ? ' (cloned first)' : ''))
+        },
+      })
+      rows.push(Box({
+        key: 'o-link', flexDirection: 'row', columnGap: 1,
+        children: [
+          Box({ key: 'o-link-k', width: LABEL_COLUMNS, flexShrink: 0, children: [Button({
+            key: 'b-link', label: 'link a source', hotkey: 'a', plain: true,
+            onPress: () => $.ui.focus({ requestId: CONFIG_PANE, key: 'source' }).catch(() => undefined),
+          })] }),
+          Box({ key: 'o-link-f', flexGrow: 1, children: [field] }),
+        ],
+      }))
+    }
+
+    // This machine: what is built once. A build takes minutes and must not die with the pane, nor run as the model's
+    // tool: its command is copied for a terminal, and shown whole.
+    heading('h-machine', 'Machine')
+    if (status) {
+      const vectors = status.vectors || {}
+      const memories = status.memory || {}
+      const machine = [
+        ['worker', 'w', 'embedding worker', machineState(vectors.worker_installed, vectors.worker_current), '310 MB and a build', 'setup --worker'],
+        ['memory', 'm', 'memory (Aeon)', machineState(memories.aeon_installed, memories.aeon_current), 'a build of a minute', 'setup --memory'],
+      ]
+      for (const [key, hotkey, label, state, cost, args] of machine) {
+        const wanted = state !== 'installed' && state !== 'unknown'
+        row('m-' + key, Button({
+          key: 'b-' + key, label, hotkey, plain: true,
+          onPress: async (press) => {
+            cfg.command = commandLine(cfg.enginePath, args)
+            const copied = await $.ui.copy({ text: cfg.command, ...(press && press.surface ? { surface: press.surface } : {}) }).catch(() => null)
+            cfg.note = copied && copied.isCopied ? 'Copied; run it in a terminal (it goes on if this pane closes):' : 'Run this in a terminal:'
+            $.ui.invalidate('ui.render')
+          },
+        }), state, wanted ? cost + '; the key copies it' : 'the key copies a rebuild')
+      }
+    } else {
+      say('m-wait', status === null ? 'what is built is known once the engine answers' : 'reading…')
+    }
+
+    if (cfg.busy) rows.push(Text({ key: 'busy', color: 'gray', children: [fit('✻ ' + cfg.busy, columns)] }))
+    else if (cfg.note) say('note', cfg.note)
+    if (!cfg.busy && cfg.command) rows.push(Text({ key: 'command', children: [cfg.command] }))   // whole, to select by hand too
+    rows.push(Text({ key: 'footer', dimColor: true, children: [fit('A key changes its row · Esc closes · ctrl+x tab: prompt', FOOTER_COLUMNS)] }))
+    return Box({ key: 'configure', flexDirection: 'column', children: rows })
   })
 
   // ---- the meter ------------------------------------------------------------------------------

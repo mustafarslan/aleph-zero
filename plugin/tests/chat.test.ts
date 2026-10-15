@@ -50,7 +50,7 @@ test('the rules ask for a direct answer, and know how Aleph itself is set up', a
   expect(RULES).toContain('never about what you were shown')
   expect(RULES).toContain('may be about Aleph itself')
   expect(RULES).toContain('aleph-zero setup --source')
-  expect(RULES).toContain('/plugin')
+  expect(RULES).toContain('/aleph configure')
 })
 
 test('only locations that were among the excerpts count as citations', async () => {

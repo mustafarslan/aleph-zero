@@ -415,6 +415,8 @@ def test_the_status_says_the_verdict_the_choice_and_whether_the_worker_is_there(
     vectors = Engine(repo.root).status()["vectors"]
     assert vectors["chosen"] is None and vectors["verdict"]["helps"] is False and "python" in vectors["verdict"]["why"]
     assert vectors["worker_installed"] is False
+    memories = Engine(repo.root).status()["memory"]
+    assert memories["aeon_installed"] is False and memories["aeon_current"] is False     # for /aleph configure's Machine rows
     settings.change(settings.repo_file(gitio.common_dir(repo.root)), dense=True)
     vectors = Engine(repo.root).status()["vectors"]
     assert vectors["chosen"] is True and "python" in vectors["verdict"]["why"]      # the verdict is still said

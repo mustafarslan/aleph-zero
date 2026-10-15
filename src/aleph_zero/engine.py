@@ -732,7 +732,15 @@ class Engine:
     def _memory_counts(self, view: View) -> dict:
         memories = self._memories(view, create=False)
         counts = memories.counts() if memories is not None else {"memories": 0, "with_vector": 0}
-        return {**counts, "store": "aeon" if memory.open_store(state_dir(view.common_dir)) is not None else "none"}
+        from . import aeon_setup
+
+        try:
+            built, current = aeon_setup.installed(), aeon_setup.current()
+        except OSError:
+            built = current = None
+        # Aeon's build on this machine beside this repository's store: a settings pane says installed or out of date.
+        return {**counts, "store": "aeon" if memory.open_store(state_dir(view.common_dir)) is not None else "none",
+                "aeon_installed": built, "aeon_current": current}
 
     def _vector(self, text: str, kind: str, seconds: float):
         """The vector of a text from the embedding worker, or None when the worker is not
@@ -829,12 +837,12 @@ class Engine:
         chosen = settings.read(chosen_file).get("dense") if chosen_file is not None else None
         helps, verdict_why = dense_policy.decide(None, next(iter(index.languages()), None))
         try:
-            worker_there = setup.installed()
+            worker_there, worker_current = setup.installed(), setup.current()
         except OSError:
-            worker_there = None     # the cache directory cannot be read: the status still answers
+            worker_there = worker_current = None     # the cache directory cannot be read: the status still answers
         return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total,
                 "chosen": chosen if isinstance(chosen, bool) else None, "verdict": {"helps": helps, "why": verdict_why},
-                "worker_installed": worker_there, **store.rows()}
+                "worker_installed": worker_there, "worker_current": worker_current, **store.rows()}
 
     def _dense_decision(self, index: Index) -> tuple[bool, str]:
         """Whether vectors take part for the worktree this index is synced to, and why. A flag or ALEPH_DENSE

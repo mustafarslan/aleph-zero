@@ -31,7 +31,7 @@ export const RULES = [
   '- Search by meaning here: `aleph-zero setup --embed` (it needs the embedding worker: `aleph-zero setup --worker`, a 310 MB download).',
   '- After a pull: `aleph-zero update`. What the index holds: `aleph-zero status`. Whether everything is in place: `aleph-zero doctor`. `aleph-zero setup` on its own asks about each thing once.',
   '- What this side chat keeps for later sessions: `aleph-zero memory list` and `aleph-zero memory forget`.',
-  '- The plugin\'s options (how far it steers Claude Code, the graph tools): /plugin in Claude Code, then aleph-zero, then Configure. This chat\'s model and effort: the pickers at its top, or m and e.',
+  '- The plugin\'s options (how far it steers Claude Code, the graph tools), search by meaning here, linked sources and what is built on this machine: `/aleph configure` in Claude Code. This chat\'s model and effort: m and e in this pane.',
 ].join('\n')
 
 // Names in a question that look like identifiers: worth a lookup by name.
