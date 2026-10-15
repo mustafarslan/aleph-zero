@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.4
+
+The side chat (`/aleph`), from its first use by a person.
+
+- A question no longer reads as part of the last excerpt: once it was taken for a line of a README and answered as
+  file content. Excerpts and the question each have tags of their own, which their text cannot open or close.
+- Answers come directly, in the first person, about the repository, instead of about "the excerpts". The small
+  model (the default) still does so now and then; the larger ones follow it better.
+- It answers questions about Aleph itself (linking documentation, search by meaning, its own settings) from a
+  short guide, and says which it means when a question could be about Aleph or the repository.
+- The pane says how to close it and how to come back, and has keys: c closes, m and e change model and effort
+  (Esc first leaves the question field).
+
 ## 0.1.3
 
 From the plugin's run in Claude Code sessions (nine headless sessions, haiku).
