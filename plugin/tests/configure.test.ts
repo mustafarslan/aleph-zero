@@ -161,6 +161,18 @@ test('a build is copied for a terminal with the engine\'s path and shown whole, 
   expect([seen.fills.length, seen.submits, seen.spawns.length]).toEqual([0, 0, 0])
 })
 
+test('an engine older than the plugin is named, with how to update it, and its rows are left out', async ($, on) => {
+  const older = status()
+  delete (older.vectors as any).chosen
+  delete (older.memory as any).aeon_installed
+  world(on, { status: older })
+  const ui = await open($)
+  expect(await ui.find({ type: 'Text', text: /The engine is older than this plugin: `uv tool install --reinstall/ })).toBeDefined()
+  expect(await ui.find({ key: 'b-dense' })).toBeUndefined()
+  expect(await ui.find({ key: 'b-worker' })).toBeUndefined()
+  expect(await ui.find({ key: 'b-rung' })).toBeDefined()
+})
+
 test('outside a git repository the repository rows are left out, and said why', async ($, on) => {
   world(on, { status: status({ repository: false, sources: [] }) })
   const ui = await open($)

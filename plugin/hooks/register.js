@@ -97,8 +97,13 @@ async function readConfig($) {
     ])
     if (path && path.exitCode === 0) cfg.enginePath = path.stdout.trim()
     if (status.exitCode === 0) {
-      cfg.status = JSON.parse(status.stdout)
-      cfg.error = ''
+      const read = JSON.parse(status.stdout)
+      // An engine from before 0.1.6 says neither the repository's choice nor what is built: the plugin was updated
+      // through Claude Code and the engine was not.
+      const older = !read.vectors || !('chosen' in read.vectors) || !read.memory || !('aeon_installed' in read.memory)
+      cfg.status = older ? null : read
+      cfg.error = older ? 'The engine is older than this plugin: `uv tool install --reinstall '
+        + 'git+https://github.com/mustafarslan/aleph-zero.git` in a terminal, then /aleph configure again.' : ''
     } else {
       cfg.status = null
       cfg.error = lastLine(status.stderr) || 'the engine did not answer (exit ' + status.exitCode + ')'

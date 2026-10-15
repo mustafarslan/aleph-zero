@@ -61,6 +61,12 @@ Things that are not being done now on purpose. Each entry says what it is, why i
 - **If the pane's command leaves a row in the transcript:** the design's fallback is a button in the band above the prompt instead of a command. Headless, a mod command appended no row.
 - **After that:** a week of real use decides whether the next steps are worth building (block toggles, inserting a selection, a stale check before insert). The mod counts how often answers cite a location and how often they are inserted.
 
+## 0c. `/aleph configure` (built 2026-10-15 on your asking; 0.1.6)
+
+- **What was tried, in a real Claude Code 2.1.300 session in the sandbox (auto and default permission modes):** every key. `s` wrote the rung to the settings, the mod was loaded again and the open pane redrew with it; `d`, `u`, linking a path and a URL, unlinking after `y`; `w`/`m` copied the build command; an option pressed while a command ran was refused with a word, not run; an engine older than the plugin is named with the command that updates it. Default permission mode asks nothing: the mod's own commands are not the agent's tools.
+- **Changed from the design you saw:** the builds were to be drafted into the prompt box as `! <engine> setup --worker`. In use, a line filled in there that starts with `!` is sent to the model as a message (it then ran the command with its Bash tool), not run by the shell. The key now copies the command for a terminal and shows it whole.
+- **Left open (from agy's review, not taken):** in a directory the engine refuses (your home directory, `/tmp`, more than 20,000 files) `status` fails, so the pane shows the refusal and not the Machine rows; on a repository never indexed `status` may fetch tree-sitter grammars (a network call, as it already did); where git's configuration sets `core.untrackedCache=true`, `u` cannot turn the cache off (git says so, and the pane shows git's words); Esc inside the source field closes the whole pane (what was typed is kept).
+
 ## 1. The long GPU run for Benchmark C (decides whether semantic search is on by default)
 
 - **What:** embed the large Loc-Bench repositories so the Python benchmark has about 400 questions instead of 235. This decides Python only (see 1b for the other languages). The gate is "search with vectors beats search by words and names by at least 5 points of file recall@10, with an interval that excludes zero" (M2 plan, Task 8). With 235 questions the interval is roughly ±6 points; with 400, roughly ±4.5.

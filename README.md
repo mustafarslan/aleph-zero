@@ -156,8 +156,9 @@ claude plugin update aleph-zero@aleph-zero
 ### Plugin options
 
 Set at install (`--config KEY=VALUE`), later with `/aleph configure` or `/plugin` in Claude
-Code, or with `claude plugin configure aleph-zero@aleph-zero`. A change applies at once,
-except `graph`, which the engine reads when Claude Code starts it: from the next session.
+Code, or with `claude plugin configure aleph-zero@aleph-zero`. A change reaches the plugin
+at once (Claude Code loads it again with the new value), except `graph`, which the engine
+reads when Claude Code starts it: from the next session.
 
 | Option | Values | What it does |
 |---|---|---|

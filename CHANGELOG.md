@@ -1,7 +1,18 @@
 # Changelog
 
-## 0.1.6 (unreleased)
+## 0.1.6
 
+- `/aleph configure` opens Aleph's settings in a pane, each changed with one key. The plugin's options (steering,
+  the pointer in Grep and Glob, rung 2's lines, the graph tools) through Claude Code's settings, reaching the plugin
+  at once, the graph tools from the next session. For this repository: search by meaning (as measured, on or off),
+  git's untracked cache, linked sources (a path or URL typed in to link one, a digit and a yes to unlink one). For
+  this machine: whether the embedding worker and Aeon are built and current; a build takes minutes, so its key copies
+  the command for a terminal. Without the engine, or with an older one, the plugin's options still work and the pane
+  says what to install.
+- `status` says whether the worker and Aeon are built, and whether from the commits this Aleph pins; and for search by
+  meaning, the repository's own choice and its language's verdict side by side.
+- `setup --dense`, `--no-dense` and `--auto-dense` on their own switch search by meaning in one line, without indexing.
+- The plugin finds the engine through one script, `scripts/engine.sh`, for its server and for the pane alike.
 - Nothing to install by hand for the two builds but Xcode's command-line tools: cmake and ninja, when missing, are
   fetched once from PyPI into Aleph's cache with uv, and SIMDe (for Aeon) at one pinned release. Seen in a sandbox
   with no Homebrew on PATH: Aeon built in 41 s, the worker in 25 s. A missing compiler is said with the one command
