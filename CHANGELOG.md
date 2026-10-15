@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3
+
+From the plugin's run in Claude Code sessions (nine headless sessions, haiku).
+
+- Rung 3 also follows the Grep tool, the search an agent uses most: when a Grep search of the repository finds
+  nothing, the ranked locations reach the model as context after the result. Before, only a grep run in the shell
+  had them.
+- `/aleph check` with the engine not running says the usual reason (the engine is not installed) and how to
+  install it; `/mcp` shows the server's own error.
+
 ## 0.1.2
 
 From an end-to-end run as a new user (install from GitHub, every command, offline, update, uninstall).
