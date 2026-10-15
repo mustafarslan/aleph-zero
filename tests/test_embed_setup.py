@@ -245,3 +245,14 @@ def test_a_connection_that_drops_early_is_resumed_and_what_came_is_never_thrown_
         assert worker.model().with_suffix(".part").stat().st_size == len(CONTENT) // 2      # kept for the next try
     finally:
         server.shutdown()
+
+
+def test_the_worker_says_what_it_was_built_from_and_is_out_of_date_when_the_pin_moves(home, monkeypatch):
+    for path in (worker.binary(), worker.model()):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    assert embed_setup.current()                                           # built before records were kept
+    embed_setup._record(embed_setup.LLAMA_COMMIT)
+    assert embed_setup.current()
+    monkeypatch.setattr(embed_setup, "LLAMA_COMMIT", "e" * 40)
+    assert not embed_setup.current()

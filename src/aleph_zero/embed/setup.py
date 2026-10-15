@@ -212,6 +212,7 @@ def install_binary(source: Path | None = None, report=lambda text: None) -> Path
     target = worker.binary()
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built, target)
+    _record(f"local:{Path(source).resolve()}" if source is not None else LLAMA_COMMIT)
     return target
 
 
@@ -219,6 +220,24 @@ def _run(command: list[str]) -> None:
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode != 0:
         raise SetupError(f"{' '.join(command[:3])} failed: {(done.stderr or done.stdout).strip()[-400:]}")
+
+
+def _record(built_from: str) -> None:
+    (worker.home() / "built-from").write_text(built_from + "\n")
+
+
+def built_from() -> str | None:
+    try:
+        return (worker.where() / "built-from").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def current() -> bool:
+    """The worker is built from the llama.cpp commit this Aleph pins (or from a checkout the person gave). A build
+    from an older pin keeps working; `setup --worker` or `update` builds the new one."""
+    found = built_from()
+    return installed() and (found is None or found == LLAMA_COMMIT or found.startswith("local:"))
 
 
 def installed() -> bool:

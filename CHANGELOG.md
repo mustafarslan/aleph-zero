@@ -6,6 +6,9 @@
   fetched once from PyPI into Aleph's cache with uv, and SIMDe (for Aeon) at one pinned release. Seen in a sandbox
   with no Homebrew on PATH: Aeon built in 41 s, the worker in 25 s. A missing compiler is said with the one command
   that installs it (`xcode-select --install`).
+- A build remembers the commit it was made from. When a newer Aleph pins a newer Aeon or llama.cpp, the setup list
+  and doctor say so, and `aleph update` builds it again (a git hook's `update --no-fetch` never does). Builds made
+  before this kept no record and count as current: they were made from the same pins.
 - The worker build no longer uses ccache: CMake found Homebrew's even off PATH, and the build, run with a short
   PATH (Claude Code started from the Dock), then failed.
 

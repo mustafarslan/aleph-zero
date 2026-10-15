@@ -70,3 +70,26 @@ def test_setup_memory_installs_from_a_local_checkout_from_any_directory(tmp_path
     monkeypatch.setattr(aeon_setup, "install", lambda source=None, report=None: built.append(source) or Path("/aeon/lib"))
     assert cli.main(["--cwd", str(tmp_path), "setup", "--memory", "--aeon-source", str(tmp_path / "aeon")]) == 0
     assert built == [tmp_path / "aeon"] and "installed" in capsys.readouterr().out
+
+
+def test_a_build_says_what_it_was_built_from_and_is_out_of_date_when_the_pin_moves(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    lib = aeon_setup.lib_dir()
+    lib.mkdir(parents=True)
+    (lib / ("core" + aeon_setup._suffix())).write_bytes(b"")
+    aeon_setup._record(aeon_setup.AEON_COMMIT)
+    assert aeon_setup.installed() and aeon_setup.current()
+    monkeypatch.setattr(aeon_setup, "AEON_COMMIT", "f" * 40)                 # a newer Aleph pins a newer Aeon
+    assert aeon_setup.installed() and not aeon_setup.current()
+    aeon_setup._record("local:/somewhere/aeon")                            # built from a checkout the person chose
+    assert aeon_setup.current()
+
+
+def test_the_setup_list_says_when_aeon_is_out_of_date(repo, capsys, monkeypatch):
+    from aleph_zero import firstrun, memory
+
+    monkeypatch.setattr(memory, "aeon_available", lambda: True)
+    monkeypatch.setattr(aeon_setup, "current", lambda: False)
+    monkeypatch.setattr(aeon_setup, "installed", lambda: True)
+    by = {step.key: step for step in firstrun.of(__import__("aleph_zero.engine", fromlist=["Engine"]).Engine(repo.root).status())}
+    assert by["memory"].state == "open" and "newer" in by["memory"].detail

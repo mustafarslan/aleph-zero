@@ -43,6 +43,26 @@ def installed() -> bool:
     return (lib_dir() / ("core" + _suffix())).exists()
 
 
+def _record(built_from: str) -> None:
+    lib_dir().mkdir(parents=True, exist_ok=True)
+    (lib_dir() / "built-from").write_text(built_from + "\n")
+
+
+def built_from() -> str | None:
+    try:
+        return (lib_dir() / "built-from").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def current() -> bool:
+    """The build is of the Aeon this Aleph pins (or of a checkout the person chose). False for a build from an
+    older pin: a newer Aleph brings a newer Aeon only once it is built again (`setup --memory`, or `update`)."""
+    found = built_from()
+    # No record: built by 0.1.5, which pinned this same commit and wrote none.
+    return installed() and (found is None or found == AEON_COMMIT or found.startswith("local:"))
+
+
 def build_steps(source: Path, build: Path, tools=None, simde: Path | None = None) -> list[list[str]]:
     """Configure and build Aeon's Python extension alone: portable flags (not -march=native: the build may be
     copied between Macs), no tests or benchmarks, for this engine's Python, with the tools and SIMDe headers
@@ -104,6 +124,7 @@ def install(source: Path | None = None, report=lambda text: None) -> Path:
         lib = lib_dir()
         lib.mkdir(parents=True, exist_ok=True)
         shutil.copy2(built[0], lib / built[0].name)
+        _record(f"local:{Path(source).resolve()}" if source is not None else AEON_COMMIT)
         return lib
 
 

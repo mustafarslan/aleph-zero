@@ -61,7 +61,8 @@ def _empty() -> dict:
     """The report's shape, the same whatever happened: a script reads the keys it expects."""
     return {"busy": None, "sources": {}, "indexed": 0, "skipped": 0, "pending": 0,
             "graph": {"read": 0, "left": 0, "why": ""}, "architecture": {"read": 0, "left": 0, "why": ""},
-            "compiler_indexes": {"out_of_date": 0, "how": ""}, "vectors": {"made": 0, "left": 0, "why": ""}, "failed": []}
+            "compiler_indexes": {"out_of_date": 0, "how": ""}, "vectors": {"made": 0, "left": 0, "why": ""},
+            "rebuilt": [], "failed": []}
 
 
 def run(cwd: Path, fetch: bool = True, minutes: float = EMBED_MINUTES, dense: bool | None = None) -> dict:
@@ -93,7 +94,24 @@ def run(cwd: Path, fetch: bool = True, minutes: float = EMBED_MINUTES, dense: bo
                 report["sources"] = {name: outcome for name, outcome in sources.refresh(cwd, unattended=True).items()
                                      if not outcome.startswith("local:")}
 
+        def rebuild_pinned() -> None:
+            # A newer Aleph pins a newer Aeon or llama.cpp; what was built from an older pin is built again here, by a
+            # person's update (it fetches), never by a git hook's (`--no-fetch`: no network, no minute of building).
+            if not fetch:
+                return
+            from . import aeon_setup
+            from .embed import setup as embed_setup
+
+            if aeon_setup.installed() and not aeon_setup.current():
+                aeon_setup.install(None, lambda text: None)
+                report["rebuilt"].append("Aeon's core")
+            if embed_setup.installed() and not embed_setup.current():
+                with embed_setup.installing():
+                    embed_setup.install_binary(None, lambda text: None)
+                report["rebuilt"].append("the embedding worker")
+
         part("sources", fetch_sources)
+        part("builds", rebuild_pinned)
         deadline = time.monotonic() + max(minutes, 0.0) * 60.0
         seen = None
         for _ in range(ROUNDS):
@@ -194,6 +212,7 @@ def text(report: dict) -> list[str]:
         return [report["busy"]]
     files = lambda count: f"{count} file" + ("" if count == 1 else "s")  # noqa: E731
     lines = [f"source {name}: {outcome}" for name, outcome in report.get("sources", {}).items() if outcome != "unchanged"]
+    lines += [f"built {what} again: a newer one is pinned by this Aleph" for what in report.get("rebuilt", [])]
     if report.get("indexed"):
         lines.append(f"indexed {files(report['indexed'])}" + (f"; {report['pending']} still to do" if report.get("pending") else ""))
     for name, what in (("graph", "the code graph's facts"), ("architecture", "the architecture's facts")):

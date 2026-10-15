@@ -39,6 +39,8 @@ class Found:
     files: int = 0             # files of the worktree itself, linked sources not counted
     plugin: bool = False       # Claude Code has the aleph-zero plugin installed: it starts the engine itself
     memory: bool = False       # Aeon's core is there: memories are recalled by meaning as well as by words
+    worker_current: bool = True    # the worker is built from the llama.cpp this Aleph pins
+    memory_current: bool = True    # Aeon's core is built from the commit this Aleph pins
 
 
 @dataclass(frozen=True)
@@ -75,14 +77,19 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
              "the aleph-zero plugin is installed in Claude Code" if found.plugin
              else "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
-        Step("worker", "machine", "The embedding worker and its model (search by meaning)", _state(found.worker, machine, "worker", wanted),
-             "installed" if found.worker else "not installed; search by meaning needs it" if wanted
+        Step("worker", "machine", "The embedding worker and its model (search by meaning)",
+             "open" if found.worker and not found.worker_current else _state(found.worker, machine, "worker", wanted),
+             f"installed, from an older llama.cpp than this Aleph pins: `{COMMAND} setup --worker` (or `{COMMAND} update`) builds it again"
+             if found.worker and not found.worker_current
+             else "installed" if found.worker else "not installed; search by meaning needs it" if wanted
              else "not installed; nothing needs it while search is by words and names",
              "" if found.worker else WORKER_COST, f"{COMMAND} embed setup", wanted),
         Step("memory", "machine", "Memory by meaning (Aeon), for recalling earlier answers",
              "declined" if not found.memory and not found.worker and _state(found.worker, machine, "worker", wanted) == "declined"
-             else _state(found.memory, machine, "memory"),
-             "installed" if found.memory else "not installed; earlier answers and notes are recalled by words and recency"
+             else "open" if found.memory and not found.memory_current else _state(found.memory, machine, "memory"),
+             f"installed, from an older Aeon than this Aleph pins (a newer one is pinned): `{COMMAND} setup --memory` (or `{COMMAND} update`) builds it again"
+             if found.memory and not found.memory_current
+             else "installed" if found.memory else "not installed; earlier answers and notes are recalled by words and recency"
              + ("" if found.worker else "; it needs the embedding worker"),
              "" if found.memory else MEMORY_COST, f"{COMMAND} setup --memory", found.worker),
     ]
@@ -178,8 +185,12 @@ def look(status: dict) -> Found:
     vectors = status.get("vectors") or {}
     from . import memory as memories
 
+    from . import aeon_setup
+
     return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
                  plugin=plugin_installed(), memory=memories.aeon_available(),
+                 worker_current=embed_setup.current() if embed_setup.installed() else True,
+                 memory_current=aeon_setup.current() if aeon_setup.installed() else True,
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,
                  chunks=int(vectors.get("chunks") or status.get("chunks_in_view") or 0), with_vector=int(vectors.get("with_vector") or 0),
                  sources=len(status.get("sources") or ()), untracked_cache=bool(status.get("untracked_cache")),

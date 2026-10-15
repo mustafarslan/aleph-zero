@@ -230,7 +230,7 @@ def test_a_fetch_nobody_watches_does_not_ask_and_does_not_carry_the_caller_s_opt
 
 
 def test_the_report_has_the_same_keys_whatever_happened(repo, capsys):
-    keys = {"busy", "sources", "indexed", "skipped", "pending", "graph", "architecture", "compiler_indexes", "vectors", "failed"}
+    keys = {"busy", "sources", "indexed", "skipped", "pending", "graph", "architecture", "compiler_indexes", "vectors", "rebuilt", "failed"}
     assert set(_report(repo, capsys)[1]) == keys
     with update.only_one(gitio.common_dir(repo.root), repo.root) as mine:
         assert mine is True
@@ -432,3 +432,21 @@ def test_compiler_indexes_that_are_out_of_date_are_counted_and_never_run(repo, c
     code, report = _report(repo, capsys)
     assert code == 0 and report["compiler_indexes"]["out_of_date"] == 1 and "aleph scip run" in report["compiler_indexes"]["how"]
     assert any("aleph scip run" in line for line in update.text(report))
+
+
+def test_an_update_builds_again_what_a_newer_aleph_pins_and_a_hook_s_update_does_not(repo, monkeypatch):
+    from aleph_zero import aeon_setup, update
+    from aleph_zero.embed import setup as embed_setup
+
+    built = []
+    monkeypatch.setattr(aeon_setup, "installed", lambda: True)
+    monkeypatch.setattr(aeon_setup, "current", lambda: False)
+    monkeypatch.setattr(aeon_setup, "install", lambda source=None, report=None: built.append("aeon"))
+    monkeypatch.setattr(embed_setup, "installed", lambda: True)
+    monkeypatch.setattr(embed_setup, "current", lambda: True)
+    monkeypatch.setattr(embed_setup, "install_binary", lambda source=None, report=None: built.append("worker"))
+    hook = update.run(repo.root, fetch=False)                          # a git hook's update: no network, no build
+    assert built == [] and hook["rebuilt"] == []
+    done = update.run(repo.root, fetch=True)
+    assert built == ["aeon"] and done["rebuilt"] == ["Aeon's core"]
+    assert any("Aeon's core" in line and "pinned" in line for line in update.text(done))
