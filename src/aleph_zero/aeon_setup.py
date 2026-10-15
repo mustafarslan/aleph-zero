@@ -3,8 +3,8 @@
 Aeon is a C++ engine with a Python extension and is only built from source, so this builds that one extension,
 from one pinned commit, for the Python this engine runs under, into Aleph's cache directory, where `memory`
 finds it with no setting (`ALEPH_AEON_LIB` still wins when set). Only when asked (`aleph setup --memory`); it
-needs git, cmake, ninja, a C++23 compiler and SIMDe (`brew install simde`), and the network for the source unless
-a checkout is given (`--aeon-source`)."""
+needs a C++23 compiler (Xcode's command-line tools on macOS); git, cmake, ninja and SIMDe are found or fetched by
+buildtools; the network is used for the source unless a checkout is given (`--aeon-source`)."""
 from __future__ import annotations
 
 import fcntl
@@ -43,21 +43,18 @@ def installed() -> bool:
     return (lib_dir() / ("core" + _suffix())).exists()
 
 
-def build_steps(source: Path, build: Path) -> list[list[str]]:
+def build_steps(source: Path, build: Path, tools=None, simde: Path | None = None) -> list[list[str]]:
     """Configure and build Aeon's Python extension alone: portable flags (not -march=native: the build may be
-    copied between Macs), no tests or benchmarks, for this engine's Python."""
+    copied between Macs), no tests or benchmarks, for this engine's Python, with the tools and SIMDe headers
+    buildtools found or fetched."""
+    cmake = tools.cmake if tools else "cmake"
     return [
-        ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-         "-DAEON_CI_BUILD=ON", "-DBUILD_TESTING=OFF", f"-DPython_EXECUTABLE={sys.executable}"],
-        ["cmake", "--build", str(build), "--target", "aeon_py_core"],
+        [cmake, "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+         "-DAEON_CI_BUILD=ON", "-DBUILD_TESTING=OFF", f"-DPython_EXECUTABLE={sys.executable}"]
+        + ([f"-DCMAKE_MAKE_PROGRAM={tools.ninja}"] if tools else [])
+        + ([f"-DSIMDE_INCLUDE_DIR={simde}"] if simde else []),
+        [cmake, "--build", str(build), "--target", "aeon_py_core"],
     ]
-
-
-def _simde_found() -> bool:
-    for prefix in (os.environ.get("HOMEBREW_PREFIX"), "/opt/homebrew", "/usr/local", "/usr"):
-        if prefix and (Path(prefix) / "include" / "simde" / "x86" / "avx512.h").exists():
-            return True
-    return False
 
 
 @contextmanager
@@ -80,15 +77,14 @@ def _installing(report) -> Iterator[None]:
 def install(source: Path | None = None, report=lambda text: None) -> Path:
     """Build Aeon's core into the cache and return the directory it is in. `source` is an Aeon checkout to build
     from (no network); without it the pinned commit is fetched."""
-    for tool in ("git", "cmake", "ninja"):
-        if shutil.which(tool) is None:
-            raise SetupError(f"{tool} is needed to build Aeon and was not found")
-    if not _simde_found():
-        raise SetupError("SIMDe is needed to build Aeon and was not found: brew install simde")
     if source is None and not AEON_COMMIT:
         raise SetupError("this build of Aleph names no Aeon commit to fetch; give a checkout with --aeon-source")
     if source is not None and not (Path(source) / "core" / "CMakeLists.txt").exists():
         raise SetupError(f"{source} is not an Aeon checkout (no core/CMakeLists.txt)")
+    from . import buildtools
+
+    tools = buildtools.ensure(report)        # the compiler checked; cmake and ninja from PATH or fetched once
+    headers = buildtools.simde(report)       # SIMDe at its pinned release, fetched once
     with _installing(report):
         home = where()
         checkout = Path(source) if source is not None else home / "src"
@@ -99,7 +95,7 @@ def install(source: Path | None = None, report=lambda text: None) -> Path:
             _run(["git", "-C", str(checkout), "fetch", "--quiet", "--depth", "1", AEON_REPOSITORY, AEON_COMMIT])
             _run(["git", "-C", str(checkout), "checkout", "--quiet", "--force", AEON_COMMIT])
         build = home / "build"
-        for step in build_steps(checkout, build):
+        for step in build_steps(checkout, build, tools, headers):
             report(" ".join(step[:4]) + " …")
             _run(step)
         built = sorted((build / "lib").glob("core" + _suffix()))

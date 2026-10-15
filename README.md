@@ -59,18 +59,22 @@ whose answers cite `path:line`.
   has not been tested.
 - [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself if needed), git, and
   Claude Code for the plugin.
-- For search by meaning: cmake, ninja and Xcode's command-line tools. The embedding server
-  is built locally from one pinned commit of llama.cpp (about 220 MB of source), and the
-  model is a 310 MB download.
+- For search by meaning and memory by meaning: Xcode's command-line tools (their C++
+  compiler). The embedding server is built locally from one pinned commit of llama.cpp (about
+  220 MB of source) and the model is a 310 MB download; Aeon's core is built from one pinned
+  commit too. cmake, ninja and SIMDe are fetched by Aleph into its cache when they are not
+  installed, with uv; nothing else is installed by hand.
 
 ## Install with Claude Code
 
 ### Once per machine
 
-1. The tools it is built with. `xcode-select --install` opens a dialog; let it finish first.
+1. uv, and Xcode's command-line tools (for search and memory by meaning).
+   `xcode-select --install` opens Apple's installer; let it finish first. Already installed:
+   it says so, and nothing happens.
 
    ```sh
-   brew install uv cmake ninja
+   brew install uv        # or: curl -LsSf https://astral.sh/uv/install.sh | sh
    xcode-select --install
    ```
 
@@ -82,7 +86,8 @@ whose answers cite `path:line`.
    ```
 
 3. In a new terminal: the embedding server and model (optional, for search by meaning), Aeon
-   (optional, for recalling earlier answers by meaning: `brew install simde` first), then the plugin.
+   (optional, for recalling earlier answers by meaning), then the plugin. Each build fetches what
+   it needs that is missing (cmake, ninja, SIMDe) and says so.
 
    ```sh
    aleph setup --worker

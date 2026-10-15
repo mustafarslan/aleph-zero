@@ -55,10 +55,12 @@ def test_a_build_in_the_cache_is_found_without_aleph_aeon_lib(tmp_path, monkeypa
     assert found.stdout.strip() == "True", found.stderr
 
 
-def test_the_tools_are_checked_first_and_said_by_name(tmp_path, monkeypatch):
+def test_the_compiler_is_checked_first_and_how_to_get_it_is_said(tmp_path, monkeypatch):
+    from aleph_zero import buildtools
+
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    monkeypatch.setattr(aeon_setup, "_simde_found", lambda: False)
-    with pytest.raises(aeon_setup.SetupError, match="brew install simde"):
+    monkeypatch.setattr(buildtools, "compiler_found", lambda: False)
+    with pytest.raises(buildtools.ToolError, match="xcode-select --install" if sys.platform == "darwin" else "compiler"):
         aeon_setup.install(None, lambda text: None)
 
 

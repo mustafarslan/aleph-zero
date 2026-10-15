@@ -18,7 +18,7 @@ from .names import COMMAND
 
 CHUNKS_A_SECOND = 100          # what the worker embeds on this kind of machine (ADR-005): for the estimate only
 WORKER_COST = "310 MB download and a build of a few minutes; uses the network"
-MEMORY_COST = "a build of a minute or two (git, cmake, ninja, a C++ compiler and SIMDe: brew install simde); uses the network"
+MEMORY_COST = "a build of under a minute (Xcode's command-line tools needed; cmake, ninja and SIMDe are fetched if missing); uses the network"
 
 
 @dataclass(frozen=True)
@@ -253,8 +253,9 @@ def _failures() -> tuple:
     from .embed.setup import SetupError
 
     from .aeon_setup import SetupError as AeonSetupError
+    from .buildtools import ToolError
 
-    return (SetupError, AeonSetupError, sources.SourceError, gitio.GitError, OSError)
+    return (SetupError, AeonSetupError, ToolError, sources.SourceError, gitio.GitError, OSError)
 
 
 FAILURES = _failures()     # what a step may run into without the rest of the setup being lost to it

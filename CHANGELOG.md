@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.6 (unreleased)
+
+- Nothing to install by hand for the two builds but Xcode's command-line tools: cmake and ninja, when missing, are
+  fetched once from PyPI into Aleph's cache with uv, and SIMDe (for Aeon) at one pinned release. Seen in a sandbox
+  with no Homebrew on PATH: Aeon built in 41 s, the worker in 25 s. A missing compiler is said with the one command
+  that installs it (`xcode-select --install`).
+- The worker build no longer uses ccache: CMake found Homebrew's even off PATH, and the build, run with a short
+  PATH (Claude Code started from the Dock), then failed.
+
 ## 0.1.5
 
 Memory by meaning works for real (Aeon), and the side chat reads like a conversation (the owner's asks, with the

@@ -130,15 +130,20 @@ def _download(part: Path, report) -> None:
         raise SetupError(f"the model could not be downloaded from {MODEL_URL}: {exc}; run setup again to resume") from exc
 
 
-def build_steps(source: Path, build: Path, metal: bool) -> list[list[str]]:
-    """The commands that produce a patched, statically linked llama-server."""
+def build_steps(source: Path, build: Path, metal: bool, tools=None) -> list[list[str]]:
+    """The commands that produce a patched, statically linked llama-server, with the cmake and ninja buildtools
+    found or fetched."""
+    cmake = tools.cmake if tools else "cmake"
     return [
         ["git", "-C", str(source), "checkout", "--quiet", "--force", LLAMA_COMMIT],
         ["git", "-C", str(source), "apply", str(PATCH)],
-        ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+        [cmake, "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_CURL=OFF",
-         f"-DGGML_METAL={'ON' if metal else 'OFF'}"],
-        ["cmake", "--build", str(build), "--target", "llama-server"],
+         # No ccache: useless for a one-time build, and CMake finds Homebrew's even off PATH, after which the build,
+         # run with a short PATH (Claude Code started from the Dock), cannot (seen 2026-10-15).
+         "-DGGML_CCACHE=OFF",
+         f"-DGGML_METAL={'ON' if metal else 'OFF'}"] + ([f"-DCMAKE_MAKE_PROGRAM={tools.ninja}"] if tools else []),
+        [cmake, "--build", str(build), "--target", "llama-server"],
     ]
 
 
@@ -182,9 +187,9 @@ def install_binary(source: Path | None = None, report=lambda text: None) -> Path
     """Build llama-server and put it in the worker's home. `source` is an existing
     llama.cpp checkout to build from (no network); without it the repository is cloned."""
     home = worker.home()
-    for tool in ("git", "cmake", "ninja"):
-        if shutil.which(tool) is None:
-            raise SetupError(f"{tool} is needed to build the worker and was not found")
+    from .. import buildtools
+
+    tools = buildtools.ensure(report)        # the compiler checked; cmake and ninja from PATH or fetched once
     checkout = home / "src" / "llama.cpp"
     if source is not None and not checkout.exists():
         checkout.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +203,7 @@ def install_binary(source: Path | None = None, report=lambda text: None) -> Path
         _run(["git", "init", "--quiet", str(checkout)])
         _run(["git", "-C", str(checkout), "fetch", "--quiet", "--depth", "1", LLAMA_REPOSITORY, LLAMA_COMMIT])
     build = home / "build"
-    for step in build_steps(checkout, build, metal=sys.platform == "darwin"):
+    for step in build_steps(checkout, build, metal=sys.platform == "darwin", tools=tools):
         report(" ".join(step[:4]) + " …")
         _run(step)
     built = build / "bin" / "llama-server"
