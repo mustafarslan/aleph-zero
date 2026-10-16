@@ -61,17 +61,25 @@ ARRANGEMENTS = {
 }
 
 
+# The next hypothesis (whole documents): the shipped arrangement, documentation ranked by sections or by documents.
+RANKS = {"shipped": "chunks", "whole": "whole", "whole-vote": "whole-vote"}
+WHOLE = False        # --whole: score RANKS instead of ARRANGEMENTS
+
+
 def files_for(index, view, question, nearest, k=10) -> dict[str, dict[str, list[str]]]:
     """Each arrangement's first ten files, words only and with vectors."""
     found = {}
-    for name, arrange in ARRANGEMENTS.items():
+    arms = {name: (SHIPPED, rank) for name, rank in RANKS.items()} if WHOLE else {name: (arrange, "chunks") for name, arrange in ARRANGEMENTS.items()}
+    for name, (arrange, rank) in arms.items():
         search_module.arrange = arrange
+        search_module.DOCS_RANK = rank
         try:
             found[name] = {"lexical": bench.first_files([hit.path for hit in bench.search(index, view, question, k=k)]),
                            "hybrid": bench.first_files([hit.path for hit in bench.search(index, view, question, k=k, dense=nearest)])
                            if nearest else []}
         finally:
             search_module.arrange = SHIPPED
+            search_module.DOCS_RANK = "chunks"
     return found
 
 
@@ -102,7 +110,7 @@ def score_rows(rows, view_of, client, form="full") -> list[dict]:
                                          if arm == "lexical" or nearest}
                                    for arr, arms in found.items()}})
         print(f"{number:4}/{len(rows)} {row['instance_id']:32} " + " ".join(
-            f"{arr}:{results[-1]['scores'][arr].get('lexical', 0):.2f}" for arr in ARRANGEMENTS), file=sys.stderr, flush=True)
+            f"{arr}:{results[-1]['scores'][arr].get('lexical', 0):.2f}" for arr in found), file=sys.stderr, flush=True)
     return results
 
 
@@ -113,7 +121,7 @@ def summary(results, arm: str) -> dict:
         return {}
     shipped = [entry["scores"]["shipped"][arm] for entry in rows]
     out = {"questions": len(rows), "shipped": round(sum(shipped) / len(rows), 3)}
-    for name in ("earned", "half", "interleave"):
+    for name in [name for name in rows[0]["scores"] if name != "shipped"]:
         values = [entry["scores"][name][arm] for entry in rows]
         mean, low, high = bench.paired_bootstrap(values, shipped)
         out[name] = {"recall@10": round(sum(values) / len(rows), 3), "minus_shipped": round(mean, 3), "low": round(low, 3), "high": round(high, 3)}
@@ -131,7 +139,10 @@ def main(argv=None) -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--no-vectors", action="store_true", help="words only: no worker needed")
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--whole", action="store_true", help="score documentation ranked by whole documents (RANKS)")
     args = parser.parse_args(argv)
+    global WHOLE
+    WHOLE = args.whole
     client = None if args.no_vectors else EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
     if args.worktree:
         rows = json.loads(args.questions.read_text())

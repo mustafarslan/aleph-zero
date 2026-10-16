@@ -35,6 +35,9 @@ PATH_VOTE = "first"         # "found": a file's path votes for the best chunk fo
 # Module summaries (areas.py; DEFERRED 0-graph part 17): "off", "M2" (the two best modules' files first, as part 14
 # measured) or "M2floor" (only a module sharing two of the question's words). Set by part 17's reading.
 AREAS = "off"
+# Documentation by whole documents (wholedocs.py; DEFERRED, "Documentation answers, the next hypothesis"): "chunks" as
+# shipped, "whole" (documentation's places taken in whole-document order) or "whole-vote" (one more generator).
+DOCS_RANK = "chunks"
 SYMBOL_TIE_LIMIT = 25
 # What makes a word of a longer query look like an identifier: an underscore, a digit, a
 # capital after the first letter, or a qualifier.
@@ -188,6 +191,34 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
     return code[:n_code] + docs[:n_docs]
 
 
+def _whole_documents(index: Index, view: View, query: str, merged: list[Hit], accept, columns: str) -> list[Hit]:
+    """Documentation in whole-document order: each document by its best section search found, else its first section."""
+    from . import wholedocs
+
+    order = wholedocs.ranked(index, view, query, accept, limit=20)
+    if not order:
+        return merged
+    firsts = wholedocs.first_sections(index, view, [path for path in order if not any(h.path == path for h in merged)])
+    docs: list[Hit] = []
+    moved: set[int] = set()
+    for path in order:
+        own = next((n for n, hit in enumerate(merged) if hit.path == path and hit.kind == "doc"), None)
+        if own is not None:
+            moved.add(own)
+            docs.append(replace(merged[own], sources=(*merged[own].sources, "wholedoc")))
+            continue
+        chunk_id = firsts.get(path)
+        if chunk_id is None:
+            continue
+        for (_, _, _, _, start, end, scope_start, scope_end, chunk_kind, symbol, signature, breadcrumb, text) in \
+                index.conn.execute(columns + "WHERE bc.chunk_id = ? LIMIT 1", (chunk_id,)):
+            docs.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, 0.0, ("wholedoc",),
+                            scope_start or start, scope_end or end))
+    code = [hit for n, hit in enumerate(merged) if hit.kind != "doc"]
+    rest = [hit for n, hit in enumerate(merged) if hit.kind == "doc" and n not in moved]
+    return code + docs + rest
+
+
 def _areas_first(index: Index, view: View, query: str, merged: list[Hit], accept, columns: str, mode: str) -> list[Hit]:
     """The files of the modules whose summaries match the question best, before search's others (code only). A file
     search found keeps its own results; one it did not enters by its first chunk."""
@@ -243,6 +274,10 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     }
     if dense is not None:
         rankings["dense"] = dense(pool, scoped)
+    if DOCS_RANK == "whole-vote" and kind != "code":
+        from . import wholedocs
+        firsts = wholedocs.first_sections(index, view, wholedocs.ranked(index, view, query, accept))
+        rankings["wholedoc"] = list(firsts.values())
     fused = rrf(rankings)[:pool]
     if bare_name and named:
         # The query is one name: its definitions come first, in the order the lookup gives
@@ -308,6 +343,8 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
     merged = merge_pieces(hits)
     # The module step: the engine says whether by the project's main language (areas.decide); without a word from it the
     # module's switch, which the benchmarks set. Not for a query that is one name: its definitions come first, as above.
+    if DOCS_RANK == "whole" and kind != "code":
+        merged = _whole_documents(index, view, query, merged, accept, columns)
     mode = AREAS if areas is None else ("M2floor" if areas else "off")
     if mode != "off" and kind != "docs" and not (bare_name and named):
         merged = _areas_first(index, view, query, merged, accept, columns, mode)
