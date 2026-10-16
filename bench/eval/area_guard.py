@@ -52,6 +52,7 @@ def score_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
         search_module.AREAS = "off"
         return {"instance": row["instance_id"], "repo": row["repo"], "language": row.get("language", "python"),
                 "draw": draw_of(row["instance_id"]), "recall": {arm: len(set(f) & gold) / len(gold) for arm, f in files.items()},
+                "gold": sorted(gold), "files": files,
                 "changed": {arm: files[arm] != files["off"] for arm in ARMS if arm != "off"}}
     finally:
         index.conn.close()
