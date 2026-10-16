@@ -121,7 +121,8 @@ whose answers cite `path:line`.
    ```
 
 3. In a new terminal, in a project: `aleph-zero setup` asks about each of the rest and does it on
-   a yes. By hand instead: the embedding server and model (optional, for search by meaning), Aeon
+   a yes (`aleph-zero setup --plugin` does the plugin step alone). By hand instead: the embedding
+   server and model (optional, for search by meaning), Aeon
    (optional, for recalling earlier answers by meaning), then the plugin. Each build fetches what
    it needs that is missing (cmake, ninja, SIMDe) and says so.
 
@@ -261,12 +262,13 @@ terminal it only prints the list.
 
 | Command | What it does |
 |---|---|
+| `aleph-zero setup` | Asks about each part once on a terminal and does it on a yes: the Claude Code plugin (`--plugin`), allowing its tools (`--allow-tools`), the embedding worker (`--worker`), memory by meaning (`--memory`), linked sources (`--source PATH_OR_URL`), this project's vectors (`--embed`, `--dense`/`--no-dense`), git's untracked cache (`--untracked-cache`). Each flag does its part alone; `--again` asks again about what was declined; without a terminal or with `--json` it only lists |
 | `aleph-zero search QUERY` | Ranked locations. Options: `--kind any\|code\|docs`, `--glob`, `--lang`, `--detail locations\|snippets\|full`, `-k`, `--budget-tokens`, `--timeout-ms`, `--dense`/`--no-dense`, `--json` |
 | `aleph-zero symbol NAME` | Where a name is defined |
 | `aleph-zero outline PATH` | What a file defines, with line ranges |
 | `aleph-zero callers NAME` / `aleph-zero callees NAME` | The call graph, with how sure each answer is; the first question reads every file once |
 | `aleph-zero scip import\|run\|list\|forget` | A compiler's [SCIP](https://github.com/sourcegraph/scip) index for exact call answers while its files are unchanged (`import FILE [--tree REV\|--worktree]`; `run` needs the language's indexer installed, e.g. `scip-python`) |
-| `aleph-zero facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states. `--mentioned TEXT`: the routes and environment variables TEXT names, with where the code handles or reads each (the handler's definition included) |
+| `aleph-zero facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states. `--mentioned TEXT`: the routes and environment variables TEXT names, with where the code handles or reads each (the handler's definition included). `--words` with `--mentioned`: when TEXT names no route, the routes whose words it shares (at most three) |
 | `aleph-zero decisions [TASK]` / `--for PATH` | Decision records that govern a task or a file; all of them with neither |
 | `aleph-zero source add\|list\|remove\|refresh` | Repositories searched beside this one (`name:path` in results) |
 | `aleph-zero memory list\|recall\|forget` | What earlier sessions kept |
