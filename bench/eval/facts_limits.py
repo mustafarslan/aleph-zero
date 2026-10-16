@@ -62,6 +62,33 @@ def coverage(src: Path) -> dict:
     return out
 
 
+def _agrees(method: str, path: str, route) -> bool:
+    stated_method, _, stated_path = route.name.partition(" ")
+    stated = archfacts._segments(stated_path)
+    return stated_method in (method, "ANY") and archfacts._route_match(archfacts._segments(path), stated) > 0
+
+
+def judge(root: Path, operations: list[tuple[str, str]]) -> dict:
+    """Part 12's reading on a repository not among the seven: the share of its routes with a route fact that agrees, and
+    the route facts that agree with none of its routes (false routes)."""
+    engine = Engine(root, dense=False)
+    found, _, _ = _facts(engine, root)
+    engine.close()
+    routes = [each for each in found if each.kind == "route" and not archfacts.NEVER_AN_ANSWER.search(each.path)]
+    covered = sum(1 for method, path in operations if any(_agrees(method, path, route) for route in routes))
+    false = [route.name + "  " + route.path for route in routes if not any(_agrees(m, p, route) for m, p in operations)]
+    return {"operations": len(operations), "covered": covered, "share": round(covered / max(1, len(operations)), 3),
+            "route_facts": len(routes), "false_routes": len(false), "false_examples": false[:15]}
+
+
+def spec_operations(document_path: Path) -> list[tuple[str, str]]:
+    text = document_path.read_text()
+    document = json.loads(text) if document_path.suffix == ".json" else yaml.safe_load(text)
+    base = (document.get("basePath") or "").rstrip("/")
+    return sorted({(method.upper(), base + path) for path, item in (document.get("paths") or {}).items()
+                   for method in (item or {}) if method in METHODS})
+
+
 def handlers(src: Path) -> dict:
     out = {}
     for repo in PROJECTS:
@@ -97,10 +124,19 @@ def speed(src: Path) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=["coverage", "handlers", "speed"])
+    parser.add_argument("action", choices=["coverage", "handlers", "speed", "judge"])
     parser.add_argument("src", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--spec", type=Path, help="judge: the repository's OpenAPI or swagger document")
+    parser.add_argument("--routes", type=Path, help="judge: a JSON list of [METHOD, path] made by a fresh agent")
     args = parser.parse_args(argv)
+    if args.action == "judge":
+        operations = spec_operations(args.spec) if args.spec else [tuple(pair) for pair in json.loads(args.routes.read_text())]
+        result = judge(args.src.resolve(), operations)
+        print(json.dumps(result, indent=1))
+        if args.out:
+            args.out.write_text(json.dumps(result, indent=1) + "\n")
+        return 0
     result = {"coverage": coverage, "handlers": handlers, "speed": speed}[args.action](args.src.resolve())
     text = json.dumps(result, indent=1)
     print(text)

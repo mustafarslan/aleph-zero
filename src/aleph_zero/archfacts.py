@@ -23,7 +23,7 @@ from .lang.facts import text_facts as _named_text_facts
 from .store.db import transaction
 from .view import View
 
-FACTS_VERSION = 6           # bump when what the readers extract changes: every row is then read again
+FACTS_VERSION = 7           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 KINDS = ("route", "mount", "model", "table", "env", "task", "queue", "service", "rpc", "layer", "contract")
 _CODE = sorted({"typescript", "tsx", "javascript", "python", "go", "rust", "java"} & set(lang.PROFILES))

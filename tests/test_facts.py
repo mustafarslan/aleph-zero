@@ -383,3 +383,25 @@ def test_a_handler_wrapped_in_calls_is_read_by_its_innermost_name():
     assert found("a.go", go) == [("route", "GET /api/subscribers/{id}", 3, "go a.GetSubscriber"),
                                  ("route", "GET /auth/login", 4, "go oidcHandler.LoginHandler"),
                                  ("route", "GET /x", 5, "go")]                 # a function written in place has no name
+
+
+def test_go_router_groups_made_in_the_file_give_their_routes_the_group_s_path():
+    go = ('package router\nfunc Create(g *gin.Engine, conf *Config) {\n'
+          '\tclientAuth := g.Group("")\n'
+          '\t{\n\t\tapp := clientAuth.Group("/application")\n'
+          '\t\tapp.GET("", applicationHandler.GetApplications)\n'
+          '\t\tapp.PUT("/:id", applicationHandler.UpdateApplication)\n'
+          '\t\ttokenMessage := app.Group("/:id/message")\n'
+          '\t\ttokenMessage.DELETE("", messageHandler.DeleteMessageWithApplication)\n\t}\n'
+          '\tg.Group("/user").Use(authentication.OptionalAdmin).POST("", userHandler.CreateUser)\n'
+          '\tclient := g.Group(conf.Prefix).Group("client")\n'
+          '\tclient.GET("current", clientHandler.Current)\n'
+          '\tcache.Get("/k", fallback)\n}\n')
+    routes = [(name, line, detail) for kind, name, line, detail in found("router/router.go", go) if kind == "route"]
+    assert routes == [("GET /application", 6, "go applicationHandler.GetApplications"),
+                      ("PUT /application/{id}", 7, "go applicationHandler.UpdateApplication"),
+                      ("DELETE /application/{id}/message", 9, "go messageHandler.DeleteMessageWithApplication"),
+                      ("POST /user", 11, "go userHandler.CreateUser"),
+                      ("GET /client/current", 13, "go clientHandler.Current")]     # a configured prefix adds nothing
+    mounts = [name for kind, name, _, _ in found("router/router.go", go) if kind == "mount"]
+    assert mounts == ["/application", "/application/{id}/message", "/user", "/client"]

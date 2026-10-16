@@ -80,7 +80,7 @@ _GO_PATTERN = re.compile(r"^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/.*)$")
 _KINDS = {
     "ecma": ("call_expression", "new_expression", "member_expression", "subscript_expression"),
     "python": ("decorator", "call", "subscript", "class_definition", "assignment", "comparison_operator"),
-    "go": ("call_expression",),
+    "go": ("call_expression", "short_var_declaration", "assignment_statement"),
     "rust": ("call_expression",),
     "java": ("annotation", "marker_annotation", "method_invocation"),
 }
@@ -430,7 +430,52 @@ def _python_class(node: Node) -> list[Fact]:
 
 # ---- Go, Rust, Java ----------------------------------------------------------------------------------
 
+def _relative(path: str) -> str:
+    """A group's or a route's path as gin and echo join it: `"user"` and `"/user"` alike; `""` is the group itself."""
+    return path if not path or path.startswith("/") else "/" + path
+
+
+def _go_prefix(node: Node | None, state: dict, depth: int = 0) -> str | None:
+    """The path prefix of a router group this file makes (`api := r.Group("/api")`, `r.Group("/user").Use(auth)`), or None
+    when the expression is not one. A group whose path is not a literal (a configured prefix) adds nothing to the path:
+    paths are compared from their ends, so a route under it is still found by the rest of its path."""
+    if node is None or depth > 8:
+        return None
+    if node.type == "identifier":
+        return state.get("groups", {}).get(_text(node))
+    if node.type != "call_expression":
+        return None
+    function = node.child_by_field_name("function")
+    if function is None or function.type != "selector_expression":
+        return None
+    called, operand = _text(function.child_by_field_name("field")), function.child_by_field_name("operand")
+    if called in ("Use", "With"):              # middleware chained on a group keeps its path
+        return _go_prefix(operand, state, depth + 1)
+    if called != "Group":
+        return None
+    arguments = node.child_by_field_name("arguments")
+    given = arguments.named_children if arguments is not None else []
+    written = _literal(given[0]) if given else None
+    base = _go_prefix(operand, state, depth + 1) or ""
+    return _join(base, _relative(written)) if written else base or ""
+
+
+def _go_groups(node: Node, state: dict) -> None:
+    """`v := x.Group("/p")` and `v = x.Group("/p")`: the name is a router group of that prefix from here on in the file."""
+    left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+    if left is None or right is None:
+        return
+    for name, value in zip(left.named_children, right.named_children):
+        if name.type == "identifier" and value.type == "call_expression":
+            prefix = _go_prefix(value, state)
+            if prefix is not None:
+                state.setdefault("groups", {})[_text(name)] = prefix
+
+
 def _go(node: Node, state: dict) -> list[Fact]:
+    if node.type in ("short_var_declaration", "assignment_statement"):
+        _go_groups(node, state)
+        return []
     function, arguments = node.child_by_field_name("function"), node.child_by_field_name("arguments")
     if function is None or arguments is None:
         return []
@@ -441,17 +486,21 @@ def _go(node: Node, state: dict) -> list[Fact]:
     if function.type != "selector_expression" or first is None:
         return []
     called = _text(function.child_by_field_name("field"))
-    if called in _GO_MOUNTS and first.startswith("/"):
+    group = _go_prefix(function.child_by_field_name("operand"), state)      # None: not a group this file makes
+    if called in _GO_MOUNTS and (first.startswith("/") or (called == "Group" and group is not None)):
         mounted = given[1] if len(given) > 1 and given[1].type != "func_literal" else None
-        return [Fact("mount", _path(first), _line(node), _written(mounted))]
+        joined = _join(group or "", _relative(first)) if called == "Group" else first
+        return [Fact("mount", _path(joined), _line(node), _written(mounted))] if joined.startswith("/") and joined != "/" else []
     method = _GO_ROUTES.get(called)
     if method is None or len(given) < 2:
         return []
-    if method != "ANY" and (given[1].type not in _GO_HANDLERS or _text(function.child_by_field_name("operand")) in _GO_NOT_ROUTERS):
+    if method != "ANY" and (given[1].type not in _GO_HANDLERS or (group is None and _text(function.child_by_field_name("operand")) in _GO_NOT_ROUTERS)):
         return []       # `kv.Get("/foo", nil)`, `http.Post("/api", "application/json", body)`: a lookup, a request
     patterned = _GO_PATTERN.match(first)       # Go 1.22: "POST /v1/jobs"
     if patterned:
         method, first = patterned.group(1), patterned.group(2)
+    if group is not None:                      # under a group this file makes: its path, joined
+        first = _join(group, _relative(first)) or "/"
     if not first.startswith("/"):
         return []
     return [Fact("route", f"{method} {_path(first)}", _line(node), _handled("go", given[-1]))]
