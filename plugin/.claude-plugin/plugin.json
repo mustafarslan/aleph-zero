@@ -54,7 +54,7 @@
     "graph": {
       "type": "string",
       "title": "Call graph, facts and decision tools",
-      "description": "on or off (default on). On: also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Measured once (2026-10-16, 28 tasks, sonnet): not shown to help; the agent did not call them in 56 sessions.",
+      "description": "on or off (default on). On: also offer the agent the engine's call-graph (who calls what), facts (routes, models, environment names) and decision-record tools. Measured once (2026-10-16, 28 tasks, sonnet): not shown to help; the agent did not call them in 56 sessions, seeing only their names.",
       "default": "on"
     }
   }

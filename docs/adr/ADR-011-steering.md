@@ -227,7 +227,7 @@ On the owner's go-ahead ("go ahead and test in full a/b test"), by the rule writ
 | Graph tools called | 0 in 56 sessions | (not offered) | |
 | Aleph's search first | 16 | 12 | |
 
-- **Not shown to help, and not used.** Both intervals hold 1. The tools were listed to the agent (a session started with the harness's arguments shows them; checked), and the instruction named them, but no session called one: the same shape as the pilot's finding that rung 1's instruction is mostly not followed. Search first in 16 against 12 is within the noise.
+- **Not shown to help, and not used.** Both intervals hold 1. The tools were listed to the agent (a session started with the harness's arguments shows them; checked), and the instruction named them, but no session called one. Listed by name only, it was found the same day: the plugin brings its four search tools into the prompt and left these three behind Claude Code's ToolSearch, so their descriptions and parameters were never shown. The run reads as "not chosen from a name", not "not chosen when shown". Otherwise the same shape as the pilot's finding that rung 1's instruction is mostly not followed. Search first in 16 against 12 is within the noise.
 - **Read beside the two retrieval benchmarks of the same entry:** the call graph reaches answers search misses (+10.8 points one step from its first five results) but does not turn them into a gain without a way to rank them; `facts` adds +4.0 points where it reads the framework and puts the right file first more often (MRR +0.21). What an agent is not shown, it does not use: if the graph is to help, it would be by being shown (added at rung 2), once its neighbours can be ranked.
 
 ## Views consulted
