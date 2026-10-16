@@ -23,6 +23,6 @@ def test_everything_tracked_in_the_package_is_in_the_wheel(tmp_path):
     inside = set(zipfile.ZipFile(wheel).namelist())
     tracked = subprocess.run(["git", "ls-files", "src/aleph_zero"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
     assert tracked and [path for path in tracked if path.removeprefix("src/") not in inside] == []
-    assert {"aleph_zero/store/schema.sql", "aleph_zero/embed/llama-no-logits.patch"} <= inside     # read at run time, and not Python
+    assert {"aleph_zero/store/schema.sql"} <= inside     # read at run time, and not Python
     entry = next(name for name in inside if name.endswith("entry_points.txt"))
     assert "aleph = aleph_zero.cli:main" in zipfile.ZipFile(wheel).read(entry).decode()

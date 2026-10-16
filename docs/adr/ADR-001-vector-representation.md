@@ -12,7 +12,7 @@ Which embedding model, inference runtime, weight quantization, output dimension 
 | Choice | Decision |
 |---|---|
 | Model | EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache-2.0), GGUF from `unsloth/embeddinggemma-2-GGUF` |
-| Runtime | llama.cpp's `llama-server` as the shared embed worker (ADR-005), built from commit `c83f3058` with `bench/spikes/llama-no-logits.patch` |
+| Runtime | llama.cpp's `llama-server` as the shared embed worker (ADR-005), built from commit `c83f3058` (moved to `b76b1337` on 2026-10-16: the same vectors, no patch; DEFERRED 4) with `bench/spikes/llama-no-logits.patch` |
 | Device | GPU whenever one is present (Metal on macOS), with 1 CPU thread; CPU with 8 threads otherwise |
 | Weights | Q8_0 |
 | Output dimension | 256 (Matryoshka truncation, renormalized) |

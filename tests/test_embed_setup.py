@@ -85,16 +85,15 @@ def test_a_local_copy_of_the_model_is_used_without_the_network(home, served, tmp
         embed_setup.install_model(tmp_path / "wrong.gguf")
 
 
-def test_the_build_is_static_patched_and_pinned(home):
+def test_the_build_is_static_and_pinned_with_no_patch_of_its_own(home):
     steps = embed_setup.build_steps(Path("/src/llama.cpp"), Path("/build"), metal=True)
     joined = [" ".join(step) for step in steps]
     assert any(f"checkout --quiet --force {embed_setup.LLAMA_COMMIT}" in step for step in joined)
-    assert any("apply" in step and "llama-no-logits.patch" in step for step in joined)
+    assert not any(" apply " in step for step in joined)                 # upstream since PR #30255 (DEFERRED 4)
     configure = next(step for step in joined if step.startswith("cmake -S"))
     assert "-DBUILD_SHARED_LIBS=OFF" in configure and "-DGGML_METAL=ON" in configure and "-DLLAMA_CURL=OFF" in configure
     assert any("--target llama-server" in step for step in joined)
     assert "-DGGML_METAL=OFF" in " ".join(" ".join(s) for s in embed_setup.build_steps(Path("/s"), Path("/b"), metal=False))
-    assert (Path(embed_setup.__file__).parent / "llama-no-logits.patch").exists()
 
 
 def test_doctor_and_status_say_whether_the_worker_is_installed(home, capsys):

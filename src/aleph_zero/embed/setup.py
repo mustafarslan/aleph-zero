@@ -1,9 +1,9 @@
 """Installing the embedding worker: the llama.cpp server and the model file.
 
 This is the only part of Aleph that uses the network, and only when asked to
-(`aleph embed setup`). The server is built from a pinned llama.cpp commit with one
-patch (an embeddings-only context must not reserve a logits buffer: 1 MB per token
-with this model's vocabulary, ADR-005). Building needs git, cmake, ninja and a C++
+(`aleph embed setup`). The server is built from a pinned llama.cpp commit as it is: the patch an
+embeddings-only context once needed (no logits buffer: 1 MB per token with this model's vocabulary,
+ADR-005) is upstream since PR #30255, and moving to it left every vector as it was (DEFERRED 4). Building needs git, cmake, ninja and a C++
 compiler, which is acceptable on the owner's machine and is recorded as a blocker
 for a public release.
 """
@@ -26,10 +26,9 @@ from . import worker
 from ..names import COMMAND
 
 LLAMA_REPOSITORY = "https://github.com/ggml-org/llama.cpp"
-LLAMA_COMMIT = "c83f3058b6f876f2f7e6ccbada858b2446860c85"
+LLAMA_COMMIT = "b76b13379d3b7d67ab0bc424516bb6fd2522bd8e"
 MODEL_URL = f"https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/{worker.MODEL_FILE}"
 MODEL_SHA256 = "6f1bd4ac6c5df7444f9cca7ca36cafe6cfa34cd6f49fefb1e0b4be8143aed8bc"
-PATCH = Path(__file__).with_name("llama-no-logits.patch")
 _CHUNK = 1 << 20
 _READ = 1 << 16          # what one read of the download waits for: a slow link still shows progress
 PROGRESS_SECONDS = 30.0  # between progress lines when they are not redrawn in place on a terminal
@@ -131,12 +130,11 @@ def _download(part: Path, report) -> None:
 
 
 def build_steps(source: Path, build: Path, metal: bool, tools=None) -> list[list[str]]:
-    """The commands that produce a patched, statically linked llama-server, with the cmake and ninja buildtools
-    found or fetched."""
+    """The commands that produce a statically linked llama-server, with the cmake and ninja buildtools found or
+    fetched."""
     cmake = tools.cmake if tools else "cmake"
     return [
         ["git", "-C", str(source), "checkout", "--quiet", "--force", LLAMA_COMMIT],
-        ["git", "-C", str(source), "apply", str(PATCH)],
         [cmake, "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_CURL=OFF",
          # No ccache: useless for a one-time build, and CMake finds Homebrew's even off PATH, after which the build,

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.20
+
+- **The embedding worker is built from a newer llama.cpp, with no patch of Aleph's own** (`b76b133`, your decision on
+  the measurement). The fix Aleph patched in (no logits buffer for an embeddings-only context, 1 MB a token) is upstream
+  (PR #30255); the worker's memory is the same (564 MB against 563 after the same sample). Measured before moving: on
+  2,000 chunks of vue/core and ripgrep every vector's cosine against the old build is 1.00000, and 50 questions find the
+  same ten nearest chunks: **vectors made before stay valid; nothing is embedded again.** An installed worker is now
+  older than the one this Aleph pins: `aleph-zero update` (or `aleph-zero setup --worker`) builds the new one, about
+  30 s once the source is fetched; until then the old one keeps working, and setup and doctor say so.
+
 ## 0.1.19
 
 - **Routes from a committed OpenAPI document.** Where a server is generated from its spec (Spring with
