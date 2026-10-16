@@ -167,4 +167,5 @@ test('an engine that never answers the look-up does not hold the prompt', { opti
   await clock.advance(500)
   await pending
   expect(sent[0].context).toBeUndefined()
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('(1 look-ups too late)')
 })

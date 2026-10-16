@@ -111,6 +111,7 @@ async function lookUp($, text) {
   const note = answer ? factsNote(answer) : ''
   if (answer && (note || !/"late": ?true/.test(resultText(answer)))) handed = [...handed, ...fresh].slice(-200)  // a late answer is asked again
   if (note) meter.added.facts = (meter.added.facts || 0) + 1
+  if (!answer || /"late": ?true/.test(resultText(answer))) meter.added.factsLate = (meter.added.factsLate || 0) + 1  // counted, not told (part 9)
   return note
 }
 
@@ -403,7 +404,7 @@ function report(rung, meter) {
     + ' · aleph calls ' + meter.aleph + ' · grep calls ' + meter.grep
     + (meter.first ? ' · first to be used: ' + meter.first : '')
     + ' · locations added to ' + meter.added.prompt + ' prompts and ' + meter.added.grep + ' empty greps'
-    + ' · facts added ' + (meter.added.facts || 0) + ' times'
+    + ' · facts added ' + (meter.added.facts || 0) + ' times' + (meter.added.factsLate ? ' (' + meter.added.factsLate + ' look-ups too late)' : '')
     + (tools ? ' · tools: ' + tools : '')
 }
 

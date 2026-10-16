@@ -105,7 +105,7 @@ def mod_meter(store: Path = STORE) -> dict | None:
         kept = json.loads(newest.read_text())["aleph-zero.last-session"]
         meter = kept["meter"]
         return {"rung": kept["rung"], "added_to_prompt": meter["added"]["prompt"], "added_to_grep": meter["added"]["grep"],
-                "added_facts": meter["added"].get("facts", 0),
+                "added_facts": meter["added"].get("facts", 0), "facts_late": meter["added"].get("factsLate", 0),
                 "aleph_calls": meter["aleph"], "listed": list(meter.get("listed", []))}
     except (ValueError, OSError, KeyError, TypeError):
         return None
