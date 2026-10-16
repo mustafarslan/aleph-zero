@@ -375,3 +375,11 @@ def test_what_a_request_names_is_answered_from_source_code_with_the_handler(repo
     assert engine.facts(mentioned="the /client/{id} route").facts[0].name == "DELETE /client/{id}"
     nothing = engine.facts(mentioned="rename the helper in utils")
     assert (nothing.like, nothing.facts, nothing.counts) == ("", [], {})        # answered without the index
+
+
+def test_a_handler_wrapped_in_calls_is_read_by_its_innermost_name():
+    go = ('package a\nfunc f(g *echo.Group, a *App) {\n\tg.GET("/api/subscribers/:id", pm(hasID(a.GetSubscriber), "subscribers:get"))\n'
+          '\tg.GET("/auth/login", oidcHandler.LoginHandler())\n\tg.GET("/x", func(c echo.Context) error { return nil })\n}\n')
+    assert found("a.go", go) == [("route", "GET /api/subscribers/{id}", 3, "go a.GetSubscriber"),
+                                 ("route", "GET /auth/login", 4, "go oidcHandler.LoginHandler"),
+                                 ("route", "GET /x", 5, "go")]                 # a function written in place has no name

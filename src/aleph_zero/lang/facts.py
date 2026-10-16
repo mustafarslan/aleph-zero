@@ -192,11 +192,29 @@ def _written(node: Node | None) -> str:
     return " ".join(_text(node).split())[:_WRITTEN_LIMIT]
 
 
+def _handler_name(node: Node | None, depth: int = 0) -> Node | None:
+    """The name a handler is given by: itself when it is a name; inside calls that wrap it (`pm(hasID(a.GetSubscriber))`),
+    the first name among their arguments, innermost first; for a call with none (`oidcHandler.LoginHandler()`), the name
+    of what is called, the function that makes the handler."""
+    if node is None or depth > 4:
+        return None
+    if node.type in _NAMED_HANDLERS:
+        return node
+    if node.type == "call_expression":
+        arguments = node.child_by_field_name("arguments")
+        for argument in (arguments.named_children if arguments is not None else []):
+            found = _handler_name(argument, depth + 1)
+            if found is not None:
+                return found
+        function = node.child_by_field_name("function")
+        return function if function is not None and function.type in _NAMED_HANDLERS else None
+    return None
+
+
 def _handled(framework: str, handler: Node | None) -> str:
-    """A route's detail: its framework and, where the handler is a name (`clientHandler.DeleteClient`), that name."""
-    if handler is not None and handler.type in _NAMED_HANDLERS:
-        return f"{framework} {_written(handler)}"
-    return framework
+    """A route's detail: its framework and, where the handler is given by a name (`clientHandler.DeleteClient`), that name."""
+    named = _handler_name(handler)
+    return f"{framework} {_written(named)}" if named is not None else framework
 
 
 def _is(node: Node | None, other: Node | None) -> bool:
