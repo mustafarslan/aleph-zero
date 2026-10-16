@@ -475,15 +475,25 @@ class Engine:
 
     @_rebuilding
     def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
-              timeout_ms: int | None = None, prepare_seconds: float | None = None) -> archfacts.Answer:
+              timeout_ms: int | None = None, prepare_seconds: float | None = None,
+              mentioned: str | None = None) -> archfacts.Answer:
         """What the worktree states about its architecture: with no argument, how many routes, models,
         tables, environment names, tasks and services it has; with a kind or a part of a name, those
         facts with where each is stated. The first question about a view reads its files for them,
-        for at most `prepare_seconds` (or a share of the time limit); `unread` says how many are left."""
+        for at most `prepare_seconds` (or a share of the time limit); `unread` says how many are left.
+
+        With `mentioned` (a request, an error, a grep pattern), the routes and environment names it names, answered from
+        source code only, each route with where its handler is defined (kind 'handler'); `kind` and `like` are not read.
+        A text that names none is answered at once, without the index."""
         kind, like = kind or "", like or ""
         if kind and kind not in archfacts.KINDS:
             raise ValueError("kind is one of: " + ", ".join(archfacts.KINDS))
         started, until = _limits(timeout_ms)
+        mentions = archfacts.mentioned(mentioned) if mentioned is not None else None
+        if mentions is not None:
+            kind, like = "", " | ".join(mention.name for mention in mentions)
+            if not mentions:
+                return archfacts.Answer("", "", [], elapsed_ms=_elapsed(started))
         left = [0]
 
         def prepare(index: Index, view: View):
@@ -494,6 +504,13 @@ class Engine:
             left[0] = archfacts.prepare(index, view, budget, self._stop.is_set)
             if self._stop.is_set():
                 raise Cancelled
+            if mentions is not None:
+                def answer():
+                    found = archfacts.load(index)
+                    listed = archfacts.matching(found, mentions)
+                    listed += archfacts.handlers(index, view, [each for each in listed if each.kind == "route"])
+                    return listed[:k], archfacts.select(found, "", "", 0)[1], len(listed) > k
+                return (answer,)
             return (lambda: archfacts.select(archfacts.load(index), kind, like, k),)
 
         try:

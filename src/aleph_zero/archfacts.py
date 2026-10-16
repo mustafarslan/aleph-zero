@@ -8,13 +8,14 @@ pays nothing. An answer is the facts of the files the view holds now, each with 
 from __future__ import annotations
 
 import json
+import re
 import time
 import zlib
 from dataclasses import dataclass, field
 
 import apsw
 
-from . import architecture, filters, gitio, lang
+from . import architecture, filters, gitio, lang, symbols
 from .indexer import Index
 from .lang import parse
 from .lang.facts import Fact, facts, states_facts
@@ -22,7 +23,7 @@ from .lang.facts import text_facts as _named_text_facts
 from .store.db import transaction
 from .view import View
 
-FACTS_VERSION = 4           # bump when what the readers extract changes: every row is then read again
+FACTS_VERSION = 5           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 KINDS = ("route", "mount", "model", "table", "env", "task", "queue", "service", "rpc", "layer", "contract")
 _CODE = sorted({"typescript", "tsx", "javascript", "python", "go", "rust", "java"} & set(lang.PROFILES))
@@ -176,6 +177,138 @@ def select(found: list[Found], kind: str, like: str, k: int) -> tuple[list[Found
     wanted = like.lower()
     listed = [each for each in found if (not kind or each.kind == kind) and wanted in each.name.lower()]
     return listed[:k], counts, len(listed) > k
+
+
+# ---- what a request names -------------------------------------------------------------------------
+# A prompt, an error or a grep pattern that names a route or an environment name is answered with where the code states it:
+# what the plugin hands the agent without being asked (DEFERRED 0-graph, part 4). Only what the code states: never a
+# document, an example environment file, an OpenAPI or compose file, or a test; an environment name only declared is not read.
+
+MENTIONED_LIMIT = 5          # names read from one text
+_PER_NAME = 3                # routes, and mounts, kept for one name
+_METHOD_PATH = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(?:https?://[^/\s]+)?(/[^\s`'\"),;\]?#]*)")
+_URL_PATH = re.compile(r"\bhttps?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+:\d+|[\w-]+\.(?:example|test|local)\b[\w.]*)"
+                       r"(?::\d+)?(/[^\s`'\"),;\]?#]*)")
+_BARE_PATH = re.compile(r"(?:^|(?<=[\s`'\"(\[]))(/[\w.~{}<>:*-]+(?:/[\w.~{}<>:*-]*)+)")
+_ENV_MENTION = re.compile(r"(?<![\w$.-])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?![\w(-])")
+_FILE_ROOTS = frozenset({"usr", "etc", "tmp", "var", "home", "users", "opt", "bin", "sbin", "dev", "proc", "private", "library",
+                         "system", "applications", "volumes", "mnt", "srv", "root", "nix", "snap", "lib", "lib64", "run"})
+_A_FILE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,5}$")
+_PARAMETER = re.compile(r"^(\{.*\}|:.+|<.+>|\*.*|\d+|[0-9a-f]{8}-[0-9a-f-]{27,}|\$\{.*\})$", re.IGNORECASE)
+NEVER_AN_ANSWER = re.compile(r"(^|/)(docs?|documentation)/|\.(md|mdx|rst|txt|adoc)$|(^|/)\.env|openapi|swagger|"
+                             r"(^|/)(docker-)?compose[^/]*\.ya?ml$|(^|/)Dockerfile|"
+                             r"(^|/)(tests?|__tests__|spec|e2e)/|_test\.(go|py)$|(^|/)test_[^/]*\.py$|\.(test|spec)\.[cm]?[jt]sx?$|"
+                             r"Tests?\.(java|kt)$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Mention:
+    kind: str                    # 'route' or 'env'
+    name: str                    # 'GET /client/{id}', '/client/{id}' (no method said) or 'DB_URL'
+
+
+def _segments(path: str) -> list[str]:
+    """A path's segments, a parameter in any spelling ({id}, :id, <int:id>, *, a number, a uuid) as '*'."""
+    return ["*" if _PARAMETER.match(part) else part.lower() for part in path.split("?")[0].strip("/").split("/") if part]
+
+
+def mentioned(text: str) -> list[Mention]:
+    """The routes and environment names a text names, in the order written, at most MENTIONED_LIMIT. A route: a method and a
+    path, a path in a URL to a local or example host, or a path of two segments or more that is not a file's."""
+    found: list[tuple[int, Mention]] = []
+    covered: list[tuple[int, int]] = []
+    for match in _METHOD_PATH.finditer(text):
+        path = match.group(2).rstrip(".:")
+        if _segments(path):
+            found.append((match.start(), Mention("route", f"{match.group(1)} {path}")))
+            covered.append(match.span(2))
+    for pattern in (_URL_PATH, _BARE_PATH):
+        for match in pattern.finditer(text):
+            start, end = match.span(1)
+            if any(start < right and left < end for left, right in covered):
+                continue
+            covered.append((start, end))
+            path = match.group(1).rstrip(".:")
+            parts = [part for part in path.strip("/").split("/") if part]
+            if not parts or _A_FILE.search(parts[-1]) or (pattern is _BARE_PATH and (len(parts) < 2 or parts[0].lower() in _FILE_ROOTS)):
+                continue
+            found.append((start, Mention("route", path)))
+    for match in _ENV_MENTION.finditer(text):
+        found.append((match.start(), Mention("env", match.group(1))))
+    out: list[Mention] = []
+    for _, mention in sorted(found, key=lambda pair: pair[0]):
+        if mention not in out:
+            out.append(mention)
+    return out[:MENTIONED_LIMIT]
+
+
+def _route_match(asked: list[str], stated: list[str]) -> int:
+    """How many segments two route paths agree on, read from their ends (a router's mount prefix is not in a route's path, and
+    a question may leave out a prefix the code has); 0 unless every segment of the shorter agrees and one of them is a word."""
+    shorter = min(len(asked), len(stated))
+    if shorter == 0:
+        return 0
+    pairs = list(zip(reversed(asked), reversed(stated)))[:shorter]
+    if any(a != s and a != "*" and s != "*" for a, s in pairs):
+        return 0
+    words = sum(1 for a, s in pairs if a == s and a != "*")
+    return shorter if words else 0
+
+
+def matching(found: list[Found], mentions: list[Mention]) -> list[Found]:
+    """The facts of source code that answer the mentions: an environment name read or set by exactly that name; the routes
+    whose path agrees with the one named, longest agreement first (the method too, when one was named); the mounts whose
+    prefix the path starts with."""
+    usable = [each for each in found if not NEVER_AN_ANSWER.search(each.path)]
+    out: list[Found] = []
+    for mention in mentions:
+        if mention.kind == "env":
+            out += [each for each in usable if each.kind == "env" and each.name == mention.name and each.detail != "declared"][:_PER_NAME]
+            continue
+        method, _, path = mention.name.rpartition(" ")
+        asked = _segments(path)
+        routes = []
+        for each in usable:
+            if each.kind != "route":
+                continue
+            stated_method, _, stated_path = each.name.partition(" ")
+            if method and stated_method not in (method, "ANY"):
+                continue
+            agreed = _route_match(asked, _segments(stated_path))
+            if agreed:
+                routes.append((-agreed, each))
+        routes.sort(key=lambda pair: pair[0])
+        best = routes[0][0] if routes else 0
+        out += [each for agreed, each in routes if agreed == best][:_PER_NAME]
+        mounts = []
+        for each in usable:
+            prefix = _segments(each.name) if each.kind == "mount" else []
+            if prefix and len(prefix) <= len(asked) and all(p == a or "*" in (p, a) for p, a in zip(prefix, asked)) \
+                    and any(p == a != "*" for p, a in zip(prefix, asked)):
+                mounts.append((-len(prefix), each))
+        mounts.sort(key=lambda pair: pair[0])
+        out += [each for _, each in mounts[:_PER_NAME - 1]]
+    unique: list[Found] = []
+    for each in out:
+        if each not in unique:
+            unique.append(each)
+    return unique
+
+
+def handlers(index: Index, view: View, routes: list[Found]) -> list[Found]:
+    """Where the handler a route names is defined (`clientHandler.DeleteClient`: the definition of DeleteClient), as a fact of
+    kind 'handler' named by the route. Left out when the name is defined in more than three places outside tests."""
+    out: list[Found] = []
+    for route in routes:
+        framework, _, handler = route.detail.partition(" ")
+        name = handler.rsplit(".", 1)[-1]
+        if route.kind != "route" or not name or not name.isidentifier():
+            continue
+        defined = [hit for hit in symbols.lookup(index, view, name, limit=20, nested=False)
+                   if hit.name == name and not NEVER_AN_ANSWER.search(hit.path)]
+        if 0 < len(defined) <= 3:
+            out += [Found("handler", route.name, hit.path, hit.line, handler) for hit in defined]
+    return out
 
 
 def text(answer: Answer) -> str:

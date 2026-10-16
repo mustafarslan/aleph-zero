@@ -433,6 +433,38 @@ def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
         assert "kind" in tools["facts"]["inputSchema"]["properties"] and "facts" not in {tool["name"] for tool in server.TOOLS}
         assert on.text("facts").startswith("route  1")
         assert on.text("facts", kind="route") == "GET /invoices/{invoice_id}  src/api.py:1  fastapi"
+        assert on.text("facts", mentioned="GET /invoices/7 answers 500") == "route  GET /invoices/{invoice_id}  src/api.py:1  fastapi"
+    finally:
+        on.close()
+
+
+def test_the_facts_of_the_worktree_are_read_when_a_session_starts_while_the_graph_tools_are_offered(repo):
+    # The plugin looks up what a prompt names in 400 ms; reading a large repository's facts takes seconds, once.
+    from aleph_zero.store import index_path, open_db
+
+    repo.write("src/api.py", "@app.get(\"/invoices/{invoice_id}\")\ndef show(invoice_id): ...\n")
+
+    def read_rows():
+        conn = open_db(index_path(repo.root))
+        try:
+            return conn.execute("SELECT count(*) FROM arch_facts WHERE length(facts) > 0").fetchall()[0][0]
+        finally:
+            conn.close()
+
+    off = Client(repo.root)
+    try:
+        off.start()
+        off.text("status")
+    finally:
+        off.close()
+    assert read_rows() == 0                                             # without the graph tools nothing is read
+    on = Client(repo.root, env={"ALEPH_GRAPH": "1"})
+    try:
+        on.start()
+        deadline = time.monotonic() + 20
+        while read_rows() == 0 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert read_rows() == 1                                         # without a question asked
     finally:
         on.close()
 

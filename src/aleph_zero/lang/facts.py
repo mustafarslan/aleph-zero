@@ -60,6 +60,8 @@ _PY_ROUTER_MAKERS = frozenset({"FastAPI", "APIRouter", "Flask", "Blueprint", "Sa
 # In Go any type may have a `Get(string, …)`: holders that are a client or a store by their name.
 _GO_NOT_ROUTERS = frozenset({"http", "client", "kv", "cache", "store", "conn", "db", "redis", "rdb", "consul", "etcd", "zk", "s3"})
 _GO_HANDLERS = frozenset({"identifier", "selector_expression", "func_literal", "call_expression"})
+# A handler given by its name, which `facts` can then find the definition of.
+_NAMED_HANDLERS = frozenset({"identifier", "selector_expression", "member_expression"})
 _BROKER = re.compile(r"redis|nats|mqtt|kafka|amqp|rabbit|broker", re.IGNORECASE)
 _BROKER_ONLY = frozenset({"publish", "subscribe", "psubscribe"})     # methods an in-process event bus has too
 _OS_IMPORT = re.compile(rb"^[ \t]*from[ \t]+os[ \t]+import[ \t]+\(?([^\n)]*)", re.MULTILINE)
@@ -190,6 +192,13 @@ def _written(node: Node | None) -> str:
     return " ".join(_text(node).split())[:_WRITTEN_LIMIT]
 
 
+def _handled(framework: str, handler: Node | None) -> str:
+    """A route's detail: its framework and, where the handler is a name (`clientHandler.DeleteClient`), that name."""
+    if handler is not None and handler.type in _NAMED_HANDLERS:
+        return f"{framework} {_written(handler)}"
+    return framework
+
+
 def _is(node: Node | None, other: Node | None) -> bool:
     return node is not None and other is not None and (node.start_byte, node.end_byte) == (other.start_byte, other.end_byte)
 
@@ -229,7 +238,7 @@ def _ecma(node: Node, state: dict) -> list[Fact]:
             return []
         if path is None or not path.startswith("/") or given[-1].type == "object":
             return []       # a handler is a function or a name, never an options object: that shape is a request
-        return [Fact("route", f"{method} {_path(path)}", _line(node), "express")]
+        return [Fact("route", f"{method} {_path(path)}", _line(node), _handled("express", given[-1]))]
     holder = node.child_by_field_name("object")
     if holder is None or _environment(holder) not in _ENVIRONMENT:
         return _ecma_whole(node) if _environment(node) in _ENVIRONMENT else []
@@ -427,7 +436,7 @@ def _go(node: Node, state: dict) -> list[Fact]:
         method, first = patterned.group(1), patterned.group(2)
     if not first.startswith("/"):
         return []
-    return [Fact("route", f"{method} {_path(first)}", _line(node), "go")]
+    return [Fact("route", f"{method} {_path(first)}", _line(node), _handled("go", given[-1]))]
 
 
 def _rust(node: Node, state: dict) -> list[Fact]:

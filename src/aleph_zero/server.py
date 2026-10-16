@@ -74,7 +74,8 @@ GRAPH_INSTRUCTIONS = """
 Also offered here:
 
 - references(name): who calls a function and what it calls; each answer says whether it is certain.
-- facts(): the routes, data models, environment names and queues the repository states.
+- facts(): the routes, data models, environment names and queues the repository states; facts(mentioned=<the issue>): \
+where the routes and environment names it names are handled or read.
 - decisions(task): the decision records (ADRs) that govern a change, best first.
 """
 
@@ -180,10 +181,13 @@ FACTS_TOOL = {
                    "models and tables, environment names read, set or declared, background tasks and queues, gRPC services, "
                    "the layers and contracts of an oxn.yaml. With no "
                    "kind: how many of each. With a kind, or part of a name (a path, a variable): each with its file and line. "
-                   "A route's path is as written in its file; a mount's prefix is not added to it.",
+                   "A route's path is as written in its file; a mount's prefix is not added to it. With `mentioned` (an "
+                   "issue, an error, a log line): the routes and environment names it names, from source code only, each "
+                   "route with where its handler is defined.",
     "inputSchema": {"type": "object", "properties": {
         "kind": {"type": "string", "enum": list(archfacts.KINDS)},
         "like": {"type": "string"},
+        "mentioned": {"type": "string"},
         "k": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
         **_COMMON, **_TIMEOUT}},
 }
@@ -288,6 +292,37 @@ class _Background:
 _BACKGROUND: _Background | None = None     # this process's, for `status` to say what it is doing
 
 
+class _Facts:
+    """Reads the facts of the session's worktree once, after warming, on its own thread and with its own engine, so that the
+    plugin's first look-up of what a prompt names finds them (it is given 400 ms; reading is seconds on a large repository,
+    once: they are kept by content). Only while the graph tools are offered; stopped with the session."""
+
+    ROUND_SECONDS = 5.0     # one stretch of reading, then whether to stop is looked at again
+
+    def __init__(self, default_cwd) -> None:
+        self._engine = Engine(default_cwd, dense=False)
+        self._stopping = threading.Event()
+        self.unread: int | None = None      # after the last stretch: files still to read (None before the first)
+        self._thread = threading.Thread(target=self._work, name="aleph-facts", daemon=True)
+        self._thread.start()
+
+    def _work(self) -> None:
+        try:
+            while not self._stopping.is_set():
+                self.unread = self._engine.facts(prepare_seconds=self.ROUND_SECONDS).unread
+                if not self.unread:
+                    break
+        except Exception:  # noqa: BLE001 - not a repository, a locked index: the first question reads them itself
+            pass
+        finally:
+            self._engine.close()
+
+    def stop(self) -> None:
+        self._stopping.set()
+        self._engine.cancel()
+        self._thread.join(timeout=5)
+
+
 def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     """Answer requests from `incoming` on `outgoing` until the input closes."""
     global _BACKGROUND
@@ -299,6 +334,7 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     waiting: set = set()          # ids of calls queued and not yet started
     cancelled: set = set()        # of those, the ones withdrawn before they started
     running: list = [None]
+    facts_reader: list = [None]   # the thread that reads the worktree's facts at the start, when the graph tools are offered
 
     def answer(ident, result: dict, stateless: bool, listed: bool = False) -> None:
         """Send a result, with what the revision without a handshake asks of every result (and of a list)."""
@@ -327,6 +363,8 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
                 engine.warm()
                 with state:
                     engine.resume()
+                if graph_enabled() and facts_reader[0] is None:
+                    facts_reader[0] = _Facts(engine.default_cwd)
                 if background is not None and engine.vectors_take_part():
                     background.wake()
                     if engine.vectors_wanted():
@@ -434,6 +472,8 @@ def serve(engine: Engine, incoming: IO[str], outgoing: IO[str]) -> int:
     worker.join(timeout=5)
     if background is not None:
         background.stop()
+    if facts_reader[0] is not None:
+        facts_reader[0].stop()
     _BACKGROUND = None
     return 0
 
@@ -543,7 +583,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
         return json.dumps(asdict(found)) if as_json else decisions.text(found)
     if name == "facts":
         found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,
-                             timeout_ms=args.get("timeout_ms"),
+                             timeout_ms=args.get("timeout_ms"), mentioned=args.get("mentioned"),
                              prepare_seconds=None if args.get("timeout_ms") else GRAPH_SECONDS)
         return json.dumps(asdict(found)) if as_json else archfacts.text(found)
     if name == "references":

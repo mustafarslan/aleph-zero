@@ -39,8 +39,8 @@ function endpoints(app, router) {
 def test_express_routes_are_calls_that_register_a_handler_under_a_literal_path():
     assert found("server/endpoints.js", EXPRESS) == [
         ("route", "GET /v1/users/{id}", 3, "express"),
-        ("route", "POST /v1/users", 4, "express"),
-        ("route", "DELETE /v1/users/{id}/keys/{keyId}", 8, "express"),
+        ("route", "POST /v1/users", 4, "express handler"),
+        ("route", "DELETE /v1/users/{id}/keys/{keyId}", 8, "express removeKey"),
         ("mount", "/v1/reports", 12, "reportsRouter"),               # where a router is mounted: not a route
         ("env", "API_KEY", 13, "read"),
         ("env", "FALLBACK_KEY", 13, "read"),
@@ -102,7 +102,7 @@ def test_python_routes_settings_tasks_and_tables():
 @pytest.mark.parametrize("path,source,expected", [
     ("cmd/main.go", 'package main\nfunc main() {\n\tmux.HandleFunc("/healthz", health)\n\tmux.HandleFunc("POST /v1/jobs", create)\n'
                     '\tr.Get("/v1/jobs/{id}", get)\n\taddr := os.Getenv("GATE_ADDR")\n\tv, ok := os.LookupEnv("GATE_MODE")\n\tm.Get("key")\n}\n',
-     [("route", "ANY /healthz", 3, "go"), ("route", "POST /v1/jobs", 4, "go"), ("route", "GET /v1/jobs/{id}", 5, "go"),
+     [("route", "ANY /healthz", 3, "go health"), ("route", "POST /v1/jobs", 4, "go create"), ("route", "GET /v1/jobs/{id}", 5, "go get"),
       ("env", "GATE_ADDR", 6, "read"), ("env", "GATE_MODE", 7, "read")]),
     ("src/main.rs", 'fn main() {\n    let home = std::env::var("APP_HOME").unwrap();\n    let x = env::var_os("APP_X");\n}\n',
      [("env", "APP_HOME", 2, "read"), ("env", "APP_X", 3, "read")]),
@@ -317,11 +317,11 @@ def test_a_lookup_or_a_request_is_not_a_route():
         'const site = new Hono();\n'
         'site.get("/z", show);\n'
     )
-    assert found("a.js", script) == [("route", "GET /admin", 8, "express"), ("route", "POST /x", 9, "express"),
-                                     ("route", "PUT /y", 9, "express"), ("route", "GET /z", 11, "express")]
+    assert found("a.js", script) == [("route", "GET /admin", 8, "express list"), ("route", "POST /x", 9, "express make"),
+                                     ("route", "PUT /y", 9, "express put"), ("route", "GET /z", 11, "express show")]
     go = ('package a\nfunc f() {\n\tkv.Get("/foo", nil)\n\tconn.Get("/path", true)\n\tcache.Get("/k", 1)\n'
           '\thttp.Post("/api", "application/json", body)\n\tclient.Get("/x", opts)\n\tr.Get("/jobs", h.list)\n\tv1.GET("/users", listUsers)\n}\n')
-    assert found("a.go", go) == [("route", "GET /jobs", 8, "go"), ("route", "GET /users", 9, "go")]
+    assert found("a.go", go) == [("route", "GET /jobs", 8, "go h.list"), ("route", "GET /users", 9, "go listUsers")]
     python = ('@client.get("/x")\ndef a(): ...\n@cache.get("/x")\ndef b(): ...\n@retry.route("/y")\ndef c(): ...\n'
               'service = FastAPI()\n@service.get("/ok")\ndef d(): ...\n@users_router.post("/u")\ndef e(): ...\n')
     assert found("a.py", python) == [("route", "GET /ok", 8, "fastapi"), ("route", "POST /u", 10, "fastapi")]
@@ -338,3 +338,40 @@ def test_a_mapping_called_environ_is_not_the_process_environment():
 def test_a_name_set_and_read_on_one_line_is_both():
     assert found("a.js", 'process.env.PORT = process.env.PORT || "3000";\n') == [("env", "PORT", 1, "set"), ("env", "PORT", 1, "read")]
     assert found("a.py", 'import os\nos.environ["TZ"] = os.environ.get("TZ", "UTC")\n') == [("env", "TZ", 2, "set"), ("env", "TZ", 2, "read")]
+
+
+def test_the_routes_and_environment_names_a_text_names():
+    from aleph_zero.archfacts import Mention, mentioned
+
+    assert mentioned("where is the POST /client/{id}/elevate endpoint handled") == [Mention("route", "POST /client/{id}/elevate")]
+    assert mentioned("GET http://localhost:8080/api/users/12 returns 500") == [Mention("route", "GET /api/users/12")]
+    assert mentioned("calling `/api/auth/login` from curl http://127.0.0.1:3000/v1/jobs?x=1 fails") == [
+        Mention("route", "/api/auth/login"), Mention("route", "/v1/jobs")]
+    assert mentioned("DB_USERNAME is ignored, and so is MAX_RETRIES") == [Mention("env", "DB_USERNAME"), Mention("env", "MAX_RETRIES")]
+    # A file's path, a path of the machine, a page on the web, a single segment, a call: none is a route or a name.
+    assert mentioned("in /Users/me/proj/app.py, /usr/local/bin/x, src/app/main.py, https://github.com/a/b/issues/1, /health,"
+                     " os.getenv(FOO_BAR) is fine but $HOME_DIR and get_THING_X() are not") == [Mention("env", "FOO_BAR")]
+    assert mentioned("A B C " + " ".join(f"NAME_{n}" for n in range(9))) == [Mention("env", f"NAME_{n}") for n in range(5)]
+
+
+def test_what_a_request_names_is_answered_from_source_code_with_the_handler(repo):
+    repo.write("router/router.go", 'package router\nfunc Create(g *gin.Engine) {\n\tclient := g.Group("/client")\n'
+               '\tg.DELETE("/client/:id", clientHandler.DeleteClient)\n\tg.POST("/client/:id/elevate", clientHandler.Elevate)\n'
+               '\tg.GET("/message", messageHandler.List)\n}\n')
+    repo.write("api/client.go", "package api\n\ntype ClientAPI struct{}\n\nfunc (a *ClientAPI) DeleteClient(ctx *gin.Context) {}\n")
+    repo.write("api/client_test.go", "package api\n\nfunc DeleteClient() {}\n")
+    repo.write("config/db.go", 'package config\nfunc url() string { return os.Getenv("DB_URL") }\n')
+    repo.write("docs/setup.md", "Set `DB_URL`.\n")
+    repo.write(".env.example", "DB_URL=\n")
+    engine = Engine(repo.root)
+    answer = engine.facts(mentioned="DELETE http://localhost:8080/client/7 fails, and DB_URL is not read; MAX_SIZE too")
+    assert answer.like == "DELETE /client/7 | DB_URL | MAX_SIZE"
+    assert [(f.kind, f.name, f.path, f.line) for f in answer.facts] == [
+        ("route", "DELETE /client/{id}", "router/router.go", 4),                 # not the elevate route, nor the GET
+        ("mount", "/client", "router/router.go", 3),
+        ("env", "DB_URL", "config/db.go", 2),                                    # not the documentation or the example file
+        ("handler", "DELETE /client/{id}", "api/client.go", 5),                  # the test's function of that name is not it
+    ]
+    assert engine.facts(mentioned="the /client/{id} route").facts[0].name == "DELETE /client/{id}"
+    nothing = engine.facts(mentioned="rename the helper in utils")
+    assert (nothing.like, nothing.facts, nothing.counts) == ("", [], {})        # answered without the index

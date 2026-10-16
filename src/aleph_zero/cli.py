@@ -92,7 +92,7 @@ def _references(args) -> int:
 
 
 def _facts(args) -> int:
-    found = Engine(args.cwd).facts(args.kind, like=args.like, k=args.k, timeout_ms=args.timeout_ms)
+    found = Engine(args.cwd).facts(args.kind, like=args.like, k=args.k, timeout_ms=args.timeout_ms, mentioned=args.mentioned)
     print(json.dumps(asdict(found), indent=2) if args.json else archfacts.text(found))
     return 0
 
@@ -525,6 +525,8 @@ def main(argv: list[str] | None = None) -> int:
     stated = commands.add_parser("facts", help="routes, models, tables, environment names, tasks and services the code states; with no kind, how many of each")
     stated.add_argument("kind", nargs="?", choices=archfacts.KINDS)
     stated.add_argument("--like", help="only names containing this")
+    stated.add_argument("--mentioned", metavar="TEXT", help="the routes and environment names TEXT names (an issue, an error): "
+                        "where the code handles or reads them, each route with its handler")
     stated.add_argument("-k", type=int, default=200)
     stated.add_argument("--timeout-ms", type=int)
     stated.add_argument("--json", action="store_true")

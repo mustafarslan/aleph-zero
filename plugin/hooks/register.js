@@ -7,8 +7,8 @@
 //   3  a recursive grep that found nothing gets ranked locations appended
 // The meter runs on every rung.
 import {
-  DESCRIPTIONS, ENGINE_TOOL, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  grepToolFoundNothing, promptContext, readGrepTool, readSearch, resultText, worthAsking,
+  DESCRIPTIONS, ENGINE_TOOL, FACTS_DESCRIPTION, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
+  factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
@@ -27,8 +27,10 @@ function usage() {
 }
 
 // This session, since the mod loaded.
-const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0 }, listed: [] }
+const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0, facts: 0 }, listed: [] }
 let prompts = 0
+// The names facts were looked up for this session (a route's path, an environment name): each is looked up once.
+let handed = []
 
 // The session's meter, rung 2's one chance and the side chat's conversation, kept in $.state: a changed option loads the
 // mod again (its module state starts over), and what it had counted and said would be gone. Read back once a load.
@@ -43,6 +45,7 @@ async function restore($) {
     if (!value || typeof value !== 'object') return
     if (value.meter && typeof value.meter === 'object') Object.assign(meter, value.meter)
     if (typeof value.prompts === 'number') prompts = value.prompts
+    if (Array.isArray(value.handed)) handed = value.handed
     if (Array.isArray(value.turns) && !chat.turns.length) chat.turns.push(...value.turns)
     if (typeof value.tokens === 'number') chat.tokens = value.tokens
     if (typeof value.focused === 'string') cfg.focused = value.focused     // the settings row the ring was on
@@ -56,7 +59,7 @@ async function saveSession($) {
   const turns = chat.turns.slice(-8).map((turn) => turn.state === 'searching' || turn.state === 'thinking'
     ? { ...turn, state: 'failed', answer: 'Stopped: the plugin was loaded again.' } : { ...turn })
   try {
-    await $.state.set(SESSION_STATE, { meter, prompts, turns, tokens: chat.tokens, focused: cfg.focused })
+    await $.state.set(SESSION_STATE, { meter, prompts, handed, turns, tokens: chat.tokens, focused: cfg.focused })
   } catch {
     // the session goes on without it
   }
@@ -96,6 +99,19 @@ async function ask($, tool, args) {
   const answered = reach($, tool, { ...args, format: 'json', timeout_ms: ENGINE_MS }).catch(() => null)
   const waited = $.clock.sleep(HOOK_MS).then(() => null)
   return Promise.race([answered, waited])
+}
+
+// What a text names (a route, an environment name), looked up in the engine's facts: a note for the agent, or ''. Asked
+// only while the graph tools are on. Each name once a session, so a text that names nothing new costs no call
+// (DEFERRED 0-graph, part 4).
+async function lookUp($, text) {
+  const fresh = mayName(text).filter((name) => !handed.includes(name))
+  if (!fresh.length) return ''
+  const answer = await ask($, 'facts', { mentioned: String(text).slice(0, 4000), k: 20 })
+  const note = answer ? factsNote(answer) : ''
+  if (answer && (note || !/"late": ?true/.test(resultText(answer)))) handed = [...handed, ...fresh].slice(-200)  // a late answer is asked again
+  if (note) meter.added.facts = (meter.added.facts || 0) + 1
+  return note
 }
 
 // ---- the side chat ---------------------------------------------------------------------------
@@ -400,6 +416,7 @@ export function register(on, options) {
   // The graph tools are offered unless switched off (the manifest's default is on; the engine reads the same option).
   const graph = !(options && /^(off|0|false|no)$/i.test(String(options.graph || '').trim()))
   const section = graph ? SECTION + '\n' + GRAPH_LINE : SECTION
+
 
   on('session.start', async ($, e, next) => {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
@@ -898,6 +915,7 @@ export function register(on, options) {
     const described = await next(e)
     if (rung < 1) return described
     const name = e.tool.slice(e.tool.lastIndexOf('__') + 2)
+    if (name === 'facts' && graph) return { description: FACTS_DESCRIPTION, isDeferred: false }
     // The four tools for finding code. The engine's memory tools stay on demand.
     if (!DESCRIPTIONS[name]) return described
     return { description: DESCRIPTIONS[name], isDeferred: false }
@@ -921,15 +939,22 @@ export function register(on, options) {
   on('prompt.submit', async ($, e, next) => {
     // The one chance goes to the first prompt that is a question: "hi" does not use it up.
     await restore($)
-    if (rung < 2 || prompts > 0 || !worthAsking(e.text)) return next(e)
+    // Facts: on every prompt that names a route or an environment name not looked up yet, with the graph tools on.
+    const facts = graph && rung >= 1 ? lookUp($, e.text) : Promise.resolve('')
+    if (rung < 2 || prompts > 0 || !worthAsking(e.text)) {
+      const note = await facts
+      return note ? next({ ...e, context: [...(e.context ?? []), note] }) : next(e)
+    }
     prompts += 1
     // Code only, and enough hits to fill five files: a bug report's words match the issue template it was written on,
     // and documentation took two places of five (ADR-011, the reading after the run of 2026-10-13).
-    const hits = hitsOf(await ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' }))
-    if (!confident(hits)) return next(e)
+    const [note, answer] = await Promise.all([facts, ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' })])
+    const hits = hitsOf(answer)
+    const context = [...(e.context ?? []), ...(note ? [note] : [])]
+    if (!confident(hits)) return note ? next({ ...e, context }) : next(e)
     meter.added.prompt += 1
     meter.listed = [...new Set(hits.map((hit) => hit.path))].slice(0, 5)  // the files of the lines, as locations() takes them
-    return next({ ...e, context: [...(e.context ?? []), promptContext(hits, signatures)] })
+    return next({ ...e, context: [...context, promptContext(hits, signatures)] })
   }).catch(async ($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {
@@ -942,7 +967,14 @@ export function register(on, options) {
   // ---- L3: a recursive grep that found nothing -----------------------------------------------
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const result = await next(e)
+    let result = await next(e)
+    if (rung < 1) return result
+    if (graph && readSearch(e.command)) {
+      // A recursive grep for a route or an environment name, whatever it found: where the code states it, once a session.
+      await restore($)
+      const note = await lookUp($, e.command)
+      if (note) result = { ...result, context: [...(result.context ?? []), note] }
+    }
     if (rung < 3) return result
     const read = readSearch(e.command)
     if (!read || !foundNothing(result, read.program)) return result
@@ -958,7 +990,13 @@ export function register(on, options) {
   // The Grep tool is the recursive search an agent uses most; its result keeps its own shape, and the note
   // reaches the model as the call's context, after the result.
   on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
-    const result = await next(e)
+    let result = await next(e)
+    if (rung < 1) return result
+    if (graph && readGrepTool(e, await cwdOf($))) {
+      await restore($)
+      const note = await lookUp($, String(e.pattern || ''))
+      if (note) result = { ...result, context: [...(result.context ?? []), note] }
+    }
     if (rung < 3) return result
     const read = readGrepTool(e, await cwdOf($))
     if (!read || !grepToolFoundNothing(result)) return result

@@ -70,7 +70,12 @@ def tasks(workdir: Path, count: int, seed: int = 11, with_dev: bool = False, sou
     prepared = {path.name.replace("__", "/", 1) for path in workdir.iterdir() if (path / ".git").exists() or path.is_symlink()}
     seen = {line.strip() for line in (Path(__file__).with_name("dev_tasks.txt")).read_text().splitlines()
             if line.strip() and not line.startswith("#")} if with_dev is False else set()
-    found = benchmark_c.instances(prepared) if source == "locbench" else benchmark_c.instances(prepared, source, language, 40)
+    if source == "facts":     # the route and environment questions of DEFERRED 0-graph part 2: a graph-favourable set
+        found = benchmark_c.instances(prepared, "owner", questions=ROOT / "bench" / "eval" / "facts_questions.json")
+    elif source == "locbench":
+        found = benchmark_c.instances(prepared)
+    else:
+        found = benchmark_c.instances(prepared, source, language, 40)
     rows = [row for row in found if row["gold"] and row["instance_id"] not in seen]
     by_repo: dict[str, list[dict]] = {}
     for row in rows:
@@ -100,6 +105,7 @@ def mod_meter(store: Path = STORE) -> dict | None:
         kept = json.loads(newest.read_text())["aleph-zero.last-session"]
         meter = kept["meter"]
         return {"rung": kept["rung"], "added_to_prompt": meter["added"]["prompt"], "added_to_grep": meter["added"]["grep"],
+                "added_facts": meter["added"].get("facts", 0),
                 "aleph_calls": meter["aleph"], "listed": list(meter.get("listed", []))}
     except (ValueError, OSError, KeyError, TypeError):
         return None
@@ -448,7 +454,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spend-usd", type=float, help="run: never start a session that could take what the results file has "
                         "spent, with that session's --budget-usd, over this")
     parser.add_argument("--baseline", default="none")
-    parser.add_argument("--set", default="locbench", help="tasks/run: where the issues come from: locbench (Python), or others with --language")
+    parser.add_argument("--set", default="locbench", help="tasks/run: where the issues come from: locbench (Python), others with --language, or facts "
+                        "(the route and environment questions of DEFERRED 0-graph, from bench/data/benchc-facts)")
     parser.add_argument("--language", help="tasks/run: with --set others: the language of the issues")
     parser.add_argument("--warm-worker", action="store_true",
                         help="run: before each session with the plugin, have the embedding worker running with its model loaded")

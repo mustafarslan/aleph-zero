@@ -17,6 +17,14 @@ export const DESCRIPTIONS = {
   status: 'Report what is indexed for this worktree and what is not searched (files outside a sparse checkout, submodules).',
 }
 
+// Shown in full beside the four when the graph tools are offered (the `graph` option, on by default): the other graph tools
+// stay behind ToolSearch (DEFERRED 0-graph, part 4).
+export const FACTS_DESCRIPTION = 'Where this repository\'s code handles an HTTP route or reads an environment name, as the code '
+  + 'states it (not documentation or tests). Give the issue, error or log line as `mentioned`: each route it names comes with '
+  + 'the file and line that register it and where its handler is defined; each environment name with where it is read. '
+  + 'With `kind` (route, mount, model, table, env, task, queue, service, rpc) and `like` (part of a name): every such fact. '
+  + 'Faster and more exact than grep for "which handler serves /api/x" or "where is FOO_URL read".'
+
 // Added to the descriptions of Claude Code's own search tools: the place the agent is
 // looking at the moment it chooses grep. In the pilot of the measurement the standing
 // instruction alone was followed in one session of three.
@@ -42,8 +50,8 @@ export const SECTION = [
 ].join('\n')
 
 // Added to the section when the graph tools are offered (the `graph` option, on by default).
-export const GRAPH_LINE = '- To find who calls a function or what it calls, call `references`; for the decision records that govern a '
-  + 'change, `decisions`; for routes, data models and environment names, `facts`.'
+export const GRAPH_LINE = '- For where a route is handled or an environment name is read, call `facts` with the text that names it '
+  + '(`mentioned`). Who calls a function: `references`; the decision records that govern a change: `decisions`.'
 
 
 // ---- what the engine answered --------------------------------------------------------------
@@ -118,6 +126,48 @@ export function promptContext(hits, signatures = false) {
   return 'Aleph Zero (this repository\'s code search) ranks these locations highest for the request above. '
     + 'They are a starting point, not an answer; ignore them if the request is not about locating code.\n'
     + locations(hits, 5, signatures)
+}
+
+// ---- facts: the routes and environment names a text names -------------------------------------
+// The engine reads them (archfacts.mentioned); this only says whether a text may name one, so that a prompt or a grep that
+// names none costs no call, and which names were already handed over this session.
+
+const ENV_LIKE = /(?<![\w$.-])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w(-])/g
+const PATH_LIKE = /(?:^|(?<=[\s`'"(\[]|https?:\/\/[^/\s]+))\/[\w.~{}<>:*-]+(?:\/[\w.~{}<>:*-]*)*/g
+
+export function mayName(text) {
+  const written = String(text || '')
+  return [...new Set([...(written.match(ENV_LIKE) || []), ...(written.match(PATH_LIKE) || [])])]
+}
+
+// The facts of an answer to facts(mentioned=…), as lines an agent can act on: a route with where it is registered, the
+// mounts above it and where its handler is defined; an environment name with where it is read. '' when nothing was found.
+export function factsNote(answer) {
+  let parsed
+  try {
+    parsed = JSON.parse(resultText(answer))
+  } catch {
+    return ''
+  }
+  const facts = Array.isArray(parsed && parsed.facts) ? parsed.facts : []
+  const at = (fact) => fact.path + ':' + fact.line
+  const lines = []
+  const mounts = facts.filter((fact) => fact.kind === 'mount')
+  for (const route of facts.filter((fact) => fact.kind === 'route')) {
+    const handled = facts.filter((fact) => fact.kind === 'handler' && fact.name === route.name)
+    const by = route.detail && route.detail.includes(' ') ? route.detail.slice(route.detail.indexOf(' ') + 1) : ''
+    lines.push('- ' + route.name + ': registered at ' + at(route) + (by ? ' (' + by + ')' : '')
+      + (handled.length ? '; handler defined at ' + handled.map(at).join(', ') : ''))
+  }
+  if (mounts.length) lines.push('- mounted: ' + mounts.map((fact) => fact.name + ' at ' + at(fact)).join(', '))
+  const names = [...new Set(facts.filter((fact) => fact.kind === 'env').map((fact) => fact.name))]
+  for (const name of names) {
+    const where = facts.filter((fact) => fact.kind === 'env' && fact.name === name)
+    lines.push('- ' + name + ': ' + where.map((fact) => (fact.detail === 'set' ? 'set at ' : 'read at ') + at(fact)).join(', '))
+  }
+  if (!lines.length) return ''
+  return 'Aleph Zero looked these names up in what this repository\'s code states (documentation and tests left out):\n'
+    + lines.join('\n') + '\nRead those lines first.'
 }
 
 // ---- L3: a search command that found nothing --------------------------------------------------
