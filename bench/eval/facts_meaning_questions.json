@@ -1,0 +1,1645 @@
+[
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/client.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-1",
+  "category": "route",
+  "problem_statement": "Create a client.",
+  "name": "/client",
+  "like": "client",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/user.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-2",
+  "category": "route",
+  "problem_statement": "Deletes a user.",
+  "name": "/user/{id}",
+  "like": "user",
+  "method": "DELETE"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/oidc.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-3",
+  "category": "route",
+  "problem_statement": "Start the OIDC flow to elevate an existing client session (browser).",
+  "name": "/auth/oidc/elevate",
+  "like": "elevate",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/plugin.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-4",
+  "category": "route",
+  "problem_statement": "Get YAML configuration for Configurer plugin.",
+  "name": "/plugin/{id}/config",
+  "like": "config",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/client.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-5",
+  "category": "route",
+  "problem_statement": "Return all clients.",
+  "name": "/client",
+  "like": "client",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/health.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-6",
+  "category": "route",
+  "problem_statement": "Get health information.",
+  "name": "/health",
+  "like": "health",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/oidc.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-7",
+  "category": "route",
+  "problem_statement": "Initiate the OIDC authorization flow for a native app.",
+  "name": "/auth/oidc/external/authorize",
+  "like": "authorize",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/oidc.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-8",
+  "category": "route",
+  "problem_statement": "Handle the OIDC provider callback (browser).",
+  "name": "/auth/oidc/callback",
+  "like": "callback",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-9",
+  "category": "route",
+  "problem_statement": "Get gotify information.",
+  "name": "/gotifyinfo",
+  "like": "gotifyinfo",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/message.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-10",
+  "category": "route",
+  "problem_statement": "Deletes a message with an id.",
+  "name": "/message/{id}",
+  "like": "message",
+  "method": "DELETE"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/application.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-11",
+  "category": "route",
+  "problem_statement": "Return all applications.",
+  "name": "/application",
+  "like": "application",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/user.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-12",
+  "category": "route",
+  "problem_statement": "Create a user.",
+  "name": "/user",
+  "like": "user",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/client.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-13",
+  "category": "route",
+  "problem_statement": "Elevate a client session.",
+  "name": "/client/{id}/elevate",
+  "like": "elevate",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/user.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-14",
+  "category": "route",
+  "problem_statement": "Return all users.",
+  "name": "/user",
+  "like": "user",
+  "method": "GET"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/plugin.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-15",
+  "category": "route",
+  "problem_statement": "Disable a plugin.",
+  "name": "/plugin/{id}/disable",
+  "like": "disable",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/application.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-16",
+  "category": "route",
+  "problem_statement": "Delete an application.",
+  "name": "/application/{id}",
+  "like": "application",
+  "method": "DELETE"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/plugin.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-17",
+  "category": "route",
+  "problem_statement": "Update YAML configuration for Configurer plugin.",
+  "name": "/plugin/{id}/config",
+  "like": "config",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/user.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-18",
+  "category": "route",
+  "problem_statement": "Update a user.",
+  "name": "/user/{id}",
+  "like": "user",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/message.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-19",
+  "category": "route",
+  "problem_statement": "Create a message.",
+  "name": "/message",
+  "like": "message",
+  "method": "POST"
+ },
+ {
+  "repo": "gotify/server",
+  "base_commit": "64f28352dce6e8a95c0a24b54daabedd66aef669",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/gotify_server",
+  "set": "facts",
+  "gold": [
+   "api/user.go",
+   "router/router.go"
+  ],
+  "instance_id": "server-meaning-20",
+  "category": "route",
+  "problem_statement": "Get a user.",
+  "name": "/user/{id}",
+  "like": "user",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/VetRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-2",
+  "category": "route",
+  "problem_statement": "Get a vet by ID",
+  "name": "/vets/{vetId}",
+  "like": "vets",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-3",
+  "category": "route",
+  "problem_statement": "Update a pet owner's details",
+  "name": "/owners/{ownerId}",
+  "like": "owners",
+  "method": "PUT"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/UserRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-4",
+  "category": "route",
+  "problem_statement": "Create a user",
+  "name": "/users",
+  "like": "users",
+  "method": "POST"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/VisitRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-5",
+  "category": "route",
+  "problem_statement": "Get a visit by ID",
+  "name": "/visits/{visitId}",
+  "like": "visits",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v2/PetRestControllerV2.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-6",
+  "category": "route",
+  "problem_statement": "Lists pets with pagination.",
+  "name": "/v2/pets",
+  "like": "pets",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-7",
+  "category": "route",
+  "problem_statement": "Delete a pet by ID",
+  "name": "/pets/{petId}",
+  "like": "pets",
+  "method": "DELETE"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-8",
+  "category": "route",
+  "problem_statement": "Update a pet's details",
+  "name": "/owners/{ownerId}/pets/{petId}",
+  "like": "pets",
+  "method": "PUT"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetTypeRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-9",
+  "category": "route",
+  "problem_statement": "Lists pet types",
+  "name": "/pettypes",
+  "like": "pettypes",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/SpecialtyRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-10",
+  "category": "route",
+  "problem_statement": "Create a specialty",
+  "name": "/specialties",
+  "like": "specialties",
+  "method": "POST"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-11",
+  "category": "route",
+  "problem_statement": "Get a pet by ID",
+  "name": "/pets/{petId}",
+  "like": "pets",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-12",
+  "category": "route",
+  "problem_statement": "Get a pet by ID",
+  "name": "/owners/{ownerId}/pets/{petId}",
+  "like": "pets",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-13",
+  "category": "route",
+  "problem_statement": "Adds a pet to an owner",
+  "name": "/owners/{ownerId}/pets",
+  "like": "pets",
+  "method": "POST"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-14",
+  "category": "route",
+  "problem_statement": "Delete an owner by ID",
+  "name": "/owners/{ownerId}",
+  "like": "owners",
+  "method": "DELETE"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-15",
+  "category": "route",
+  "problem_statement": "Lists pet",
+  "name": "/pets",
+  "like": "pets",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-16",
+  "category": "route",
+  "problem_statement": "Adds a pet owner",
+  "name": "/owners",
+  "like": "owners",
+  "method": "POST"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/SpecialtyRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-17",
+  "category": "route",
+  "problem_statement": "Get a specialty by ID",
+  "name": "/specialties/{specialtyId}",
+  "like": "specialties",
+  "method": "GET"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/VisitRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-18",
+  "category": "route",
+  "problem_statement": "Update a visit by ID",
+  "name": "/visits/{visitId}",
+  "like": "visits",
+  "method": "PUT"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-19",
+  "category": "route",
+  "problem_statement": "Adds a vet visit",
+  "name": "/owners/{ownerId}/pets/{petId}/visits",
+  "like": "visits",
+  "method": "POST"
+ },
+ {
+  "repo": "spring-petclinic/spring-petclinic-rest",
+  "base_commit": "afc8fc1d3b8ec8de69414482b3bd70a1da78cb95",
+  "language": "java",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/spring-petclinic_spring-petclinic-rest",
+  "set": "facts",
+  "gold": [
+   "src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetTypeRestControllerV1.java"
+  ],
+  "instance_id": "spring-petclinic-rest-meaning-20",
+  "category": "route",
+  "problem_statement": "Get a pet type by ID",
+  "name": "/pettypes/{petTypeId}",
+  "like": "pettypes",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/activity.controller.ts"
+  ],
+  "instance_id": "immich-meaning-1",
+  "category": "route",
+  "problem_statement": "Create an activity",
+  "name": "/activities",
+  "like": "activities",
+  "method": "POST"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/workflow.controller.ts"
+  ],
+  "instance_id": "immich-meaning-2",
+  "category": "route",
+  "problem_statement": "Retrieve a workflow",
+  "name": "/workflows/{id}",
+  "like": "workflows",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/job.controller.ts"
+  ],
+  "instance_id": "immich-meaning-3",
+  "category": "route",
+  "problem_statement": "Run jobs",
+  "name": "/jobs/{name}",
+  "like": "jobs",
+  "method": "PUT"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/partner.controller.ts"
+  ],
+  "instance_id": "immich-meaning-4",
+  "category": "route",
+  "problem_statement": "Update a partner",
+  "name": "/partners/{id}",
+  "like": "partners",
+  "method": "PUT"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/sync.controller.ts"
+  ],
+  "instance_id": "immich-meaning-5",
+  "category": "route",
+  "problem_statement": "Stream sync changes",
+  "name": "/sync/stream",
+  "like": "stream",
+  "method": "POST"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/maintenance.controller.ts",
+   "server/src/maintenance/maintenance-worker.controller.ts"
+  ],
+  "instance_id": "immich-meaning-6",
+  "category": "route",
+  "problem_statement": "Set maintenance mode",
+  "name": "/admin/maintenance",
+  "like": "maintenance",
+  "method": "POST"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/video-stream.controller.ts"
+  ],
+  "instance_id": "immich-meaning-7",
+  "category": "route",
+  "problem_statement": "Get HLS segment or init file",
+  "name": "/assets/{id}/video/stream/{sessionId}/{variantIndex}/{filename}",
+  "like": "stream",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/database-backup.controller.ts"
+  ],
+  "instance_id": "immich-meaning-8",
+  "category": "route",
+  "problem_statement": "Start database backup restore flow",
+  "name": "/admin/database-backups/start-restore",
+  "like": "start-restore",
+  "method": "POST"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/memory.controller.ts"
+  ],
+  "instance_id": "immich-meaning-9",
+  "category": "route",
+  "problem_statement": "Delete a memory",
+  "name": "/memories/{id}",
+  "like": "memories",
+  "method": "DELETE"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/stack.controller.ts"
+  ],
+  "instance_id": "immich-meaning-10",
+  "category": "route",
+  "problem_statement": "Retrieve a stack",
+  "name": "/stacks/{id}",
+  "like": "stacks",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/plugin.controller.ts"
+  ],
+  "instance_id": "immich-meaning-11",
+  "category": "route",
+  "problem_statement": "List all plugins",
+  "name": "/plugins",
+  "like": "plugins",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/asset.controller.ts"
+  ],
+  "instance_id": "immich-meaning-12",
+  "category": "route",
+  "problem_statement": "Delete assets",
+  "name": "/assets",
+  "like": "assets",
+  "method": "DELETE"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/asset.controller.ts"
+  ],
+  "instance_id": "immich-meaning-13",
+  "category": "route",
+  "problem_statement": "Delete asset metadata by key",
+  "name": "/assets/{id}/metadata/{key}",
+  "like": "metadata",
+  "method": "DELETE"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/asset-media.controller.ts"
+  ],
+  "instance_id": "immich-meaning-14",
+  "category": "route",
+  "problem_statement": "Play asset video",
+  "name": "/assets/{id}/video/playback",
+  "like": "playback",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/activity.controller.ts"
+  ],
+  "instance_id": "immich-meaning-15",
+  "category": "route",
+  "problem_statement": "Delete an activity",
+  "name": "/activities/{id}",
+  "like": "activities",
+  "method": "DELETE"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/person.controller.ts"
+  ],
+  "instance_id": "immich-meaning-16",
+  "category": "route",
+  "problem_statement": "Remove users from people",
+  "name": "/people/users",
+  "like": "users",
+  "method": "DELETE"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/asset.controller.ts"
+  ],
+  "instance_id": "immich-meaning-17",
+  "category": "route",
+  "problem_statement": "Update an asset",
+  "name": "/assets/{id}",
+  "like": "assets",
+  "method": "PUT"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/config-user.controller.ts"
+  ],
+  "instance_id": "immich-meaning-18",
+  "category": "route",
+  "problem_statement": "Get the default configuration with user visibility",
+  "name": "/config/defaults",
+  "like": "defaults",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/user.controller.ts"
+  ],
+  "instance_id": "immich-meaning-19",
+  "category": "route",
+  "problem_statement": "Retrieve user product key",
+  "name": "/users/me/license",
+  "like": "license",
+  "method": "GET"
+ },
+ {
+  "repo": "immich-app/immich",
+  "base_commit": "3ae71117413cc0a79e4a0555df015e3ffde11786",
+  "language": "typescript",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/immich-app_immich",
+  "set": "facts",
+  "gold": [
+   "server/src/controllers/face.controller.ts"
+  ],
+  "instance_id": "immich-meaning-20",
+  "category": "route",
+  "problem_statement": "Retrieve faces for asset",
+  "name": "/faces",
+  "like": "faces",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/media.go"
+  ],
+  "instance_id": "listmonk-meaning-1",
+  "category": "route",
+  "problem_statement": "handles deletion of uploaded media.",
+  "name": "/media/{id}",
+  "like": "media",
+  "method": "DELETE"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/import.go"
+  ],
+  "instance_id": "listmonk-meaning-2",
+  "category": "route",
+  "problem_statement": "returns import status.",
+  "name": "/import/subscribers",
+  "like": "subscribers",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/public.go"
+  ],
+  "instance_id": "listmonk-meaning-3",
+  "category": "route",
+  "problem_statement": "returns the list of public lists with minimal fields",
+  "name": "/public/lists",
+  "like": "lists",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/i18n.go"
+  ],
+  "instance_id": "listmonk-meaning-4",
+  "category": "route",
+  "problem_statement": "returns the JSON language pack given the language code",
+  "name": "/lang/{lang}",
+  "like": "lang",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/subscribers.go"
+  ],
+  "instance_id": "listmonk-meaning-5",
+  "category": "route",
+  "problem_statement": "handles bulk addition or removal of subscribers",
+  "name": "/subscribers/lists",
+  "like": "lists",
+  "method": "PUT"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/campaign_analytics.go",
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-6",
+  "category": "route",
+  "problem_statement": "retrieves view counts for a campaign.",
+  "name": "/campaigns/analytics/{type}",
+  "like": "analytics",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/campaigns.go",
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-7",
+  "category": "route",
+  "problem_statement": "returns stats of a given set of campaign IDs.",
+  "name": "/campaigns/running/stats",
+  "like": "stats",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/admin.go",
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-8",
+  "category": "route",
+  "problem_statement": "restarts the app",
+  "name": "/admin/reload",
+  "like": "reload",
+  "method": "POST"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/subscribers.go"
+  ],
+  "instance_id": "listmonk-meaning-9",
+  "category": "route",
+  "problem_statement": "modify subscriber data",
+  "name": "/subscribers/{id}",
+  "like": "subscribers",
+  "method": "PUT"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/templates.go"
+  ],
+  "instance_id": "listmonk-meaning-10",
+  "category": "route",
+  "problem_statement": "handles retrieval of templates",
+  "name": "/templates/{id}",
+  "like": "templates",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/campaigns.go",
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-11",
+  "category": "route",
+  "problem_statement": "renders the HTML preview of a campaign body",
+  "name": "/campaigns/{id}/preview",
+  "like": "preview",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/maintenance.go"
+  ],
+  "instance_id": "listmonk-meaning-12",
+  "category": "route",
+  "problem_statement": "garbage collects (deletes) orphaned or blocklisted subscribers.",
+  "name": "/maintenance/subscriptions/unconfirmed",
+  "like": "unconfirmed",
+  "method": "DELETE"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/import.go"
+  ],
+  "instance_id": "listmonk-meaning-13",
+  "category": "route",
+  "problem_statement": "handles the uploading and bulk importing of a ZIP file of one or more CSV files.",
+  "name": "/import/subscribers",
+  "like": "subscribers",
+  "method": "POST"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/lists.go"
+  ],
+  "instance_id": "listmonk-meaning-14",
+  "category": "route",
+  "problem_statement": "retrieves lists with additional metadata like subscriber counts. This may be slow.",
+  "name": "/lists",
+  "like": "lists",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-15",
+  "category": "route",
+  "problem_statement": "healthcheck endpoint",
+  "name": "/health",
+  "like": "health",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/media.go"
+  ],
+  "instance_id": "listmonk-meaning-16",
+  "category": "route",
+  "problem_statement": "handles retrieval of uploaded media.",
+  "name": "/media/{id}",
+  "like": "media",
+  "method": "GET"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/subscribers.go"
+  ],
+  "instance_id": "listmonk-meaning-17",
+  "category": "route",
+  "problem_statement": "handles subscribers deletion",
+  "name": "/subscribers",
+  "like": "subscribers",
+  "method": "DELETE"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/campaigns.go",
+   "cmd/handlers.go"
+  ],
+  "instance_id": "listmonk-meaning-18",
+  "category": "route",
+  "problem_statement": "handles campaign status modification",
+  "name": "/campaigns/{id}/archive",
+  "like": "archive",
+  "method": "PUT"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/subscribers.go"
+  ],
+  "instance_id": "listmonk-meaning-19",
+  "category": "route",
+  "problem_statement": "handles bulk addition or removal of subscribers for a specified list id",
+  "name": "/subscribers/lists/{id}",
+  "like": "lists",
+  "method": "PUT"
+ },
+ {
+  "repo": "knadh/listmonk",
+  "base_commit": "64987e32e39b894c29131b9acb7163dd4bb83609",
+  "language": "go",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/knadh_listmonk",
+  "set": "facts",
+  "gold": [
+   "cmd/handlers.go",
+   "cmd/import.go"
+  ],
+  "instance_id": "listmonk-meaning-20",
+  "category": "route",
+  "problem_statement": "returns import logs from an ongoing import",
+  "name": "/import/subscribers/logs",
+  "like": "logs",
+  "method": "GET"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/navigation_views.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-1",
+  "category": "route",
+  "problem_statement": "Get all navigation views",
+  "name": "/navigation_views",
+  "like": "navigation_views",
+  "method": "GET"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/alert_words.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-2",
+  "category": "route",
+  "problem_statement": "Remove alert words",
+  "name": "/users/me/alert_words",
+  "like": "alert_words",
+  "method": "DELETE"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/invite.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-3",
+  "category": "route",
+  "problem_statement": "Resend an email invitation",
+  "name": "/invites/{invite_id}/resend",
+  "like": "resend",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/streams.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-4",
+  "category": "route",
+  "problem_statement": "Unsubscribe from a channel",
+  "name": "/users/me/subscriptions",
+  "like": "subscriptions",
+  "method": "DELETE"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/users.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-5",
+  "category": "route",
+  "problem_statement": "Reactivate a user",
+  "name": "/users/{user_id}/reactivate",
+  "like": "reactivate",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/video_calls.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-6",
+  "category": "route",
+  "problem_statement": "Create Constructor Groups video call",
+  "name": "/calls/constructorgroups/create",
+  "like": "create",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/presence.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-7",
+  "category": "route",
+  "problem_statement": "Get a user's status",
+  "name": "/users/{user_id}/status",
+  "like": "status",
+  "method": "GET"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/streams.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-8",
+  "category": "route",
+  "problem_statement": "Update a subscription setting",
+  "name": "/users/me/subscriptions/{stream_id}",
+  "like": "subscriptions",
+  "method": "PATCH"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/user_topics.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-9",
+  "category": "route",
+  "problem_statement": "Update personal preferences for a topic",
+  "name": "/user_topics",
+  "like": "user_topics",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/realm_linkifiers.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-10",
+  "category": "route",
+  "problem_statement": "Reorder linkifiers",
+  "name": "/realm/linkifiers",
+  "like": "linkifiers",
+  "method": "PATCH"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/user_groups.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-11",
+  "category": "route",
+  "problem_statement": "Get user groups",
+  "name": "/user_groups",
+  "like": "user_groups",
+  "method": "GET"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/reactions.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-12",
+  "category": "route",
+  "problem_statement": "Remove an emoji reaction",
+  "name": "/messages/{message_id}/reactions",
+  "like": "reactions",
+  "method": "DELETE"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/presence.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-13",
+  "category": "route",
+  "problem_statement": "Update user status",
+  "name": "/users/{user_id}/status",
+  "like": "status",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/users.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-14",
+  "category": "route",
+  "problem_statement": "Regenerate a bot's API key",
+  "name": "/bots/{bot_id}/api_key/regenerate",
+  "like": "regenerate",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/scheduled_messages.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-15",
+  "category": "route",
+  "problem_statement": "Create a scheduled message",
+  "name": "/scheduled_messages",
+  "like": "scheduled_messages",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/read_receipts.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-16",
+  "category": "route",
+  "problem_statement": "Get a message's read receipts",
+  "name": "/messages/{message_id}/read_receipts",
+  "like": "read_receipts",
+  "method": "GET"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/scheduled_messages.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-17",
+  "category": "route",
+  "problem_statement": "Edit a scheduled message",
+  "name": "/scheduled_messages/{scheduled_message_id}",
+  "like": "scheduled_messages",
+  "method": "PATCH"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/message_flags.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-18",
+  "category": "route",
+  "problem_statement": "Update personal message flags",
+  "name": "/messages/flags",
+  "like": "flags",
+  "method": "POST"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/realm_export.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-19",
+  "category": "route",
+  "problem_statement": "Delete a data export",
+  "name": "/export/realm/{export_id}",
+  "like": "realm",
+  "method": "DELETE"
+ },
+ {
+  "repo": "zulip/zulip",
+  "base_commit": "fb4f7abc378de7308a572d9af375101707e0c1ee",
+  "language": "python",
+  "local": "/private/tmp/claude-501/-Volumes-AI-SSD-Projects-aleph-zero/79c2c2f2-fc9d-4523-b030-d0e40ec1a033/scratchpad/facts/src/zulip_zulip",
+  "set": "facts",
+  "gold": [
+   "zerver/views/scheduled_messages.py",
+   "zproject/urls.py"
+  ],
+  "instance_id": "zulip-meaning-20",
+  "category": "route",
+  "problem_statement": "Delete a scheduled message",
+  "name": "/scheduled_messages/{scheduled_message_id}",
+  "like": "scheduled_messages",
+  "method": "DELETE"
+ }
+]
