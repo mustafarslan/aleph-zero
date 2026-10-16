@@ -31,6 +31,7 @@ example environment file declares.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -129,6 +130,8 @@ def text_facts(path: str, text: str) -> list[Fact]:
             declared = re.match(r"\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]{2,})\s*=", line)
             if declared:
                 out.append(Fact("env", declared.group(1), number, "declared"))
+    elif is_openapi(path):
+        out += _openapi(text, name.endswith(".json"))
     elif name.endswith(".proto"):
         service = ""
         for number, line in enumerate(text.split("\n"), 1):
@@ -146,10 +149,80 @@ def is_environment_example(name: str) -> bool:
     return bool(re.search(r"(^|\.)env\.(example|sample|template|dist|defaults?)$|^(example|sample)\.env$", name.lower()))
 
 
+def is_openapi(path: str) -> bool:
+    """An OpenAPI (Swagger) document, by its name: YAML or JSON with "openapi" or "swagger" in its path."""
+    lowered = path.lower()
+    return lowered.endswith((".yaml", ".yml", ".json")) and ("openapi" in lowered or "swagger" in lowered)
+
+
 def states_facts(path: str) -> bool:
     """Whether a file that is not source code is one `text_facts` reads."""
     name = path.rsplit("/", 1)[-1].lower()
-    return name.endswith((".prisma", ".proto")) or is_environment_example(name)
+    return name.endswith((".prisma", ".proto")) or is_environment_example(name) or is_openapi(path)
+
+
+_SPEC_METHODS = ("get", "put", "post", "delete", "patch", "options", "head")
+
+
+def _openapi(text: str, as_json: bool) -> list[Fact]:
+    """Each operation of an OpenAPI document that names its handler: a route, its detail `openapi <operationId>` and,
+    where the document gives one, the controller module (`x-openapi-router-controller`). Only this shape is read; JSON
+    by `json`, YAML by its lines (Aleph takes no YAML parser, ADR-003)."""
+    found: list[tuple[str, str, str, str, int]] = []      # method, path, operationId, controller, line
+    if as_json:
+        try:
+            document = json.loads(text)
+        except ValueError:
+            return []
+        for path, item in (document.get("paths") or {}).items() if isinstance(document, dict) else ():
+            if not isinstance(item, dict):
+                continue
+            at_path = item.get("x-openapi-router-controller") or ""
+            for method, operation in item.items():
+                if method in _SPEC_METHODS and isinstance(operation, dict) and isinstance(operation.get("operationId"), str):
+                    name = operation["operationId"]
+                    at = text.find(f'"operationId": "{name}"')
+                    found.append((method, path, name, operation.get("x-openapi-router-controller") or at_path,
+                                  text.count("\n", 0, at) + 1 if at >= 0 else 1))
+    else:
+        in_paths, path, path_indent, method, method_indent = False, "", None, "", 0
+        controllers: dict[tuple[str, str], str] = {}
+        at_path: dict[str, str] = {}
+        for number, line in enumerate(text.split("\n"), 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            line = re.sub(r"^(\s*): ", r"\1  ", line)    # the value of an explicit key (`: get:`): as if indented
+            indent = len(line) - len(line.lstrip())
+            if indent == 0:
+                in_paths = line.rstrip() == "paths:"
+                continue
+            if not in_paths:
+                continue
+            # A path as a key (`/owners:`, quoted or not), or as YAML's explicit key (`? /a/very/long/path`).
+            key = re.match(r"\s*['\"]?(/[^'\":]*)['\"]?:\s*$", line) or re.match(r"\s*\?\s+['\"]?(/[^'\"\s]*)['\"]?\s*$", line)
+            if key and (path_indent is None or indent == path_indent):
+                path, path_indent, method = key.group(1), indent, ""
+                continue
+            if path_indent is not None and indent <= path_indent:
+                path, method = "", ""          # another key at the paths' level: nothing below it is this path's
+                continue
+            verb = re.match(r"\s*(" + "|".join(_SPEC_METHODS) + r"):\s*$", line)
+            if verb and path and path_indent is not None and indent > path_indent:
+                method, method_indent = verb.group(1), indent
+                continue
+            controller = re.match(r"\s*x-openapi-router-controller:\s*['\"]?([\w.]+)", line)
+            if controller and path:
+                if method and indent > method_indent:
+                    controllers[(path, method)] = controller.group(1)
+                else:
+                    at_path[path] = controller.group(1)
+                continue
+            operation = re.match(r"\s*operationId:\s*['\"]?([\w.]+)", line)
+            if operation and method and indent > method_indent:
+                found.append((method, path, operation.group(1), "", number))
+        found = [(m, p, op, controllers.get((p, m)) or at_path.get(p, ""), n) for m, p, op, _, n in found]
+    return [Fact("route", f"{method.upper()} {_path(path)}", line, " ".join(filter(None, ("openapi", name, controller))))
+            for method, path, name, controller, line in found]
 
 
 # ---- helpers ---------------------------------------------------------------------------------------

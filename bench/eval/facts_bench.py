@@ -78,9 +78,10 @@ def score_row(row, workdir: Path, client) -> dict | None:
         listed, _, _ = archfacts.select(archfacts.load(index), kind, name, 500)
         facts = _ten(found.path for found in listed if not NEVER_AN_ANSWER.search(found.path)
                      and not (kind == "env" and found.detail == "declared"))
-        handed = [found.path for found in archfacts.matching(archfacts.load(index), archfacts.mentioned(question))]
-        routes = [found for found in archfacts.matching(archfacts.load(index), archfacts.mentioned(question)) if found.kind == "route"]
-        handed += [found.path for found in archfacts.handlers(index, view, routes)]
+        matched = archfacts.matching(archfacts.load(index), archfacts.mentioned(question))
+        listed = matched + archfacts.handlers(index, view, [found for found in matched if found.kind == "route"])
+        # As the engine hands them over: an OpenAPI document's own operations never (part 19).
+        handed = list(dict.fromkeys(found.path for found in listed if not archfacts.is_spec_route(found)))
         arms = {"search": searched, "search_name": by_name, "facts": facts, "facts_then_search": _ten(facts + searched),
                 "handed": _ten(handed + searched)}
         gold = set(row["gold"])

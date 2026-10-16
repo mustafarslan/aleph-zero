@@ -514,6 +514,8 @@ class Engine:
                         listed += [each for each in archfacts.with_mounts(found, archfacts.by_words(found, mentioned or ""))
                                    if each not in listed]
                     listed += archfacts.handlers(index, view, [each for each in listed if each.kind == "route"])
+                    # An OpenAPI document's own operation is never handed over, only its handler's definition (part 19).
+                    listed = [each for each in listed if not archfacts.is_spec_route(each)]
                     return listed[:k], archfacts.select(found, "", "", 0)[1], len(listed) > k
                 return (answer,)
             return (lambda: archfacts.select(archfacts.load(index), kind, like, k),)

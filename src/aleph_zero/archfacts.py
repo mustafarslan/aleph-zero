@@ -23,7 +23,7 @@ from .lang.facts import text_facts as _named_text_facts
 from .store.db import transaction
 from .view import View
 
-FACTS_VERSION = 9           # bump when what the readers extract changes: every row is then read again
+FACTS_VERSION = 11           # bump when what the readers extract changes: every row is then read again
 PREPARE_BATCH = 64          # blobs read between two commits
 KINDS = ("route", "mount", "model", "table", "env", "task", "queue", "service", "rpc", "layer", "contract")
 _CODE = sorted({"typescript", "tsx", "javascript", "python", "go", "rust", "java"} & set(lang.PROFILES))
@@ -260,6 +260,29 @@ def _route_match(asked: list[str], stated: list[str]) -> int:
     return shorter if words else 0
 
 
+def is_spec_route(fact: Found) -> bool:
+    """An operation of a committed OpenAPI document (part 19)."""
+    return fact.kind == "route" and fact.detail.startswith("openapi ")
+
+
+def _agreeing(candidates: list[Found], method: str, asked: list[str]) -> list[tuple[int, Found]]:
+    routes = []
+    for each in candidates:
+        if each.kind != "route":
+            continue
+        stated_method, _, stated_path = each.name.partition(" ")
+        if method and stated_method not in (method, "ANY"):
+            continue
+        stated = _segments(stated_path)
+        agreed = _route_match(asked, stated)
+        if agreed:
+            # Among paths that agree as far, the one whose words agree more, then the one as long: a parameter agrees with
+            # anything, so `…/{task_id}/setNote` and `…/{task_id}/{map_index}/setNote` agree as far.
+            words = sum(1 for a, s in zip(reversed(asked), reversed(stated)) if a == s != "*")
+            routes.append(((-agreed, -words, len(stated) != len(asked)), each))
+    return routes
+
+
 def matching(found: list[Found], mentions: list[Mention]) -> list[Found]:
     """The facts of source code that answer the mentions: an environment name read or set by exactly that name; the routes
     whose path agrees with the one named, longest agreement first (the method too, when one was named); the mounts whose
@@ -273,17 +296,14 @@ def matching(found: list[Found], mentions: list[Mention]) -> list[Found]:
         method, _, path = mention.name.rpartition(" ")
         asked = _segments(path)
         routes = []
-        for each in usable:
-            if each.kind != "route":
-                continue
-            stated_method, _, stated_path = each.name.partition(" ")
-            if method and stated_method not in (method, "ANY"):
-                continue
-            agreed = _route_match(asked, _segments(stated_path))
-            if agreed:
-                routes.append((-agreed, each))
+        # A committed OpenAPI document's operations (part 19) only where no route the code states agrees: they are never an
+        # answer themselves, only the way to their handlers (`handlers`, then left out of what is handed over).
+        for candidates in (usable, [each for each in found if is_spec_route(each)]):
+            routes = _agreeing(candidates, method, asked)
+            if routes:
+                break
         routes.sort(key=lambda pair: pair[0])
-        best = routes[0][0] if routes else 0
+        best = routes[0][0] if routes else None
         out += [each for agreed, each in routes if agreed == best][:_PER_NAME]
         mounts = []
         for each in usable:
@@ -332,7 +352,7 @@ def _path_words(route: Found) -> set[str]:
 def route_words(route: Found) -> set[str]:
     """What a route is about, in words: its method as verbs, its path's words, its handler's name."""
     method = route.name.partition(" ")[0]
-    handler = route.detail.partition(" ")[2].rsplit(".", 1)[-1]
+    handler = route.detail.partition(" ")[2].split(" ")[0].rsplit(".", 1)[-1]
     return words_of(_VERBS.get(method, "")) | _path_words(route) | words_of(handler)
 
 
@@ -340,8 +360,12 @@ def by_words(found: list[Found], text: str, k: int = WORD_ROUTES) -> list[Found]
     """The routes of source code a request may be about by its words, best first, above the floor."""
     asked = words_of(text)
     scored = []
+    stated = {tuple(_segments(each.name.partition(" ")[2])) for each in found
+              if each.kind == "route" and not NEVER_AN_ANSWER.search(each.path)}
     for route in found:
-        if route.kind != "route" or NEVER_AN_ANSWER.search(route.path):
+        spec = is_spec_route(route)
+        if route.kind != "route" or (NEVER_AN_ANSWER.search(route.path) and not spec) \
+                or (spec and tuple(_segments(route.name.partition(" ")[2])) in stated):
             continue
         shared = asked & route_words(route)
         if len(shared) >= 2 and shared & _path_words(route):
@@ -366,11 +390,18 @@ def handlers(index: Index, view: View, routes: list[Found]) -> list[Found]:
     out: list[Found] = []
     for route in routes:
         framework, _, handler = route.detail.partition(" ")
+        handler, _, module = handler.partition(" ")      # an OpenAPI operation: its operationId, then its controller
         name = handler.rsplit(".", 1)[-1]
         if route.kind != "route" or not name or not name.isidentifier():
             continue
         defined = [hit for hit in symbols.lookup(index, view, name, limit=20, nested=False)
                    if hit.name == name and not NEVER_AN_ANSWER.search(hit.path)]
+        if framework == "openapi":
+            # connexion names the handler as module.function, or names the module as the controller
+            module = module or (handler.rsplit(".", 1)[0] if "." in handler else "")
+            if module:
+                inside = [hit for hit in defined if hit.path.endswith(module.replace(".", "/") + ".py")]
+                defined = inside or defined
         if 0 < len(defined) <= 3:
             out += [Found("handler", route.name, hit.path, hit.line, handler) for hit in defined]
     return out

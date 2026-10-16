@@ -448,3 +448,40 @@ def test_a_request_that_names_no_route_is_answered_by_the_routes_sharing_its_wor
     assert engine.facts(mentioned="Deleting a client fails with a 500").facts == []          # by name only: it names none
     assert engine.facts(mentioned="rename the helper in utils", words=True).facts == []      # under the floor: nothing
     assert engine.facts(mentioned="the health endpoint returns nothing", words=True).facts[0].name == "GET /health"
+
+
+SPEC = ("openapi: 3.0.1\ninfo:\n  title: Shop\npaths:\n  /owners:\n    get:\n      summary: List owners\n      operationId: listOwners\n"
+        "    post:\n      operationId: addOwner\n  '/owners/{ownerId}':\n    get:\n      x-openapi-router-controller: shop.api.owners\n"
+        "      operationId: get_owner\ncomponents:\n  schemas:\n    Owner:\n      type: object\n")
+
+
+def test_an_openapi_document_s_operations_name_their_handlers_and_are_never_answers_themselves(repo):
+    assert found("src/main/resources/openapi.yml", SPEC) == [
+        ("route", "GET /owners", 8, "openapi listOwners"), ("route", "POST /owners", 10, "openapi addOwner"),
+        ("route", "GET /owners/{ownerId}", 14, "openapi get_owner shop.api.owners")]
+    repo.write("src/main/resources/openapi.yml", SPEC)
+    repo.write("src/main/java/OwnerController.java", "class OwnerController implements OwnersApi {\n"
+               "  public String listOwners() { return \"\"; }\n  public String addOwner() { return \"\"; }\n}\n")
+    repo.write("shop/api/owners.py", "def get_owner(owner_id):\n    return owner_id\n")
+    repo.write("shop/legacy/owners.py", "def get_owner(owner_id):\n    return None\n")
+    engine = Engine(repo.root)
+    answer = engine.facts(mentioned="GET /owners returns 500 and GET /owners/7 too")
+    assert [(f.kind, f.path, f.line) for f in answer.facts] == [
+        ("handler", "src/main/java/OwnerController.java", 2), ("handler", "shop/api/owners.py", 1)]   # the spec itself: never
+    by_words = engine.facts(mentioned="adding an owner fails", words=True)
+    assert [(f.kind, f.path) for f in by_words.facts] == [("handler", "src/main/java/OwnerController.java")]
+
+
+def test_a_route_the_code_states_is_preferred_to_the_document_s(repo):
+    repo.write("docs/openapi.yaml", SPEC)
+    repo.write("app/routes.py", "from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.get(\"/owners\")\ndef owners():\n    return []\n")
+    repo.write("app/legacy.py", "def listOwners():\n    return []\n")
+    answer = Engine(repo.root).facts(mentioned="GET /owners is slow")
+    assert [(f.kind, f.path) for f in answer.facts] == [("route", "app/routes.py")]
+
+
+def test_an_openapi_path_written_as_an_explicit_key_is_its_own():
+    spec = ("paths:\n  /tasks/{id}/links:\n    get:\n      operationId: get_extra_links\n"
+            "  ? /tasks/{id}/logs/{try_number}\n  : get:\n      operationId: get_log\n")
+    assert [(name, detail) for kind, name, _, detail in found("api/openapi/v1.yaml", spec)] == [
+        ("GET /tasks/{id}/links", "openapi get_extra_links"), ("GET /tasks/{id}/logs/{try_number}", "openapi get_log")]
