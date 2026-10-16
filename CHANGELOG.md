@@ -13,7 +13,7 @@
   asked by an API operation's summary: +16.4 points of right files found, the right file first in 17 points more; on
   1,398 issues people wrote, files added to 8.6% and how often the right files are found not lowered. `facts` takes
   `words`; the plugin asks it for every prompt that is a question.
-- **One step to turn the look-ups on, said plainly:** the plugin's look-ups use the engine's tools, which Claude Code
+- **The look-ups are on after one yes, said plainly:** the plugin's look-ups use the engine's tools, which Claude Code
   asks about first. `aleph setup` now asks to allow them once the plugin is installed ("Allow Claude Code to use Aleph's
   tools without asking?"; or `aleph setup --allow-tools`): it adds one rule to `permissions.allow` and nothing else.
   Until then the plugin says so once a session and `/aleph check` says how. The plugin itself never writes a permission.

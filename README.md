@@ -114,8 +114,9 @@ whose answers cite `path:line`.
    aleph setup --allow-tools     # adds "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json
    ```
 
-   Nothing else needs switching on: the plugin's options all have working defaults. Until the
-   tools are allowed the plugin says so once a session, and `/aleph check` says whether they are.
+   So the look-ups are on after this one yes, not before it: until then they do nothing, the plugin
+   says so once a session, and `/aleph check` says whether the tools are allowed. Nothing else needs
+   switching on: the plugin's options all have working defaults.
 
 The engine is installed as `aleph` and, under the same code, as `aleph-zero`. TeX Live also
 installs a program called `aleph`: if `which aleph` points into a TeX directory, use

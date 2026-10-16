@@ -20,9 +20,9 @@ Then, optionally: `aleph-zero setup --worker` once (the embedding server and mod
 
 ## Turn it on: one step
 
-Everything is on by default; there is nothing to configure. One thing is yours to give: Claude
-Code asks before any tool runs, and the plugin's own look-ups use the engine's tools, so they do
-nothing until those tools are allowed. Either answer yes when `aleph-zero setup` asks ("Allow
+Its options all have working defaults, but its automatic look-ups are on only after one yes from
+you: Claude Code asks before any tool runs, and the plugin's own look-ups use the engine's tools,
+so until those tools are allowed they do nothing (the session still works, without them). Either answer yes when `aleph-zero setup` asks ("Allow
 Claude Code to use Aleph's tools without asking?", or `aleph-zero setup --allow-tools`), or add
 this line to `permissions.allow` in `~/.claude/settings.json` yourself (or with `/permissions`):
 
@@ -108,7 +108,7 @@ returned, with the additions above.
 
 Each finding of the directory's check of 0.1.15, answered (line numbers are `hooks/register.js`'s):
 
-- **Settings it writes** (`config.set`, lines 723–726): only the plugin's own four options, each
+- **Settings it writes** (`config.set`, lines 726–729): only the plugin's own four options, each
   written by its fixed key: `aleph-zero.rung`, `aleph-zero.grep_pointer`, `aleph-zero.lines`,
   `aleph-zero.graph`. Only when the person presses that option's key in `/aleph configure`, as
   `/plugin` would. It never writes a permission, the permission mode or any other setting, and
@@ -120,7 +120,7 @@ Each finding of the directory's check of 0.1.15, answered (line numbers are `hoo
 - **What it sends and where** (line 91): to the local engine only, as above. The one request that
   leaves the machine is the side chat's question to Claude, made through Claude Code's own
   `model.complete`, only when the person asks it.
-- **Programs it starts** (`process.run`, lines 161 and 218; `process.spawn`, line 257; `process.run` of git, line 762):
+- **Programs it starts** (`process.run`, lines 164 and 221; `process.spawn`, line 260; `process.run` of git, line 765):
   the engine's `status`, run as `sh <plugin>/scripts/engine.sh --cwd <the session's directory>
   status` (the settings pane and the vectors line); from `/aleph configure`, on a key the person
   presses, the engine's `setup --dense`, `--no-dense` or `--auto-dense`, `source add` with the path
@@ -132,14 +132,14 @@ Each finding of the directory's check of 0.1.15, answered (line numbers are `hoo
   Claude Code's own model connection (`model.complete`), the host's own vendor. `.mcp.json` passes
   the plugin's `graph` option (`on` or `off`) to the engine as `ALEPH_GRAPH`: an on/off switch,
   not a credential.
-- **Changes a tool's input** (`tool.call`, line 921): no. That hook only counts calls for
+- **Changes a tool's input** (`tool.call`, line 924): no. That hook only counts calls for
   `/aleph stats` and passes every event on unchanged (`return next(e)`).
-- **Answers in place of a tool** (`tool.call`, lines 994 and 1017): no. Each first runs the tool
+- **Answers in place of a tool** (`tool.call`, lines 997 and 1020): no. Each first runs the tool
   (`await next(e)`) and returns its own result, with the additions in the table above.
-- **Hooks an event that is a call** (`command.run`, line 450): it answers only the plugin's own
+- **Hooks an event that is a call** (`command.run`, line 453): it answers only the plugin's own
   `/aleph` command.
-- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 938 and 948;
-  `prompt.compose`, line 954): the changes are the ones in the table above.
+- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 941 and 951;
+  `prompt.compose`, line 957): the changes are the ones in the table above.
 - **`types` in `plugin.json`:** the mod's type contract, read by `claude plugin validate` for the
   values it keeps in `$.state`; Claude Code ignores it when loading, as the check says.
 - **Scripts** (`scripts/serve.sh`, `scripts/engine.sh`): they start the separately installed
