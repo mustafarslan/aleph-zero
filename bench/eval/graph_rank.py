@@ -10,6 +10,9 @@ Part 15: arms T{a}n{n}, the neighbour files ranked by their own text instead: th
 index's words, and vectors where the language ships them, scored against the question); a neighbour search did not
 rank at all is not added.
 
+Part 18: arms V{a}n{n}, where vectors are shipped: every neighbour file scored by the best cosine of its own chunks'
+vectors against the question's, the n nearest added after search's first a files.
+
     graph_rank.py WORKDIR --set locbench|others [--language L] --out FILE [--limit N]
 """
 from __future__ import annotations
@@ -54,6 +57,22 @@ def ranked_files(references, question: set[str]) -> list[str]:
     return [path for path, _ in sorted(best.items(), key=lambda item: (-item[1][0], not item[1][1]))]
 
 
+_CHUNK_FILES: dict = {}
+
+
+def _chunk_files(index) -> dict[int, list[str]]:
+    """The view's chunks and the files each lies in (a chunk many files share lies in each)."""
+    key = (index.conn.filename, index._view_epoch)
+    if key not in _CHUNK_FILES:
+        _CHUNK_FILES.clear()
+        out: dict[int, list[str]] = {}
+        for chunk_id, oid, family in index.conn.execute(
+                "SELECT bc.chunk_id, bc.blob_oid, bc.family FROM blob_chunks bc JOIN temp.view_chunks v ON v.chunk_id = bc.chunk_id"):
+            out.setdefault(chunk_id, []).extend(index.paths_for(oid, family))
+        _CHUNK_FILES[key] = out
+    return _CHUNK_FILES[key]
+
+
 def _files_of_all(references) -> list[str]:
     return [path for ref in references for path in (ref.path, ref.target_path) if path]
 
@@ -86,12 +105,18 @@ def score_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
         compiled = scipstore.Compiled(index.conn, view.files)
         question = bench.question_forms(index, row["problem_statement"])["title"]
         nearest = None
+        file_nearness: dict[str, float] = {}
         if ships_vectors and client is not None:
             store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
             have, total = store.coverage(index)
             if total and have == total:
                 vector = client.embed([question], kind="query")[0]
                 nearest = lambda limit, scoped: [c for c, _ in store.search(index, vector, limit, scoped)]  # noqa: E731
+                chunk_files = _chunk_files(index)
+                for chunk_id, score in store.search(index, vector, 10 ** 7):
+                    for path in chunk_files.get(chunk_id, ()):
+                        if score > file_nearness.get(path, -2.0):
+                            file_nearness[path] = score
         hits = bench.search(index, view, question, k=bench.DEEP, dense=nearest)
         search_files = bench.first_files([hit.path for hit in hits], 50)
         asked = words(question)
@@ -106,6 +131,10 @@ def score_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
             by_text = [path for path in search_files[a:] if path in neighbours]
             for n in (1, 3):
                 arms[f"T{a}n{n}"] = arm(search_files, by_text, a, n)
+            if file_nearness:
+                by_meaning = sorted((path for path in neighbours if path in file_nearness), key=lambda path: -file_nearness[path])
+                for n in (1, 3):
+                    arms[f"V{a}n{n}"] = arm(search_files, by_meaning, a, n)
         return {"instance": row["instance_id"], "repo": row["repo"], "draw": draw_of(row["instance_id"]),
                 "language": row.get("language", "python"), "gold": sorted(gold),
                 "recall": {name: len(set(files) & gold) / len(gold) for name, files in arms.items()}}
