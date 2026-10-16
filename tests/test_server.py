@@ -437,6 +437,9 @@ def test_the_graph_tools_are_offered_unless_switched_off(repo):
         assert on.text("facts").startswith("route  1")
         assert on.text("facts", kind="route") == "GET /invoices/{invoice_id}  src/api.py:1  fastapi"
         assert on.text("facts", mentioned="GET /invoices/7 answers 500") == "route  GET /invoices/{invoice_id}  src/api.py:1  fastapi"
+        by_words = json.loads(on.text("facts", mentioned="showing an invoice fails", words=True, format="json"))   # names none
+        assert [(each["kind"], each["name"]) for each in by_words["facts"]] == [("route", "GET /invoices/{invoice_id}")]
+        assert on.call("facts", mentioned="x", words="yes")["result"]["isError"]                                # not a boolean
     finally:
         on.close()
 

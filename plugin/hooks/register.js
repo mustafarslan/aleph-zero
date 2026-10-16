@@ -88,7 +88,15 @@ async function reach($, tool, args) {
   // The engine answers for the directory it is asked about; without one, for wherever its
   // own process was started. The session may be in a subdirectory or another worktree.
   const cwd = await cwdOf($)
-  return $.mcp.call(server, tool, cwd ? { ...args, cwd } : args)
+  const input = cwd ? { ...args, cwd } : args
+  // Measured in an interactive session (Claude Code 2.1.301, default mode): a call of a tool the person has not allowed
+  // opens a permission dialog, at a session's start (the vectors line) and on every prompt. So the decision is asked
+  // first, which opens nothing, and a call that would ask is not made; the person is told once what to allow.
+  const decided = await $.tool.check({ tool: 'mcp__plugin_aleph-zero_aleph__' + tool, input }).catch(() => null)
+  if (decided && decided.decision !== 'allow') {
+    throw new Error('not allowed: the engine\'s tools need permission (' + decided.decision + ')')
+  }
+  return $.mcp.call(server, tool, input)
 }
 
 // One call to the engine that can never hold up its hook: time inside a mods API call does

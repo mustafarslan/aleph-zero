@@ -17,6 +17,11 @@
   asks about first. `aleph setup` now asks to allow them once the plugin is installed ("Allow Claude Code to use Aleph's
   tools without asking?"; or `aleph setup --allow-tools`): it adds one rule to `permissions.allow` and nothing else.
   Until then the plugin says so once a session and `/aleph check` says how. The plugin itself never writes a permission.
+- **No permission pop-ups from the plugin.** Measured in an interactive session in Claude Code's default mode: the
+  plugin's own calls of the engine's tools opened a "Do you want to proceed?" dialog for a person who had not allowed
+  them, at a session's start (the vectors line, since 0.1.11). The plugin now asks Claude Code's decision first
+  (`tool.check`, which opens nothing) and makes no call that would ask; the vectors line reads the engine's status
+  without the tools.
 - **The graph tools are on by default in the engine's own server too** (a bare `claude mcp add`); `ALEPH_GRAPH=0` turns
   them off, as the plugin's `graph=off` does.
 - **For the plugin directory's review:** each plugin option is written by its fixed key; the settings pane no longer

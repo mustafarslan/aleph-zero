@@ -189,3 +189,34 @@ test('when the engine\'s tools are not allowed, the person is told once what to 
   expect(toasts[0]).toContain('permissions.allow')
   expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('not allowed yet')
 })
+
+test('a tool the person has not allowed is not called, so no permission dialog opens; they are told once', { options: { rung: '1' } }, async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  let decision = 'ask'
+  on('tool.check', () => ({ decision }))
+  const asked: any[] = []
+  on('mcp.call', ($, e) => {
+    asked.push(e)
+    return reply(FOUND)
+  })
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const sent: any[] = []
+  on('prompt.submit', ($, e) => {
+    sent.push(e)
+    return { text: e.text }
+  })
+  await $.prompt.submit({ text: 'the server ignores DB_URL when it starts up' })
+  await $.prompt.submit({ text: 'and it ignores REDIS_URL as well' })
+  expect(asked.length).toBe(0)                                          // never called: no dialog
+  expect(toasts.length).toBe(1)
+  expect(sent[0].context).toBeUndefined()
+  decision = 'allow'                                                    // allowed mid-session: from the next prompt on
+  await $.prompt.submit({ text: 'and PORT_NUMBER is not read at start' })
+  expect(asked.length).toBe(1)
+  expect(sent[2].context[0]).toContain('- DB_URL: read at config/db.go:2')
+})

@@ -208,7 +208,7 @@ def tools() -> list[dict]:
 
 
 _SCHEMAS = {tool["name"]: tool["inputSchema"] for tool in [*TOOLS, GRAPH_TOOL, DECISIONS_TOOL, FACTS_TOOL]}
-_JSON_TYPES = {"string": str, "integer": int}
+_JSON_TYPES = {"string": str, "integer": int, "boolean": bool}
 
 
 class _BadArguments(ValueError):
@@ -525,7 +525,7 @@ def _checked(name: str, arguments) -> dict:
         if spec is None or value is None:
             continue  # an argument we do not know is ignored, not an error
         expected = _JSON_TYPES[spec["type"]]
-        if not isinstance(value, expected) or isinstance(value, bool):
+        if not isinstance(value, expected) or (isinstance(value, bool) and expected is not bool):
             raise _BadArguments(f"argument {key} must be {spec['type']}, not {type(value).__name__}")
         if "enum" in spec and value not in spec["enum"]:
             raise _BadArguments(f"argument {key} must be one of {', '.join(spec['enum'])}, not {value!r}")

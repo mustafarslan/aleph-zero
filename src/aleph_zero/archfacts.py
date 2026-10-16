@@ -373,7 +373,7 @@ def handlers(index: Index, view: View, routes: list[Found]) -> list[Found]:
 
 def text(answer: Answer) -> str:
     """An answer as lines: what the view has of each kind, or the facts asked for."""
-    if answer.kind or answer.like:
+    if answer.kind or answer.like or answer.facts:
         lines = [f"{'' if answer.kind else each.kind + '  '}{each.name}  {each.path}:{each.line}  {each.detail}".rstrip()
                  for each in answer.facts]
         if not lines:
