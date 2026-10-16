@@ -54,7 +54,7 @@
     "graph": {
       "type": "string",
       "title": "Call graph, facts and decision tools",
-      "description": "on or off (default on; nothing to activate). On: when a prompt or a grep names an HTTP route or an environment variable, or a prompt's words point to a route, where the code handles or reads it is given to the agent; the facts tool is shown in full, the call-graph and decision-record tools on demand. Measured (2026-10-16): the agent called facts and read the right file first in 26 of 30 route questions (24 with it off), at the same tokens. Needs the engine's tools allowed (aleph setup --allow-tools).",
+      "description": "on or off (default on; nothing to activate). On: when a prompt or a grep names an HTTP route or an environment variable, or a prompt's words point to a route, where the code handles or reads it is given to the agent; the facts tool is shown in full, the call-graph and decision-record tools on demand. Measured (2026-10-16): the agent called facts and read the right file first in 26 of 30 route questions (24 with it off), at the same tokens. Needs the engine's tools allowed (aleph-zero setup --allow-tools).",
       "default": "on"
     }
   }

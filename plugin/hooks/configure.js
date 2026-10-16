@@ -120,7 +120,7 @@ const OPTION_HELP = {
   rung: { text: 'How far the plugin steers Claude Code towards Aleph\'s search before it reaches for a recursive grep.', applies: 'Applies at once.', note: ['No rung has yet been shown to save tokens or tool calls (ADR-011).', 'warning'] },
   grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1. Kept as a switch so a measurement can tell it from the rest of the rung; leave it on.', applies: 'Applies at once.' },
   lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt; used at rung 2 and above only. Kept for measuring; `places` is what was measured.', applies: 'Applies at once.' },
-  graph: { text: 'When a prompt or a grep names a route or an environment variable, or a prompt\'s words point to a route, the agent is given where the code handles it (`facts`). Also `references` (who calls what) and `decisions`.', applies: 'From the next session. Needs the engine\'s tools allowed: `aleph setup --allow-tools`.', note: ['Measured: `facts` was used and the right file read first more often, at the same tokens (ADR-011).', 'subtle'] },
+  graph: { text: 'When a prompt or a grep names a route or an environment variable, or a prompt\'s words point to a route, the agent is given where the code handles it (`facts`). Also `references` (who calls what) and `decisions`.', applies: 'From the next session. Needs the engine\'s tools allowed: `aleph-zero setup --allow-tools`.', note: ['Measured: `facts` was used and the right file read first more often, at the same tokens (ADR-011).', 'subtle'] },
 }
 
 // The help for the element `key` (a Button's or the field's key); null for one without help.
@@ -163,7 +163,7 @@ export function help(key, context) {
   const linked = /^b-src-(\d+)$/.exec(String(key || ''))
   if (linked) {
     const source = sources[Number(linked[1])] || {}
-    return { title: String(source.name || 'source'), text: '`' + String(source.location || '') + '`, ' + (source.files || 0) + ' files, searched beside this repository' + (source.kind === 'url' ? '; fetched again by `aleph update`.' : '; read where it is.'), applies: 'Its digit unlinks it after a yes; its files leave the index.' }
+    return { title: String(source.name || 'source'), text: '`' + String(source.location || '') + '`, ' + (source.files || 0) + ' files, searched beside this repository' + (source.kind === 'url' ? '; fetched again by `aleph-zero update`.' : '; read where it is.'), applies: 'Its digit unlinks it after a yes; its files leave the index.' }
   }
   if (key === 'b-link' || key === 'source') {
     return { title: 'link a source', text: 'Documentation or code from elsewhere, searched beside this repository. A **path** is read where it is; a **git URL** is cloned into Aleph\'s cache.', applies: 'Enter links it; a URL uses the network.' }

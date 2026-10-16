@@ -12,11 +12,13 @@ The plugin starts the engine, which is installed separately:
 ```sh
 uv tool install git+https://github.com/mustafarslan/aleph-zero.git
 uv tool update-shell        # then open a new terminal
+cd path/to/your/project && aleph-zero setup
 ```
 
-Then, optionally: `aleph-zero setup --worker` once (the embedding server and model), and in each project `aleph-zero setup --embed` for search by meaning and
-`aleph-zero setup --source PATH_OR_URL` to search a documentation repository beside it. The
-[main README](https://github.com/mustafarslan/aleph-zero#readme) has the full setup.
+`aleph-zero setup` asks about each part once and does it on a yes: this plugin (it runs Claude
+Code's own `claude plugin marketplace add` and `claude plugin install`), allowing its tools (below),
+the optional embedding worker and memory by meaning, and documentation from another repository.
+The [main README](https://github.com/mustafarslan/aleph-zero#readme) has the full setup.
 
 ## Turn it on: one step
 

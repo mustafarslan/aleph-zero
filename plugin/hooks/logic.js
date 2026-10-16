@@ -130,7 +130,7 @@ export function promptContext(hits, signatures = false) {
 
 // Said once a session when the engine's tools are refused: the automatic look-ups do nothing until they are allowed.
 export const ALLOW_HINT = 'Aleph Zero: its automatic look-ups (where a route or an environment variable you name is handled, '
-  + 'and rungs 2 and 3) are off until its tools are allowed, in every permission mode: run `aleph setup --allow-tools` '
+  + 'and rungs 2 and 3) are off until its tools are allowed, in every permission mode: run `aleph-zero setup --allow-tools` '
   + 'in a terminal, or add "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json (or with '
   + '/permissions); /aleph check confirms.'
 
