@@ -6,6 +6,10 @@ its calls share: the call as written, the definitions at both ends, and the file
 underscores; certain calls first among equals. Arms R{a}n{n}: search's first a files, then the n best neighbour files with
 a score above zero, then search's next files, ten in all; a of 5 or 7 and n of 1 or 3, chosen on draw 1.
 
+Part 15: arms T{a}n{n}, the neighbour files ranked by their own text instead: their place among search's fifty files (the
+index's words, and vectors where the language ships them, scored against the question); a neighbour search did not
+rank at all is not added.
+
     graph_rank.py WORKDIR --set locbench|others [--language L] --out FILE [--limit N]
 """
 from __future__ import annotations
@@ -48,6 +52,10 @@ def ranked_files(references, question: set[str]) -> list[str]:
             if score and (path not in best or (score, ref.certain) > best[path]):
                 best[path] = (score, ref.certain)
     return [path for path, _ in sorted(best.items(), key=lambda item: (-item[1][0], not item[1][1]))]
+
+
+def _files_of_all(references) -> list[str]:
+    return [path for ref in references for path in (ref.path, ref.target_path) if path]
 
 
 def arm(search_files: list[str], near: list[str], a: int, n: int) -> list[str]:
@@ -94,6 +102,10 @@ def score_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
             near = ranked_files(_neighbours(index, view, graph, compiled, _definitions(index, view, heads, DEFINITIONS_PER_HOP)), asked)
             for n in (1, 3):
                 arms[f"R{a}n{n}"] = arm(search_files, near, a, n)
+            neighbours = set(_files_of_all(_neighbours(index, view, graph, compiled, _definitions(index, view, heads, DEFINITIONS_PER_HOP))))
+            by_text = [path for path in search_files[a:] if path in neighbours]
+            for n in (1, 3):
+                arms[f"T{a}n{n}"] = arm(search_files, by_text, a, n)
         return {"instance": row["instance_id"], "repo": row["repo"], "draw": draw_of(row["instance_id"]),
                 "language": row.get("language", "python"), "gold": sorted(gold),
                 "recall": {name: len(set(files) & gold) / len(gold) for name, files in arms.items()}}

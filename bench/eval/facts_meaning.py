@@ -115,6 +115,16 @@ def floor_arms(row, routes, texts, handled, found, searched, client, asked) -> d
             "route_vectors_floor": _ten(_files_of_routes(by_vectors, handled, found) + searched)}
 
 
+def handover(index, view, found, text: str) -> list[str]:
+    """The files `facts(mentioned=text, words=True)` hands over, in its order (part 13: the engine's own code)."""
+    mentions = archfacts.mentioned(text)
+    listed = archfacts.matching(found, mentions)
+    if not any(mention.kind == "route" for mention in mentions):
+        listed += [each for each in archfacts.with_mounts(found, archfacts.by_words(found, text)) if each not in listed]
+    listed += archfacts.handlers(index, view, [each for each in listed if each.kind == "route"])
+    return list(dict.fromkeys(each.path for each in listed))
+
+
 def _files_of_routes(chosen, handled, found) -> list[str]:
     files: list[str] = []
     for route in chosen:
@@ -176,7 +186,8 @@ def score_row(row, workdir: Path, client) -> dict | None:
         arms = {"search": searched, "search_graph": _ten(reached + searched),
                 "route_words": _ten(_files_of_routes(by_words, handled, found) + searched),
                 "route_vectors": _ten(_files_of_routes(by_vectors, handled, found) + searched),
-                **floor_arms(row, routes, texts, handled, found, searched, client, asked)}
+                **floor_arms(row, routes, texts, handled, found, searched, client, asked),
+                "handed_words": _ten(handover(index, view, found, row["problem_statement"]) + searched)}
 
         def mrr(files):
             return next((1 / place for place, path in enumerate(files, 1) if path in gold), 0.0)
@@ -215,7 +226,8 @@ def issue_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
         handled = _handled_at(index, view, routes)
         texts = {route.name: _route_text(route, handled) for route in routes}
         asked = _words(row["problem_statement"][:4000])
-        arms = {"search": searched, **floor_arms(row, routes, texts, handled, found, searched, client, asked)}
+        arms = {"search": searched, **floor_arms(row, routes, texts, handled, found, searched, client, asked),
+                "handed_words": _ten(handover(index, view, found, row["problem_statement"][:4000]) + searched)}
         gold = set(row["gold"])
         return {"instance": row["instance_id"], "repo": row["repo"], "language": row.get("language", "python"),
                 "draw": draw_of(row["instance_id"]), "gold": sorted(gold), "routes": len(routes),
