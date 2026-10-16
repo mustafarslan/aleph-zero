@@ -97,7 +97,9 @@ def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Fact]:
     read = {"ecma": _ecma, "python": _python, "go": _go, "rust": _rust, "java": _java}[family]
     # `from os import environ, getenv`: only then is a bare `environ` the process's (a WSGI handler has one too).
     state: dict = {"os_names": {name.split(b" as ")[-1].strip().decode("utf-8", "replace")
-                                for found in _OS_IMPORT.findall(data) for name in found.split(b",")} if family == "python" else set()}
+                                for found in _OS_IMPORT.findall(data) for name in found.split(b",")} if family == "python" else set(),
+                   # NestJS's decorators are read only where the file takes them from NestJS: `@Get` is a common name.
+                   "nestjs": family == "ecma" and b"@nestjs/common" in data}
     for node in nodes:
         for fact in read(node, state):
             found.append((node.start_byte, fact))
@@ -229,8 +231,51 @@ def _assigned(node: Node, kinds: tuple[str, ...]) -> bool:
 
 # ---- JavaScript and TypeScript -----------------------------------------------------------------------
 
+_NEST = {"Get": "GET", "Post": "POST", "Put": "PUT", "Delete": "DELETE", "Patch": "PATCH", "Options": "OPTIONS", "Head": "HEAD",
+         "All": "ANY"}
+
+
+def _nest_path(call: Node) -> str | None:
+    """The path a NestJS decorator gives: its string, '' with no argument, None for anything computed."""
+    arguments = call.child_by_field_name("arguments")
+    given = [argument for argument in (arguments.named_children if arguments is not None else []) if argument.type != "comment"]
+    if not given:
+        return ""
+    if given[0].type == "object":           # @Controller({ path: 'albums', version: '1' })
+        for pair in given[0].named_children:
+            if pair.type == "pair" and _text(pair.child_by_field_name("key")).strip("'\"") == "path":
+                return _literal(pair.child_by_field_name("value"))
+        return ""
+    return _literal(given[0])
+
+
+def _nest_route(node: Node) -> list[Fact]:
+    """`@Get(':id')` on a method of a class decorated `@Controller('albums')`: GET /albums/{id}, at the decorator."""
+    function = node.child_by_field_name("function")
+    method = _NEST.get(_text(function)) if function is not None and function.type == "identifier" else None
+    body = node.parent.parent if node.parent is not None else None
+    if method is None or body is None or body.type != "class_body" or body.parent is None:
+        return []
+    path = _nest_path(node)
+    if path is None:
+        return []
+    holders = [body.parent] + ([body.parent.parent] if body.parent.parent is not None and body.parent.parent.type == "export_statement" else [])
+    for holder in holders:
+        for decorator in (child for child in holder.children if child.type == "decorator"):
+            call = next((child for child in decorator.named_children if child.type == "call_expression"), None)
+            named = call.child_by_field_name("function") if call is not None else None
+            if named is not None and _text(named) == "Controller":
+                prefix = _nest_path(call)
+                if prefix is None:
+                    return []
+                return [Fact("route", f"{method} {_path(_join(_relative(prefix), _relative(path)) or '/')}", _line(node), "nestjs")]
+    return []
+
+
 def _ecma(node: Node, state: dict) -> list[Fact]:
     kind = node.type
+    if kind == "call_expression" and state.get("nestjs") and node.parent is not None and node.parent.type == "decorator":
+        return _nest_route(node)
     if kind in ("call_expression", "new_expression"):
         function, arguments = node.child_by_field_name("function" if kind == "call_expression" else "constructor"), node.child_by_field_name("arguments")
         if function is not None and _text(function).rsplit(".", 1)[-1] in _ECMA_ROUTER_MAKERS:

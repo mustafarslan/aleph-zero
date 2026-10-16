@@ -405,3 +405,16 @@ def test_go_router_groups_made_in_the_file_give_their_routes_the_group_s_path():
                       ("GET /client/current", 13, "go clientHandler.Current")]     # a configured prefix adds nothing
     mounts = [name for kind, name, _, _ in found("router/router.go", go) if kind == "mount"]
     assert mounts == ["/application", "/application/{id}/message", "/user", "/client"]
+
+
+def test_nestjs_routes_join_the_controller_s_path_and_the_method_s():
+    ts = ("import { Controller, Get, Post, Delete } from '@nestjs/common';\n"
+          "@Controller('albums')\nexport class AlbumController {\n  @Get()\n  list() {}\n\n  @Get(':id/assets')\n  assets() {}\n\n"
+          "  @Post()\n  create() {}\n  @Delete(':id')\n  remove() {}\n  @Get(RoutePath.Stats)\n  computed() {}\n}\n"
+          "@Controller({ path: 'users', version: '1' })\nclass UserController {\n  @Get('me')\n  me() {}\n}\n")
+    assert [fact for fact in found("server/album.controller.ts", ts) if fact[0] == "route"] == [
+        ("route", "GET /albums", 4, "nestjs"), ("route", "GET /albums/{id}/assets", 7, "nestjs"),
+        ("route", "POST /albums", 10, "nestjs"), ("route", "DELETE /albums/{id}", 12, "nestjs"),
+        ("route", "GET /users/me", 19, "nestjs")]                                   # a computed path is not read
+    elsewhere = ts.replace("'@nestjs/common'", "'./decorators'")
+    assert [fact for fact in found("server/album.controller.ts", elsewhere) if fact[0] == "route"] == []   # not NestJS's
