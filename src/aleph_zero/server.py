@@ -188,6 +188,8 @@ FACTS_TOOL = {
         "kind": {"type": "string", "enum": list(archfacts.KINDS)},
         "like": {"type": "string"},
         "mentioned": {"type": "string"},
+        "words": {"type": "boolean", "default": False,
+                  "description": "with `mentioned` that names no route: the routes whose words it shares, at most three"},
         "k": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
         **_COMMON, **_TIMEOUT}},
 }
@@ -584,7 +586,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
         return json.dumps(asdict(found)) if as_json else decisions.text(found)
     if name == "facts":
         found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,
-                             timeout_ms=args.get("timeout_ms"), mentioned=args.get("mentioned"),
+                             timeout_ms=args.get("timeout_ms"), mentioned=args.get("mentioned"), words=bool(args.get("words")),
                              prepare_seconds=None if args.get("timeout_ms") else GRAPH_SECONDS)
         return json.dumps(asdict(found)) if as_json else archfacts.text(found)
     if name == "references":

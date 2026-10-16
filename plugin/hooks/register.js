@@ -8,7 +8,7 @@
 // The meter runs on every rung.
 import {
   DESCRIPTIONS, ENGINE_TOOL, FACTS_DESCRIPTION, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  ALLOW_HINT, factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
+  ALLOW_HINT, factsNamed, factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
@@ -121,12 +121,15 @@ function notAllowed($, error) {
 // What a text names (a route, an environment name), looked up in the engine's facts: a note for the agent, or ''. Asked
 // only while the graph tools are on. Each name once a session, so a text that names nothing new costs no call
 // (DEFERRED 0-graph, part 4).
-async function lookUp($, text) {
+// A prompt also by its words (`words`): the routes whose words it shares, when it names none (DEFERRED 0-graph part 13).
+async function lookUp($, text, words = false) {
   const fresh = mayName(text).filter((name) => !handed.includes(name))
-  if (!fresh.length) return ''
-  const answer = await ask($, 'facts', { mentioned: String(text).slice(0, 4000), k: 20 })
-  const note = answer ? factsNote(answer) : ''
-  if (answer && (note || !/"late": ?true/.test(resultText(answer)))) handed = [...handed, ...fresh].slice(-200)  // a late answer is asked again
+  if (!fresh.length && !words) return ''
+  const answer = await ask($, 'facts', { mentioned: String(text).slice(0, 4000), k: 20, ...(words ? { words: true } : {}) })
+  const note = answer ? factsNote(answer, handed) : ''
+  if (answer && (note || !/"late": ?true/.test(resultText(answer)))) {
+    handed = [...new Set([...handed, ...fresh, ...factsNamed(answer)])].slice(-200)  // a late answer is asked again
+  }
   if (note) meter.added.facts = (meter.added.facts || 0) + 1
   if (!answer || /"late": ?true/.test(resultText(answer))) meter.added.factsLate = (meter.added.factsLate || 0) + 1  // counted, not told (part 9)
   return note
@@ -964,7 +967,7 @@ export function register(on, options) {
     // The one chance goes to the first prompt that is a question: "hi" does not use it up.
     await restore($)
     // Facts: on every prompt that names a route or an environment name not looked up yet, with the graph tools on.
-    const facts = graph && rung >= 1 ? lookUp($, e.text) : Promise.resolve('')
+    const facts = graph && rung >= 1 ? lookUp($, e.text, worthAsking(e.text)) : Promise.resolve('')
     if (rung < 2 || prompts > 0 || !worthAsking(e.text)) {
       const note = await facts
       return note ? next({ ...e, context: [...(e.context ?? []), note] }) : next(e)

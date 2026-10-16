@@ -145,16 +145,29 @@ export function mayName(text) {
   return [...new Set([...(written.match(ENV_LIKE) || []), ...(written.match(PATH_LIKE) || [])])]
 }
 
+// The routes and variables an answer to facts(mentioned=…) hands over: what is not said again later in the conversation.
+export function factsNamed(answer) {
+  try {
+    const facts = JSON.parse(resultText(answer)).facts
+    return Array.isArray(facts) ? [...new Set(facts.filter((fact) => fact.kind === 'route' || fact.kind === 'env').map((fact) => fact.name))] : []
+  } catch {
+    return []
+  }
+}
+
 // The facts of an answer to facts(mentioned=…), as lines an agent can act on: a route with where it is registered, the
 // mounts above it and where its handler is defined; an environment name with where it is read. '' when nothing was found.
-export function factsNote(answer) {
+export function factsNote(answer, skip = []) {
   let parsed
   try {
     parsed = JSON.parse(resultText(answer))
   } catch {
     return ''
   }
-  const facts = Array.isArray(parsed && parsed.facts) ? parsed.facts : []
+  // What was handed over before in this conversation is not said again: a route, with its handler, or a variable.
+  const all = Array.isArray(parsed && parsed.facts) ? parsed.facts : []
+  const facts = all.filter((fact) => !skip.includes(fact.name))
+  if (!facts.some((fact) => fact.kind === 'route' || fact.kind === 'env')) return ''
   const at = (fact) => fact.path + ':' + fact.line
   const lines = []
   const mounts = facts.filter((fact) => fact.kind === 'mount')

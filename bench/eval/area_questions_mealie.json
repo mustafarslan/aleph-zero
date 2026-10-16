@@ -1,0 +1,134 @@
+[
+  {
+    "question": "How is a recipe created from a web page address, from fetching the page to reading its recipe data and cleaning it up before saving?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/services/scraper/scraper.py",
+      "mealie/services/scraper/scraper_strategies.py",
+      "mealie/services/scraper/recipe_scraper.py",
+      "mealie/services/scraper/cleaner.py",
+      "mealie/routes/recipe/recipe_crud_routes.py",
+      "mealie/services/scraper/scraped_extras.py"
+    ]
+  },
+  {
+    "question": "How does importing a recipe with AI combine a link, photos and pasted text into one recipe, including transcribing videos?",
+    "doc": "docs/docs/documentation/getting-started/installation/ai-providers.md",
+    "gold": [
+      "mealie/services/recipe/ai_recipe_service.py",
+      "mealie/services/recipe/import_workflow/workflow.py",
+      "mealie/services/recipe/import_workflow/steps/compile_source.py",
+      "mealie/services/openai/openai.py",
+      "mealie/services/openai/transcription.py",
+      "mealie/services/recipe/import_workflow/compilers/image.py"
+    ]
+  },
+  {
+    "question": "How are recipes imported in bulk from other recipe apps such as Tandoor, Paprika or Nextcloud Cookbook?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/services/migrations/_migration_base.py",
+      "mealie/routes/groups/controller_migrations.py",
+      "mealie/services/migrations/utils/migration_helpers.py",
+      "mealie/services/migrations/tandoor.py",
+      "mealie/services/migrations/paprika.py"
+    ]
+  },
+  {
+    "question": "How does a cookbook act as a saved search that picks recipes by category, tag, tool or ingredient?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/routes/households/controller_cookbooks.py",
+      "mealie/repos/repository_recipes.py",
+      "mealie/services/query_filter/builder.py",
+      "mealie/repos/repository_cookbooks.py",
+      "mealie/db/models/household/cookbook.py"
+    ]
+  },
+  {
+    "question": "How does the meal planner pick a random recipe for a day while honouring the household's planner rules for meal type, weekday and organizers?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/routes/households/controller_mealplan.py",
+      "mealie/repos/repository_meal_plan_rules.py",
+      "mealie/routes/households/controller_mealplan_rules.py",
+      "mealie/services/query_filter/builder.py",
+      "mealie/db/models/household/mealplan.py"
+    ]
+  },
+  {
+    "question": "When a recipe is added to a shopping list, how are its ingredients turned into list items and merged with items already on the list?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/services/household_services/shopping_lists.py",
+      "mealie/routes/households/controller_shopping_lists.py",
+      "mealie/repos/repository_shopping_list.py",
+      "mealie/db/models/household/shopping_list.py"
+    ]
+  },
+  {
+    "question": "How are event notifications sent through Apprise when things like recipes, shopping lists or meal plans change?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/services/event_bus_service/event_bus_listeners.py",
+      "mealie/services/event_bus_service/publisher.py",
+      "mealie/services/event_bus_service/event_bus_service.py",
+      "mealie/services/event_bus_service/event_types.py",
+      "mealie/routes/households/controller_group_notifications.py"
+    ]
+  },
+  {
+    "question": "How are scheduled webhooks sent on the day of a meal plan with that day's meal data?",
+    "doc": "docs/docs/documentation/getting-started/features.md",
+    "gold": [
+      "mealie/services/scheduler/tasks/post_webhooks.py",
+      "mealie/services/event_bus_service/event_bus_listeners.py",
+      "mealie/routes/households/controller_webhooks.py",
+      "mealie/services/event_bus_service/publisher.py",
+      "mealie/db/models/household/webhooks.py"
+    ]
+  },
+  {
+    "question": "How does a full site backup get written to a zip archive with the database and files, and how is it restored?",
+    "doc": "docs/docs/documentation/getting-started/usage/backups-and-restoring.md",
+    "gold": [
+      "mealie/services/backups_v2/backup_v2.py",
+      "mealie/services/backups_v2/alchemy_exporter.py",
+      "mealie/services/backups_v2/backup_file.py",
+      "mealie/routes/admin/admin_backups.py"
+    ]
+  },
+  {
+    "question": "How is a free-text ingredient line split into quantity, unit, food and note, and how can a different parsing strategy be chosen?",
+    "doc": "docs/docs/contributors/guides/ingredient-parser.md",
+    "gold": [
+      "mealie/services/parser_services/ingredient_parser.py",
+      "mealie/services/parser_services/_base.py",
+      "mealie/services/parser_services/brute/process.py",
+      "mealie/services/parser_services/openai/parser.py",
+      "mealie/routes/parser/ingredient_parser.py",
+      "mealie/services/parser_services/parser_utils/string_utils.py"
+    ]
+  },
+  {
+    "question": "How does signing in against an LDAP directory work, including deciding whether the user is an admin and creating the account on first login?",
+    "doc": "docs/docs/documentation/getting-started/authentication/ldap.md",
+    "gold": [
+      "mealie/core/security/providers/ldap_provider.py",
+      "mealie/core/security/security.py",
+      "mealie/core/security/providers/credentials_provider.py",
+      "mealie/routes/auth/auth.py",
+      "mealie/core/settings/settings.py"
+    ]
+  },
+  {
+    "question": "How does single sign-on through an OpenID Connect provider log a user in and map the provider's groups to user and admin rights?",
+    "doc": "docs/docs/documentation/getting-started/authentication/oidc-v2.md",
+    "gold": [
+      "mealie/core/security/providers/openid_provider.py",
+      "mealie/routes/auth/auth.py",
+      "mealie/core/security/providers/auth_provider.py",
+      "mealie/core/settings/settings.py"
+    ]
+  }
+]

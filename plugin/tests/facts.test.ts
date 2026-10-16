@@ -61,9 +61,11 @@ test('at the default rung, every prompt that names something new gets its facts;
     return { text: e.text }
   })
   await $.prompt.submit({ text: 'DELETE http://localhost:8080/client/7 fails and DB_URL is ignored' })
-  await $.prompt.submit({ text: 'rename the helper in utils' })
-  await $.prompt.submit({ text: 'DB_URL again: why?' })
-  expect(asked.length).toBe(1)                                         // nothing new named: no call
+  await $.prompt.submit({ text: 'rename the helper in utils' })        // by its words: asked, and what it gets was said already
+  await $.prompt.submit({ text: 'DB_URL again: why?' })                // too short to ask by words, and nothing new named
+  expect(asked.length).toBe(2)
+  expect(JSON.stringify(asked[1])).toContain('"words":true')
+  expect(sent[2].context).toBeUndefined()
   expect(JSON.stringify(asked[0])).toContain('"mentioned":"DELETE http://localhost:8080/client/7 fails and DB_URL is ignored"')
   expect(JSON.stringify(asked[0])).toContain('"timeout_ms":400')
   expect(sent[0].context[0]).toContain('handler defined at api/client.go:216')
@@ -98,7 +100,8 @@ test('a Grep or a recursive grep for a name, whatever it found, gets the facts a
   const asked: any[] = []
   on('mcp.call', ($, e) => {
     asked.push(e)
-    return reply(FOUND)
+    const only = (kinds: string[]) => ({ ...FOUND, facts: FOUND.facts.filter((fact) => kinds.includes(fact.kind)) })
+    return reply(String(e.args.mentioned).includes('DB_URL') ? only(['env']) : only(['route', 'mount', 'handler']))
   })
   let next: any = grep(['config/db.go', 'docs/setup.md'])
   on('tool.call', () => next)

@@ -1,0 +1,126 @@
+[
+  {
+    "question": "How does the server find photos that look visually alike, group them as duplicates, and suggest which copy to keep when the user resolves a group?",
+    "doc": "docs/docs/features/duplicates-utility.md",
+    "gold": [
+      "server/src/services/duplicate.service.ts",
+      "server/src/repositories/duplicate.repository.ts",
+      "server/src/utils/duplicate.ts",
+      "server/src/controllers/duplicate.controller.ts",
+      "web/src/lib/utils/duplicate-utils.ts"
+    ]
+  },
+  {
+    "question": "How are faces found in a photo and then clustered into people that can be named, merged or hidden?",
+    "doc": "docs/docs/features/facial-recognition.md",
+    "gold": [
+      "server/src/services/person.service.ts",
+      "server/src/repositories/person.repository.ts",
+      "server/src/repositories/machine-learning.repository.ts",
+      "machine-learning/immich_ml/models/facial_recognition/detection.py",
+      "machine-learning/immich_ml/models/facial_recognition/recognition.py"
+    ]
+  },
+  {
+    "question": "How does searching photos by a free-text description work, from turning images and the typed words into vectors to ranking the matches?",
+    "doc": "docs/docs/features/searching.md",
+    "gold": [
+      "server/src/services/search.service.ts",
+      "server/src/services/smart-info.service.ts",
+      "server/src/repositories/search.repository.ts",
+      "server/src/repositories/machine-learning.repository.ts",
+      "machine-learning/immich_ml/models/clip/textual.py",
+      "machine-learning/immich_ml/models/clip/visual.py"
+    ]
+  },
+  {
+    "question": "How are GPS coordinates in a photo turned into a city, state and country using the locally loaded place database?",
+    "doc": "docs/docs/features/reverse-geocoding.md",
+    "gold": [
+      "server/src/repositories/map.repository.ts",
+      "server/src/services/metadata.service.ts",
+      "server/src/services/map.service.ts",
+      "server/src/schema/tables/geodata-places.table.ts"
+    ]
+  },
+  {
+    "question": "How does the server discover XMP sidecar files next to an asset, read metadata from them, and write edits such as description, rating and tags back into them?",
+    "doc": "docs/docs/features/xmp-sidecars.md",
+    "gold": [
+      "server/src/services/metadata.service.ts",
+      "server/src/repositories/metadata.repository.ts",
+      "server/src/repositories/asset-job.repository.ts",
+      "server/src/utils/asset.util.ts"
+    ]
+  },
+  {
+    "question": "How does the storage template decide the folder and file name of an uploaded asset, and how are existing files moved when the template changes?",
+    "doc": "docs/docs/administration/storage-template.mdx",
+    "gold": [
+      "server/src/services/storage-template.service.ts",
+      "server/src/cores/storage.core.ts",
+      "server/src/repositories/move.repository.ts",
+      "server/src/repositories/asset-job.repository.ts"
+    ]
+  },
+  {
+    "question": "How does an external library scan folders on disk to import new files, pick up changed ones and move missing ones to the trash?",
+    "doc": "docs/docs/features/libraries.md",
+    "gold": [
+      "server/src/services/library.service.ts",
+      "server/src/repositories/library.repository.ts",
+      "server/src/repositories/storage.repository.ts",
+      "server/src/controllers/library.controller.ts"
+    ]
+  },
+  {
+    "question": "How does one user share their whole library with a partner, and how do the partner's photos show up in the other user's timeline?",
+    "doc": "docs/docs/features/partner-sharing.md",
+    "gold": [
+      "server/src/services/partner.service.ts",
+      "server/src/repositories/partner.repository.ts",
+      "server/src/controllers/partner.controller.ts",
+      "server/src/services/timeline.service.ts",
+      "server/src/repositories/access.repository.ts"
+    ]
+  },
+  {
+    "question": "When a user unlocks the locked folder with their PIN, how long does the session stay unlocked, how is it extended or ended, and how are locked photos kept out of other views?",
+    "doc": "docs/docs/features/locked-folder.md",
+    "gold": [
+      "server/src/services/auth.service.ts",
+      "server/src/utils/access.ts",
+      "server/src/repositories/access.repository.ts",
+      "server/src/services/asset.service.ts",
+      "server/src/services/timeline.service.ts"
+    ]
+  },
+  {
+    "question": "How are videos transcoded with hardware acceleration on the different GPU vendors, and how is hardware decoding used alongside hardware encoding?",
+    "doc": "docs/docs/features/hardware-transcoding.md",
+    "gold": [
+      "server/src/utils/media.ts",
+      "server/src/services/media.service.ts",
+      "server/src/repositories/media.repository.ts"
+    ]
+  },
+  {
+    "question": "How does signing in through an external OAuth identity provider work, including creating the account from the provider's claims and logging out?",
+    "doc": "docs/docs/administration/oauth.md",
+    "gold": [
+      "server/src/services/auth.service.ts",
+      "server/src/repositories/oauth.repository.ts",
+      "server/src/controllers/oauth.controller.ts"
+    ]
+  },
+  {
+    "question": "How are automatic database backups created on a schedule, old ones pruned, and a chosen backup restored?",
+    "doc": "docs/docs/administration/backup-and-restore.md",
+    "gold": [
+      "server/src/services/database-backup.service.ts",
+      "server/src/controllers/database-backup.controller.ts",
+      "server/src/utils/database-backups.ts",
+      "server/src/maintenance/maintenance-worker.service.ts"
+    ]
+  }
+]

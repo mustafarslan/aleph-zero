@@ -141,8 +141,9 @@ test('L2: the first prompt of a session carries locations when two generators ag
   await $.prompt.submit({ text: 'and where are invoices rendered every night?' })
   // Code only, and enough hits to fill five files: an issue's words match the issue template it was written on,
   // and of five results several lie in one file (measured on 400 questions, ADR-011).
-  expect(JSON.stringify(asked[0])).toContain('"kind":"code"')
-  expect(JSON.stringify(asked[0])).toContain('"k":15')
+  const searched = asked.filter((e) => e.tool === 'search')        // the facts look-up by the prompt's words goes beside it
+  expect(JSON.stringify(searched[0])).toContain('"kind":"code"')
+  expect(JSON.stringify(searched[0])).toContain('"k":15')
   expect(sent[0].context.length).toBe(1)
   expect(sent[0].context[0]).toContain('src/auth/token_store.py:4-6  function  refresh_token')
   expect(sent[0].context[0]).toContain('starting point')
@@ -198,17 +199,17 @@ test('L2: a weak top hit adds nothing', rung('2'), async ($, on) => {
   expect(sent[0].context).toBeUndefined()
 })
 
-test('L2: at rung 1 the engine is not asked', rung('1'), async ($, on) => {
+test('L2: at rung 1 search is not asked (only facts, by the prompt\'s words)', rung('1'), async ($, on) => {
   mock.clock(on)
   connected(on)
-  let calls = 0
-  on('mcp.call', () => {
-    calls += 1
+  const tools: string[] = []
+  on('mcp.call', ($, e) => {
+    tools.push(e.tool)
     return engine([hit('src/x.py', ['lexical', 'symbol'])])
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   await $.prompt.submit({ text: 'where are refresh tokens rotated in this service?' })
-  expect(calls).toBe(0)
+  expect(tools).toEqual(['facts'])
 })
 
 test('L2: an engine that never answers does not hold the prompt', rung('2'), async ($, on) => {

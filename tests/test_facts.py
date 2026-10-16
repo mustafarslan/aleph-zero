@@ -433,3 +433,18 @@ def test_django_url_patterns_are_routes_and_includes_are_mounts():
         ("mount", "/api/", 12, '"hc.api.urls"'), ("route", "ANY /ping/{code}/", 13, "django views.ping"),
         ("route", "ANY /projects/", 16, "django views.ProjectList")]            # a regex that is not a path, a computed prefix: not read
     assert found("hc/front/helpers.py", py.replace("from django.urls import include, path, re_path\n", "")) == []
+
+
+def test_a_request_that_names_no_route_is_answered_by_the_routes_sharing_its_words(repo):
+    repo.write("router/router.go", 'package router\nfunc Create(g *gin.Engine) {\n\tclient := g.Group("/client")\n'
+               '\tclient.DELETE("/:id", clientHandler.DeleteClient)\n\tclient.GET("", clientHandler.GetClients)\n'
+               '\tg.GET("/health", healthHandler.Health)\n}\n')
+    repo.write("api/client.go", "package api\n\ntype ClientAPI struct{}\n\nfunc (a *ClientAPI) DeleteClient(ctx *gin.Context) {}\n")
+    engine = Engine(repo.root)
+    by_words = engine.facts(mentioned="Deleting a client fails with a 500", words=True)
+    assert [(f.kind, f.name, f.path) for f in by_words.facts] == [
+        ("route", "DELETE /client/{id}", "router/router.go"), ("mount", "/client", "router/router.go"),
+        ("handler", "DELETE /client/{id}", "api/client.go")]
+    assert engine.facts(mentioned="Deleting a client fails with a 500").facts == []          # by name only: it names none
+    assert engine.facts(mentioned="rename the helper in utils", words=True).facts == []      # under the floor: nothing
+    assert engine.facts(mentioned="the health endpoint returns nothing", words=True).facts[0].name == "GET /health"
