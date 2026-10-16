@@ -233,8 +233,11 @@ def built_from() -> str | None:
             return recorded
     except OSError:
         pass
+    binary = worker.where() / "bin" / "llama-server"        # looked at, never created: status and doctor only look
+    if not binary.exists():
+        return None
     try:
-        said = subprocess.run([str(worker.binary()), "--version"], capture_output=True, text=True, timeout=10)
+        said = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     found = __import__("re").search(r"commit ([0-9a-f]{7,40})", said.stdout + said.stderr)
