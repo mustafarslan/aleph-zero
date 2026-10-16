@@ -42,7 +42,7 @@ def stateless_enabled() -> bool:
     `initialize` on the wire (2.1.296, 2026-10-13). Switched off, the server says "method not found" to that first
     question and the client falls back to the handshake, as every session did before."""
     return os.environ.get("ALEPH_MCP_STATELESS", "") != "0"
-SERVER_INFO = {"name": "aleph-zero", "version": "0.1.16"}
+SERVER_INFO = {"name": "aleph-zero", "version": "0.1.17"}
 
 INSTRUCTIONS = """\
 Aleph Zero is a local index of this repository's code and documentation. It always \
@@ -315,9 +315,8 @@ class _Facts:
                 self.unread = self._engine.facts(prepare_seconds=self.ROUND_SECONDS).unread
                 if not self.unread:
                     break
-            from . import search as searching
-            if not self._stopping.is_set() and searching.AREAS != "off":
-                self._engine.prepare_areas()          # the module summaries search places first (areas.py), from those facts
+            if not self._stopping.is_set():
+                self._engine.prepare_areas()          # the module summaries search places first (areas.py), where they are on
         except Exception:  # noqa: BLE001 - not a repository, a locked index: the first question reads them itself
             pass
         finally:

@@ -30,6 +30,19 @@ K1, B = 1.2, 0.75
 _BATCH = 500
 _KEPT_VIEWS = 4
 
+# By a project's main language, as vectors are decided (DEFERRED 0-graph part 17): on where it was measured to help.
+VERDICTS = {
+    "python": (True, "on for Python: +9.2 points of files found on 72 questions about whole areas, +2.5 among ten on 595 "
+                     "Python issues, the first file right not lowered within the noise"),
+}
+NOT_SHOWN = "off: not shown to help for this language (DEFERRED 0-graph part 17)"
+
+
+def decide(language: str | None) -> tuple[bool, str]:
+    """Whether search places the best modules' files first in a project of this main language, and why."""
+    return VERDICTS.get(language or "", (False, NOT_SHOWN))
+
+
 _lock = threading.Lock()
 _bags: dict[str, dict[tuple[str, str], collections.Counter]] = {}     # by index file: (blob, family) -> its words
 _views: collections.OrderedDict = collections.OrderedDict()            # (index file, view) -> Summary

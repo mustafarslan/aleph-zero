@@ -42,6 +42,15 @@ or reads that variable, from source code only (not documentation or tests). Most
 name neither, and then nothing is added: on 1,398 issues people wrote, in six languages, files
 were added to 8.6%, without lowering how often the right files were found.
 
+**Module summaries.** In a project whose main language is Python, a question about a whole
+area ("how is a recipe imported from a URL") puts first the files of the two modules (directories)
+whose definitions, routes and paths match it best: their summaries are made without a model, from
+what the index already keeps for each file's content, so they are never stale and an edit re-reads
+only the changed file. Measured: +9.2 points of right files found on 72 questions about whole
+areas, +2.5 among ten on 595 Python issues, the first file right unchanged within the noise. Off
+for other languages, where it was not shown to help. It reorders most searches; that is its job.
+Nothing to switch on.
+
 **Decision records.** Ranks a repository's ADRs for a task, or lists those that apply to a
 file, so the agent sees what was already decided.
 

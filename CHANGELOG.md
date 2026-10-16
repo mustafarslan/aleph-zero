@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.17
+
+- **Module summaries in search, on for Python projects** (DEFERRED 0-graph part 17; your decision on the readings).
+  A module is a directory of source code; its summary is the words of what its files define and state (names, the
+  first line of signatures, routes, models, environment names) and of their paths, made without a model from what the
+  index keeps per file content. Search puts the files of the two modules that match a question best first (three
+  each, a module only when it shares two of the question's words), then its own results. Measured through the engine:
+  +9.2 points of files found (+3.6 to +15.1) on 72 questions about whole areas from six projects' documentation;
+  on 595 Python issues +2.5 among ten (+0.6 to +4.2) and +3.2 among eight, the first file right +1.3 (−2.4 to +4.9);
+  no added time to a warm search, the summaries made in 0.02 to 0.4 s once in the background, about 70 ms more for the
+  first search after an edit on the largest project. Off for other languages: not shown to help (TypeScript leaned
+  lower in two readings). It reorders most searches. The rule written for it asked a loss over one point on the first
+  file to be ruled out, which cannot be done on fewer than thousands of questions: it was not met, and this is your
+  call on the numbers, recorded so.
+
 ## 0.1.16
 
 - **Routes read in more frameworks** (DEFERRED 0-graph part 12), each judged on a project that was not tuned on:

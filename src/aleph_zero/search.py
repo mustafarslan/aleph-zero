@@ -188,13 +188,13 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
     return code[:n_code] + docs[:n_docs]
 
 
-def _areas_first(index: Index, view: View, query: str, merged: list[Hit], accept, columns: str) -> list[Hit]:
+def _areas_first(index: Index, view: View, query: str, merged: list[Hit], accept, columns: str, mode: str) -> list[Hit]:
     """The files of the modules whose summaries match the question best, before search's others (code only). A file
     search found keeps its own results; one it did not enters by its first chunk."""
     from . import areas
 
     searched = list(dict.fromkeys(hit.path for hit in merged if hit.kind != "doc"))
-    chosen = areas.first_files(areas.summary(index, view), query, searched, AREAS == "M2floor", accept)
+    chosen = areas.first_files(areas.summary(index, view), query, searched, mode == "M2floor", accept)
     if not chosen:
         return merged
     top = max((hit.score for hit in merged), default=0.0)
@@ -217,7 +217,8 @@ def _areas_first(index: Index, view: View, query: str, merged: list[Hit], accept
 
 def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
            path_glob: str | None = None, families: frozenset[str] | None = None,
-           dense: Callable[[int, bool], list[int]] | None = None, more_files: list[Hit] | None = None) -> list[Hit]:
+           dense: Callable[[int, bool], list[int]] | None = None, more_files: list[Hit] | None = None,
+           areas: bool | None = None) -> list[Hit]:
     """Hits for `query` in `view`. Call `index.sync(view)` first: only blobs of the
     synced view can be returned. `dense(limit, scoped)` gives the chunks whose vectors
     are nearest the query's, best first; without it the search is by words and names."""
@@ -305,8 +306,11 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         hits += shown
     hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
     merged = merge_pieces(hits)
-    if AREAS != "off" and kind != "docs":
-        merged = _areas_first(index, view, query, merged, accept, columns)
+    # The module step: the engine says whether by the project's main language (areas.decide); without a word from it the
+    # module's switch, which the benchmarks set. Not for a query that is one name: its definitions come first, as above.
+    mode = AREAS if areas is None else ("M2floor" if areas else "off")
+    if mode != "off" and kind != "docs" and not (bare_name and named):
+        merged = _areas_first(index, view, query, merged, accept, columns, mode)
     found = arrange(one_a_file(merged) if ONE_A_FILE else merged, k, kind)
     if more_files is not None:
         # Ten results named about seven files: the next files of the same ranking follow them, as places only, until

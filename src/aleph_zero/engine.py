@@ -148,6 +148,7 @@ class Engine:
         self.dense = dense
         self._stores: dict[Path, object] = {}
         self._decisions: dict[int, tuple] = {}
+        self._areas_on: dict[int, tuple] = {}    # per index: (its view epoch, whether search places modules first and why)
         self._embedder = None  # the connection to the worker used for queries
         self._with_vectors: dict[str, bool] = {}   # per directory asked from: whether its last question used vectors
         self._vectors_wanted: dict[str, bool] = {}  # per directory asked from: whether the worker has something to do there
@@ -275,7 +276,7 @@ class Engine:
             def ranked():
                 more.clear()
                 return run_search(index, view, query, k=k, kind=kind, path_glob=path_glob, families=families, dense=nearest,
-                                  more_files=more) or []
+                                  more_files=more, areas=self._areas_decision(index)[0]) or []
             return note, covered, chunks, ranked
 
         try:
@@ -534,6 +535,8 @@ class Engine:
 
         try:
             index, view, _, _ = self._ready(cwd, time.monotonic(), None)
+            if not self._areas_decision(index)[0]:
+                return False                         # off for this project's main language: nothing to make
             areas.summary(index, view)
         except Exception:  # noqa: BLE001 - the first search makes them itself
             return False
@@ -893,6 +896,17 @@ class Engine:
         return {"enabled": enabled, "why": why, "kind": VECTOR_KIND, "with_vector": have, "chunks": total, "parts": parts,
                 "chosen": chosen if isinstance(chosen, bool) else None, "verdict": {"helps": helps, "why": verdict_why},
                 "worker_installed": worker_there, "worker_current": worker_current, **store.rows()}
+
+    def _areas_decision(self, index: Index) -> tuple[bool, str]:
+        """Whether search places the best modules' files first here (areas.decide, by the main language), kept for the
+        view: the main language is a sum over the whole view."""
+        from . import areas
+
+        cached = self._areas_on.get(id(index))
+        if cached is None or cached[0] != index._view_epoch:
+            cached = (index._view_epoch, areas.decide(next(iter(index.languages()), None)))
+            self._areas_on[id(index)] = cached
+        return cached[1]
 
     def _dense_decision(self, index: Index) -> tuple[bool, str]:
         """Whether vectors take part for the worktree this index is synced to, and why. A flag or ALEPH_DENSE
