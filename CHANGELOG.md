@@ -21,7 +21,8 @@
   plugin's own calls of the engine's tools opened a "Do you want to proceed?" dialog for a person who had not allowed
   them, at a session's start (the vectors line, since 0.1.11). The plugin now asks Claude Code's decision first
   (`tool.check`, which opens nothing) and makes no call that would ask; the vectors line reads the engine's status
-  without the tools.
+  without the tools. In auto mode too: the mode is not known to the plugin there, so the look-ups
+  wait for the one yes in every mode (0.1.15's look-ups could be let through by auto mode's classifier).
 - **The graph tools are on by default in the engine's own server too** (a bare `claude mcp add`); `ALEPH_GRAPH=0` turns
   them off, as the plugin's `graph=off` does.
 - **For the plugin directory's review:** each plugin option is written by its fixed key; the settings pane no longer
