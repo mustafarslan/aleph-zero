@@ -156,14 +156,20 @@ def _outline(args) -> int:
 
 def _status(args) -> int:
     try:
-        print(json.dumps(Engine(args.cwd).status(), indent=2))
+        # Which engine answered, as a person would run it: the plugin drafts commands with this path.
+        print(json.dumps({**Engine(args.cwd).status(), "engine": _engine_path()}, indent=2))
     except plain.Refused as refused:
         # Refused as before (the message, exit 2), and what is known without the directory said beside it: a settings
         # pane opened in the home directory still shows what is built on this machine.
         print(json.dumps({"root": str(Path(args.cwd).resolve()), "repository": False, "refused": str(refused),
-                          **_machine()}, indent=2))
+                          **_machine(), "engine": _engine_path()}, indent=2))
         raise
     return 0
+
+
+def _engine_path() -> str:
+    """The command this process was started as, absolute: `~/.local/bin/aleph-zero` for uv's tool install."""
+    return str(Path(sys.argv[0]).absolute()) if sys.argv and sys.argv[0] else ""
 
 
 def _machine() -> dict:
@@ -272,7 +278,7 @@ def _setup(args) -> int:
 
     if args.embed and (args.no_dense or args.auto_dense):
         raise SystemExit("aleph setup: --embed makes this repository's vectors in order to use them; it goes with --dense only")
-    others = bool(args.worker or args.memory or args.aeon_source or args.embed or args.source or args.untracked_cache or args.again)
+    others = bool(args.worker or args.allow_tools or args.memory or args.aeon_source or args.embed or args.source or args.untracked_cache or args.again)
     if (args.dense or args.no_dense or args.auto_dense) and not others and not args.json and _in_repository(args.cwd):
         # A switch (for a person, or /aleph configure): one line, no pass over the repository, no list.
         repo_file = settings.repo_file(gitio.common_dir(args.cwd))
@@ -304,6 +310,8 @@ def _setup(args) -> int:
                 return f"installed {embed_setup.install_binary(None, say)} and {embed_setup.install_model(None, say)}"
         if what == "memory":
             return f"installed Aeon's core in {aeon_setup.install(None, say)}: memories are recalled by meaning from now on"
+        if what == "allow":
+            return firstrun.allow_tools()
         if what == "source":
             added = sources.add(args.cwd, given[0])
             return f"linked {added.name} ({added.kind}): {added.location}"
@@ -329,10 +337,12 @@ def _setup(args) -> int:
     # home directory, which is not walked, and that is where the README's first step runs `setup --worker`.
     if args.worker:
         flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
+    if args.allow_tools:
+        flag("--allow-tools", lambda: (settings.answer(settings.machine_file(), "allow", None), say(act("allow"))))
     if args.memory or args.aeon_source:
         flag("--memory", lambda: say(f"installed Aeon's core in {aeon_setup.install(args.aeon_source, say)}: memories are "
                                      f"recalled by meaning from now on"))
-    machine_flags = bool(args.worker or args.memory or args.aeon_source)
+    machine_flags = bool(args.worker or args.memory or args.aeon_source or args.allow_tools)
     project_flags = bool(args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
     if machine_flags and not project_flags and not _in_repository(args.cwd):
         # Not a project (the home directory, ~/Downloads): nothing of it is walked for a list that is a project's.
@@ -398,7 +408,7 @@ def _setup(args) -> int:
         return 2 if failed else 0
     say(firstrun.text(steps))
     if firstrun.open_steps(steps) and not firstrun.on_terminal():
-        say(f"\nAnswer these on a terminal with `{COMMAND} setup`, or one at a time: --worker, --source LOCATION, --embed, "
+        say(f"\nAnswer these on a terminal with `{COMMAND} setup`, or one at a time: --allow-tools, --worker, --source LOCATION, --embed, "
             "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
     return 2 if failed else 0
 
@@ -576,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
     first.add_argument("--again", action="store_true", help="ask again about what was declined")
     first.add_argument("--json", action="store_true", help="the checklist as JSON; nothing is asked")
     first.add_argument("--worker", action="store_true", help="install the embedding worker and its model (310 MB; uses the network)")
+    first.add_argument("--allow-tools", action="store_true", help="let the plugin's automatic look-ups use Aleph's tools: adds one rule, "
+                       "\"mcp__plugin_aleph-zero_aleph__*\", to permissions.allow in Claude Code's user settings")
     first.add_argument("--source", action="append", metavar="LOCATION", help="link a repository by path or URL (a URL uses the network)")
     first.add_argument("--embed", action="store_true", help="make this repository's vectors now and use them here")
     chosen = first.add_mutually_exclusive_group()

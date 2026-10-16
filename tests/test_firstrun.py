@@ -168,3 +168,37 @@ def test_the_files_counted_for_git_s_untracked_cache_are_the_worktree_s_own_not_
     # Git's look at the worktree is what the cache speeds up; a linked source's files are another repository's.
     status = {"files_in_view": 5_050, "untracked_cache": False, "sources": [{"name": "docs", "kind": "path", "files": 5_000}]}
     assert firstrun.look(status).files == 50
+
+
+def test_with_the_plugin_installed_allowing_its_tools_is_asked_after_connecting_and_suggested():
+    assert "allow" not in _by_key(firstrun.plan(PYTHON, repo={}, machine={}))          # no plugin: nothing to allow
+    steps = firstrun.plan(replace(PYTHON, plugin=True), repo={}, machine={})
+    assert [step.key for step in steps][:3] == ["claude", "allow", "worker"]
+    allow = _by_key(steps)["allow"]
+    assert allow.state == "open" and allow.suggested and allow.scope == "machine"
+    assert "mcp__plugin_aleph-zero_aleph__*" in allow.cost and "nothing else there is changed" in allow.cost
+    assert allow.command.endswith("setup --allow-tools")
+    assert _by_key(firstrun.plan(replace(PYTHON, plugin=True, allowed=True), repo={}, machine={}))["allow"].state == "done"
+
+
+def test_allowing_the_tools_adds_one_rule_and_keeps_everything_else(tmp_path, monkeypatch):
+    import json
+
+    import pytest
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    assert not firstrun.tools_allowed()
+    assert "added" in firstrun.allow_tools()                                              # no file yet: made
+    assert firstrun.tools_allowed()
+    path = tmp_path / "claude" / "settings.json"
+    path.write_text(json.dumps({"model": "opus", "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(./.env)"]}, "x": [1]}))
+    firstrun.allow_tools()
+    kept = json.loads(path.read_text())
+    assert kept == {"model": "opus", "permissions": {"allow": ["Bash(ls:*)", "mcp__plugin_aleph-zero_aleph__*"],
+                                                     "deny": ["Read(./.env)"]}, "x": [1]}
+    assert firstrun.allow_tools().startswith("already allowed")
+    assert json.loads(path.read_text()) == kept                                           # asked twice, written once
+    path.write_text("{ not json")
+    with pytest.raises(firstrun.SettingsError, match="by hand"):
+        firstrun.allow_tools()
+    assert path.read_text() == "{ not json"                                               # a file it cannot read is left

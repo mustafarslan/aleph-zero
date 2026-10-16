@@ -169,3 +169,20 @@ test('an engine that never answers the look-up does not hold the prompt', { opti
   expect(sent[0].context).toBeUndefined()
   expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('(1 look-ups too late)')
 })
+
+test('when the engine\'s tools are not allowed, the person is told once what to add', { options: { rung: '1' } }, async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  on('mcp.call', () => ({ deny: 'Claude requested permissions to use mcp__plugin_aleph-zero_aleph__facts, but you haven\'t granted it yet.' }))
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  await $.prompt.submit({ text: 'the server ignores DB_URL when it starts up' })
+  await $.prompt.submit({ text: 'and REDIS_URL too' })
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain('permissions.allow')
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('not allowed yet')
+})

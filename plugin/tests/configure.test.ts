@@ -14,6 +14,7 @@ function status(overrides: any = {}) {
     sources: [{ name: 'vue-docs', kind: 'path', location: '/work/vue-docs', files: 312, last_error: null }],
     vectors: { chosen: null, verdict: { helps: false, why: 'python: under the bar' }, worker_installed: true, worker_current: true, with_vector: 0, chunks: 1800 },
     memory: { aeon_installed: false, aeon_current: false },
+    engine: ENGINE,                       // which engine answered: commands are drafted with it
     ...overrides,
   }
 }
@@ -29,7 +30,6 @@ function world(on: any, options: { status?: any, engine?: number, denied?: strin
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['not ours'] }))
   on('process.run', ($: any, e: any) => {
     seen.runs.push([...e.argv])
-    if (e.argv.includes('--path')) return { value: { exitCode: 0, stdout: ENGINE + '\n', stderr: '' } }
     if (e.argv[0] === 'git') return { value: { exitCode: 0, stdout: '', stderr: '' } }
     if (options.refused) return { value: { exitCode: 2, stdout: JSON.stringify(options.refused), stderr: options.refused.refused + '\n' } }
     if (options.engine) return { value: { exitCode: options.engine, stdout: '', stderr: 'aleph-zero: the engine is not installed: uv tool install git+https://github.com/mustafarslan/aleph-zero.git\n' } }

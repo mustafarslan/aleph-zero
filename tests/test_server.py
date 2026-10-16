@@ -179,13 +179,16 @@ def test_the_sdk_s_client_of_the_new_revision_can_discover_list_and_call(repo):
     assert "search" in names and result.is_error is False and "src/billing/invoice.py:1-3" in result.content[0].text
 
 
-def test_six_tools_are_listed_and_search_is_always_loaded(client):
+def test_the_tools_are_listed_and_search_is_always_loaded(client):
     client.start()
     tools = {tool["name"]: tool for tool in client.request("tools/list")["result"]["tools"]}
-    assert set(tools) == {"search", "outline", "symbol", "status", "recall", "remember"}
+    assert set(tools) == {"search", "outline", "symbol", "status", "recall", "remember", "references", "facts", "decisions"}
     assert tools["search"]["_meta"] == {"anthropic/alwaysLoad": True}
     assert all("_meta" not in tool for name, tool in tools.items() if name != "search")
-    assert sum(len(tool["description"]) for tool in tools.values()) <= 1200
+    # The six that are always offered keep to the budget they were written to; the graph tools are measured on their own
+    # (ADR-011), and the plugin keeps `references` and `decisions` behind ToolSearch.
+    core = ("search", "outline", "symbol", "status", "recall", "remember")
+    assert sum(len(tools[name]["description"]) for name in core) <= 1200
     assert tools["search"]["inputSchema"]["required"] == ["query"]
     assert set(tools["search"]["inputSchema"]["properties"]) == {
         "query", "k", "kind", "path_glob", "lang", "detail", "format", "cwd", "timeout_ms"}
@@ -296,7 +299,7 @@ def test_the_sdk_client_can_list_and_call_our_tools(repo):
                 return [tool.name for tool in tools.tools], result
 
     names, result = anyio.run(run)
-    assert sorted(names) == ["outline", "recall", "remember", "search", "status", "symbol"]
+    assert sorted(names) == ["decisions", "facts", "outline", "recall", "references", "remember", "search", "status", "symbol"]
     assert result.is_error is False and "src/billing/invoice.py:1-3" in result.content[0].text
 
 
@@ -405,17 +408,17 @@ def test_with_semantic_search_on_the_server_makes_vectors_in_the_background(repo
         shutil.rmtree(cache, ignore_errors=True)
 
 
-def test_the_graph_tool_is_listed_and_answers_only_when_switched_on(repo):
-    """M7 is built ahead of its gate: the agent is not offered the tool unless ALEPH_GRAPH=1."""
+def test_the_graph_tools_are_offered_unless_switched_off(repo):
+    """On by default since 0.1.16 (a bare `claude mcp add` gets them too); ALEPH_GRAPH=0 (the plugin's graph=off) takes them away."""
     repo.write("src/billing/use.py", "from .invoice import render_invoice\n\ndef bill():\n    return render_invoice(1)\n")
-    off = Client(repo.root)
+    off = Client(repo.root, env={"ALEPH_GRAPH": "off"})
     try:
         off.start()
         assert "references" not in {tool["name"] for tool in off.request("tools/list")["result"]["tools"]}
         assert off.call("references", name="render_invoice")["error"]["message"] == "Unknown tool: references"
     finally:
         off.close()
-    on = Client(repo.root, env={"ALEPH_GRAPH": "1"})
+    on = Client(repo.root, env={"ALEPH_GRAPH": ""})                     # unset or empty: on
     try:
         on.start()
         tools = {tool["name"]: tool for tool in on.request("tools/list")["result"]["tools"]}
@@ -451,7 +454,7 @@ def test_the_facts_of_the_worktree_are_read_when_a_session_starts_while_the_grap
         finally:
             conn.close()
 
-    off = Client(repo.root)
+    off = Client(repo.root, env={"ALEPH_GRAPH": "0"})
     try:
         off.start()
         off.text("status")
@@ -590,8 +593,8 @@ def test_the_background_thread_works_only_when_a_vector_is_missing_or_the_worker
 def test_the_graph_switch_takes_the_plugin_option_s_words_as_well(monkeypatch):
     # The plugin passes its `graph` option (on/off, like its other switches) through to the engine as ALEPH_GRAPH.
     from aleph_zero import server
-    for value, enabled in (("1", True), ("on", True), ("off", False), ("0", False), ("", False),
-                           ("true", True), ("ON", True), ("yes", True), ("false", False), ("no", False)):
+    for value, enabled in (("1", True), ("on", True), ("off", False), ("0", False), ("", True),
+                           ("true", True), ("ON", True), ("yes", True), ("false", False), ("no", False), (" OFF ", False)):
         monkeypatch.setenv("ALEPH_GRAPH", value)
         assert server.graph_enabled() is enabled, value
 

@@ -102,6 +102,18 @@ whose answers cite `path:line`.
    claude plugin install aleph-zero@aleph-zero
    ```
 
+4. Let the plugin use the engine's tools. This is the one step that is yours to give: Claude Code
+   asks before any tool runs, and the plugin's own look-ups (where a route or an environment
+   variable you name is handled, rungs 2 and 3, the side chat) do nothing until it is allowed.
+   `aleph setup` asks it once the plugin is installed; to give it directly:
+
+   ```sh
+   aleph setup --allow-tools     # adds "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json
+   ```
+
+   Nothing else needs switching on: the plugin's options all have working defaults. Until the
+   tools are allowed the plugin says so once a session, and `/aleph check` says whether they are.
+
 The engine is installed as `aleph` and, under the same code, as `aleph-zero`. TeX Live also
 installs a program called `aleph`: if `which aleph` points into a TeX directory, use
 `aleph-zero` instead. Run as `aleph-zero`, it names `aleph-zero` in the commands it suggests. The plugin
@@ -182,7 +194,7 @@ claude mcp add --scope user aleph-zero -- "$(which aleph-zero)" serve     # Clau
 ```
 
 The agent gets `search` (always loaded), and `symbol`, `outline`, `status`, `recall` and
-`remember` on demand; with `ALEPH_GRAPH=1` also `references`, `facts` and `decisions`. Each
+`remember` on demand, and `references`, `facts` and `decisions` (`ALEPH_GRAPH=0` leaves them out). Each
 tool takes the working directory, so one server answers for any worktree.
 
 ## What it runs, sends and fetches
@@ -266,7 +278,7 @@ model after ten idle minutes and exits after thirty.
 | Variable | Effect |
 |---|---|
 | `ALEPH_DENSE=1\|0` | Search by meaning on or off, overriding the project's setting |
-| `ALEPH_GRAPH=1` | Offer the code-graph, facts and decisions tools, and read a worktree's facts when a session starts (the plugin's `graph` option sets it) |
+| `ALEPH_GRAPH=0` | Do not offer the code-graph, facts and decisions tools (offered by default, and a worktree's facts are then read when a session starts; the plugin's `graph` option sets it) |
 | `ALEPH_SCIP_MEMORY_MB` | Memory limit for `aleph scip run` (2,048 MB by default; JavaScript 3,072) |
 | `ALEPH_AEON_LIB` | Path to Aeon's core library, for recalling memories by meaning |
 | `XDG_CACHE_HOME` | Where the machine-wide cache lives (`~/.cache` by default) |

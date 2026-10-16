@@ -151,8 +151,8 @@ TOOLS = [
             **_COMMON}},
     },
 ]
-# The code graph (M7) is built ahead of its gate (ADR-003: a graph feature ships only if the A/B run
-# improves with it). Until then the agent is offered this tool only when the owner sets ALEPH_GRAPH=1.
+# The graph tools (M7, M8): offered unless ALEPH_GRAPH says no. The A/B runs of 2026-10-16 (ADR-011) found `facts` used
+# once shown in full; `references` and `decisions` are not shown to help, and are offered as the owner decided.
 GRAPH_TOOL = {
     "name": "references",
     "description": "Who calls a function, method or class, and what it calls. Each answer says whether it is "
@@ -195,8 +195,9 @@ GRAPH_SECONDS = 20.0     # how long a first graph question may spend reading fil
 
 
 def graph_enabled() -> bool:
-    # "on": the plugin's `graph` option, passed through; it is free text, so the other ways of saying yes count too
-    return os.environ.get("ALEPH_GRAPH", "").strip().lower() in ("1", "on", "true", "yes")
+    # On unless switched off (0.1.16; DEFERRED 0-graph part 16): the plugin's `graph` option is passed through as free
+    # text, so the other ways of saying no count too. Unset, or empty (an option Claude Code has no value for), is on.
+    return os.environ.get("ALEPH_GRAPH", "").strip().lower() not in ("0", "off", "false", "no")
 
 
 def tools() -> list[dict]:

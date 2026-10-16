@@ -41,6 +41,7 @@ class Found:
     memory: bool = False       # Aeon's core is there: memories are recalled by meaning as well as by words
     worker_current: bool = True    # the worker is built from the llama.cpp this Aleph pins
     memory_current: bool = True    # Aeon's core is built from the commit this Aleph pins
+    allowed: bool = False      # Claude Code's settings allow the plugin's engine tools: the plugin's look-ups can run
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,14 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
              "the aleph-zero plugin is installed in Claude Code" if found.plugin
              else "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
+        *([Step("allow", "machine", "Let the plugin's automatic look-ups use Aleph's tools",
+                _state(found.allowed, machine, "allow"),
+                "allowed in Claude Code's settings" if found.allowed
+                else "not allowed yet: the plugin's look-ups (where a route or an environment variable you name is handled; "
+                     "rungs 2 and 3) and its side chat do nothing until they are",
+                "" if found.allowed else f"adds one rule, \"{TOOLS_RULE}\", to permissions.allow in {claude_settings_file()}; "
+                                         "nothing else there is changed",
+                f"{COMMAND} setup --allow-tools", True)] if found.plugin else []),
         Step("worker", "machine", "The embedding worker and its model (search by meaning)",
              "open" if found.worker and not found.worker_current else _state(found.worker, machine, "worker", wanted),
              f"installed, from an older llama.cpp than this Aleph pins: `{COMMAND} setup --worker` (or `{COMMAND} update`) builds it again"
@@ -105,7 +114,8 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
     # `aleph embed run`, and an edit must not make this a question again. An empty repository has nothing to make.
     begun = found.with_vector > 0 or found.chunks == 0
     minutes = max(1, round(missing / CHUNKS_A_SECOND / 60))
-    no_worker = not found.worker and steps[1].state == "declined"      # nothing to make vectors with, and none wanted
+    worker_step = next(step for step in steps if step.key == "worker")
+    no_worker = not found.worker and worker_step.state == "declined"   # nothing to make vectors with, and none wanted
     vectors = "declined" if asked_for is False or no_worker else _state(begun and wanted and found.worker, repo, "vectors")
     count = lambda number: f"{number:,} chunk" + ("" if number == 1 else "s")  # noqa: E731
     steps.append(Step(
@@ -148,6 +158,49 @@ def _plugin_dir() -> str | None:
     return str(found) if (found / ".claude-plugin" / "plugin.json").exists() else None
 
 
+class SettingsError(OSError):
+    """Claude Code's settings file could not be read as settings: it is left as it is."""
+
+
+TOOLS_RULE = "mcp__plugin_aleph-zero_aleph__*"     # the plugin's engine tools, as Claude Code's permissions name them
+
+
+def claude_settings_file() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+
+
+def tools_allowed() -> bool:
+    """Claude Code's user settings allow the plugin's engine tools (the rule, or the server's tools named one by one)."""
+    try:
+        allowed = (json.loads(claude_settings_file().read_text()).get("permissions") or {}).get("allow") or []
+    except (OSError, ValueError, AttributeError):
+        return False
+    return TOOLS_RULE in allowed or "mcp__plugin_aleph-zero_aleph" in allowed
+
+
+def allow_tools() -> str:
+    """Add the one rule to Claude Code's user settings, on the person's yes; nothing else in the file is changed. A file
+    that is not JSON is left as it is, and how to add the rule by hand is said."""
+    path = claude_settings_file()
+    try:
+        current = json.loads(path.read_text()) if path.exists() else {}
+    except ValueError as problem:
+        raise SettingsError(f"{path} is not JSON ({problem}); add \"{TOOLS_RULE}\" to permissions.allow there by hand") from None
+    if not isinstance(current, dict):
+        raise SettingsError(f"{path} does not hold an object; add \"{TOOLS_RULE}\" to permissions.allow there by hand")
+    permissions = current.setdefault("permissions", {})
+    if not isinstance(permissions, dict) or not isinstance(permissions.setdefault("allow", []), list):
+        raise SettingsError(f"permissions.allow in {path} is not a list; add \"{TOOLS_RULE}\" there by hand")
+    if TOOLS_RULE in permissions["allow"]:
+        return f"already allowed in {path}"
+    permissions["allow"].append(TOOLS_RULE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    written = path.with_name(path.name + ".aleph-zero.tmp")
+    written.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n")
+    os.replace(written, path)
+    return f"added \"{TOOLS_RULE}\" to permissions.allow in {path}; the next Claude Code session uses it"
+
+
 def plugin_installed() -> bool:
     """Claude Code lists the aleph-zero plugin among its installed ones (in any scope). Read from its own file, not
     by running `claude`: this is asked on every setup list and every agent's status."""
@@ -188,7 +241,7 @@ def look(status: dict) -> Found:
     from . import aeon_setup
 
     return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
-                 plugin=plugin_installed(), memory=memories.aeon_available(),
+                 plugin=plugin_installed(), memory=memories.aeon_available(), allowed=tools_allowed(),
                  worker_current=embed_setup.current() if embed_setup.installed() else True,
                  memory_current=aeon_setup.current() if aeon_setup.installed() else True,
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,
@@ -298,6 +351,12 @@ class Menu:
         if step.key == "claude":
             self.say(f"  run {step.command}\n  (Aleph does not change Claude Code's settings itself)")
             settings.answer(kept, "claude", "done" if self._yes("Is Claude Code connected, or will you run that now?", step.suggested) else "declined")
+        elif step.key == "allow":
+            if self._yes("Allow Claude Code to use Aleph's tools without asking?", step.suggested):
+                settings.answer(kept, "allow", None)
+                self.say(f"  {self.act('allow')}")
+            else:
+                settings.answer(kept, "allow", "declined")
         elif step.key == "worker":
             if self._yes("Install the embedding worker and its model?", step.suggested):
                 settings.answer(kept, "worker", None)  # what was declined before is wanted now; done is what is then found

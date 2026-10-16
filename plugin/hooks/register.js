@@ -8,12 +8,12 @@
 // The meter runs on every rung.
 import {
   DESCRIPTIONS, ENGINE_TOOL, FACTS_DESCRIPTION, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
+  ALLOW_HINT, factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
 } from './logic.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
   CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help,
-  nextPoll, partLines, progressOf, progressWord, statusLine, fit, lastLine, machineState, meaning, nextValue, settingKey,
+  nextPoll, partLines, progressOf, progressWord, statusLine, fit, lastLine, machineState, meaning, nextValue,
   valueOf, vectorsRow,
 } from './configure.js'
 
@@ -96,9 +96,26 @@ async function reach($, tool, args) {
 // prompt for ever. $.clock.sleep is the one call that does count. A refusal (the user has
 // not allowed the engine's tools) and any other failure are "no answer".
 async function ask($, tool, args) {
-  const answered = reach($, tool, { ...args, format: 'json', timeout_ms: ENGINE_MS }).catch(() => null)
+  const answered = reach($, tool, { ...args, format: 'json', timeout_ms: ENGINE_MS }).catch((error) => {
+    notAllowed($, error)
+    return null
+  })
   const waited = $.clock.sleep(HOOK_MS).then(() => null)
   return Promise.race([answered, waited])
+}
+
+// The engine's tools are refused until the person allows them (measured: Claude Code 2.1.301 refuses the mod's own calls
+// too). The automatic look-ups then do nothing, so the person is told once a session what to add; the mod never writes
+// a permission itself.
+let told = false
+
+function notAllowed($, error) {
+  const why = String((error && error.message) || error || '')
+  if (!/permission|granted/i.test(why)) return
+  meter.refused = (meter.refused || 0) + 1
+  if (told) return
+  told = true
+  $.ui.toast(ALLOW_HINT, { timeoutMs: 20000 })
 }
 
 // What a text names (a route, an environment name), looked up in the engine's facts: a note for the agent, or ''. Asked
@@ -141,13 +158,10 @@ async function readConfig($) {
   cfg.again = false
   try {
     const cwd = await $.session.cwd()
-    const [status, path] = await Promise.all([
-      $.process.run(engineCommand($.plugin.root, cwd, ['status']), { timeoutMs: 20000 }),
-      cfg.enginePath ? null : $.process.run(['sh', $.plugin.root + '/scripts/engine.sh', '--path'], { timeoutMs: 5000 }).catch(() => null),
-    ])
-    if (path && path.exitCode === 0) cfg.enginePath = path.stdout.trim()
+    const status = await $.process.run(['sh', $.plugin.root + '/scripts/engine.sh', '--cwd', cwd, 'status'], { timeoutMs: 20000 })
     if (status.exitCode === 0) {
       const read = JSON.parse(status.stdout)
+      if (typeof read.engine === 'string' && read.engine) cfg.enginePath = read.engine   // for a command drafted into the prompt
       // An engine from before 0.1.6 says neither the repository's choice nor what is built: the plugin was updated
       // through Claude Code and the engine was not.
       const older = !read.vectors || !('chosen' in read.vectors) || !read.memory || !('aeon_installed' in read.memory)
@@ -201,7 +215,7 @@ async function readProgress($) {
     fallbackAt = $.clock.now()
     try {
       const cwd = await cwdOf($)
-      const done = await $.process.run(engineCommand($.plugin.root, cwd, ['status']), { timeoutMs: 20000 })
+      const done = await $.process.run(['sh', $.plugin.root + '/scripts/engine.sh', '--cwd', cwd, 'status'], { timeoutMs: 20000 })
       status = done.exitCode === 0 ? JSON.parse(done.stdout) : null
     } catch {
       status = null
@@ -405,6 +419,7 @@ function report(rung, meter) {
     + (meter.first ? ' · first to be used: ' + meter.first : '')
     + ' · locations added to ' + meter.added.prompt + ' prompts and ' + meter.added.grep + ' empty greps'
     + ' · facts added ' + (meter.added.facts || 0) + ' times' + (meter.added.factsLate ? ' (' + meter.added.factsLate + ' look-ups too late)' : '')
+    + (meter.refused ? ' · the engine\'s tools were refused ' + meter.refused + ' times: not allowed yet (/aleph check)' : '')
     + (tools ? ' · tools: ' + tools : '')
 }
 
@@ -507,8 +522,9 @@ export function register(on, options) {
       } catch (error) {
         const why = (error && error.message ? error.message : String(error)).replace(/\.+$/, '')
         return {
-          text: 'the mod cannot use the engine: ' + why + '. Rungs 2 and 3 need the engine\'s tools to be allowed: '
-            + 'add "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in your settings.',
+          text: 'the mod cannot use the engine: ' + why + '. The automatic look-ups (facts for the routes and environment '
+            + 'variables you name, rungs 2 and 3) and the side chat need the engine\'s tools to be allowed: '
+            + 'add "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json, or allow it with /permissions.',
         }
       }
     }
@@ -701,7 +717,13 @@ export function register(on, options) {
           }
           const to = nextValue(option, value)
           await saveSession($)   // the change loads the mod again: what this load counted and said goes with it
-          const set = await $.config.set({ key: settingKey(option), value: to }).catch((error) => ({ deny: error && error.message ? error.message : String(error) }))
+          // Each of the plugin's own four options by its fixed key: nothing else is ever written to the settings.
+          const refused = (error) => ({ deny: error && error.message ? error.message : String(error) })
+          let set = null
+          if (option.key === 'rung') set = await $.config.set({ key: 'aleph-zero.rung', value: to }).catch(refused)
+          else if (option.key === 'grep_pointer') set = await $.config.set({ key: 'aleph-zero.grep_pointer', value: to }).catch(refused)
+          else if (option.key === 'lines') set = await $.config.set({ key: 'aleph-zero.lines', value: to }).catch(refused)
+          else if (option.key === 'graph') set = await $.config.set({ key: 'aleph-zero.graph', value: to }).catch(refused)
           // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
           if (set && set.deny) {
             cfg.note = option.label + ' was not changed: ' + set.deny

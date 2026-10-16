@@ -128,6 +128,11 @@ export function promptContext(hits, signatures = false) {
     + locations(hits, 5, signatures)
 }
 
+// Said once a session when the engine's tools are refused: the automatic look-ups do nothing until they are allowed.
+export const ALLOW_HINT = 'Aleph Zero: its automatic look-ups (where a route or an environment variable you name is handled, '
+  + 'and rungs 2 and 3) are off until its tools are allowed. Add "mcp__plugin_aleph-zero_aleph__*" to permissions.allow '
+  + 'in ~/.claude/settings.json, or allow it with /permissions; /aleph check confirms.'
+
 // ---- facts: the routes and environment names a text names -------------------------------------
 // The engine reads them (archfacts.mentioned); this only says whether a text may name one, so that a prompt or a grep that
 // names none costs no call, and which names were already handed over this session.
