@@ -217,6 +217,11 @@ def install_plugin() -> str:
     return "installed the plugin in Claude Code: start a new Claude Code session (or restart it) to load it"
 
 
+def claude_found() -> bool:
+    """Claude Code's command is on PATH: the plugin's step can be done for the person."""
+    return shutil.which("claude") is not None
+
+
 def plugin_installed() -> bool:
     """Claude Code lists the aleph-zero plugin among its installed ones (in any scope). Read from its own file, not
     by running `claude`: this is asked on every setup list and every agent's status."""
@@ -256,7 +261,7 @@ def look(status: dict) -> Found:
 
     from . import aeon_setup
 
-    return Found(claude=shutil.which("claude") is not None, plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
+    return Found(claude=claude_found(), plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
                  plugin=plugin_installed(), memory=memories.aeon_available(), allowed=tools_allowed(),
                  worker_current=embed_setup.current() if embed_setup.installed() else True,
                  memory_current=aeon_setup.current() if aeon_setup.installed() else True,

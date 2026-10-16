@@ -32,6 +32,7 @@ def _terminal(monkeypatch, *replies):
     monkeypatch.setattr(firstrun, "on_terminal", lambda: True)
     # A yes to the plugin runs Claude Code's own commands: never from a test. Nothing is installed, so it stays open.
     monkeypatch.setattr(firstrun, "install_plugin", lambda: "installed the plugin (a test: nothing was run)")
+    monkeypatch.setattr(firstrun, "claude_found", lambda: True)       # as on a machine with Claude Code, CI's included
     return asked, left
 
 
