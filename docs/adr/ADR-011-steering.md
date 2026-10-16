@@ -230,6 +230,21 @@ On the owner's go-ahead ("go ahead and test in full a/b test"), by the rule writ
 - **Not shown to help, and not used.** Both intervals hold 1. The tools were listed to the agent (a session started with the harness's arguments shows them; checked), and the instruction named them, but no session called one. Listed by name only, it was found the same day: the plugin brings its four search tools into the prompt and left these three behind Claude Code's ToolSearch, so their descriptions and parameters were never shown. The run reads as "not chosen from a name", not "not chosen when shown". Otherwise the same shape as the pilot's finding that rung 1's instruction is mostly not followed. Search first in 16 against 12 is within the noise.
 - **Read beside the two retrieval benchmarks of the same entry:** the call graph reaches answers search misses (+10.8 points one step from its first five results) but does not turn them into a gain without a way to rank them; `facts` adds +4.0 points where it reads the framework and puts the right file first more often (MRR +0.21). What an agent is not shown, it does not use: if the graph is to help, it would be by being shown (added at rung 2), once its neighbours can be ranked.
 
+## The run of 2026-10-16, later: the knowledge graph handed over
+
+The run above showed the graph tools only by name. On the owner's ask ("activate knowledge graph… active on default… called for sure"), by the rule written first in DEFERRED entry 0-graph part 4 (with advisor; agy was out of quota): with the `graph` option on, the plugin asks `facts(mentioned=…)` itself whenever a prompt, a Grep or a recursive grep names an HTTP route or an environment name, and adds where the code registers and handles it (the handler's definition included for Go and Express routes) or reads it; `facts` is shown in full beside the four search tools. Arms `L1` (this) and `L1o` (graph off), 30 tasks from the route and environment questions of part 2 (a graph-favourable set), sonnet, one pass: 60 sessions, none failed, $7.59.
+
+| | L1 against L1o |
+|---|---|
+| Tokens | ×0.991 (0.911 to 1.082) |
+| Tool calls | ×0.973 (0.891 to 1.066) |
+| Right file named | 30 of 30, both |
+| First file read right | 26 of 30 against 24 |
+| Facts handed over | 11 of 30 sessions |
+| `facts` called by the agent | 19 times (0 in the run above) |
+
+- **Not shown to save tokens; used.** Both intervals hold 1, so by the rule it stays on by default, as the owner asked, recorded as not shown to help. Shown in full, the tool was chosen: the run above's zero was the deferred listing, not the agent declining. Where the facts were handed over (gotify, listmonk, paperless) tokens fell and the first read was right in 12 of 12 against 9 of 12: descriptive, by repository, not a test.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

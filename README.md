@@ -30,8 +30,14 @@ the files it still matches.
 
 **Architecture facts.** What the code states about the system: HTTP routes and where routers
 are mounted, models and tables, environment variables, background tasks, queues and gRPC
-services, each with its file and line. With an [oxn](docs/adr/ADR-007-relationship-to-oxn.md)
-`oxn.yaml`, the layer a file belongs to and what that layer may depend on.
+services, each with its file and line; for Go and Express routes, where the handler is defined.
+With an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer a file belongs to
+and what that layer may depend on. With the plugin these are looked up for the agent: when a
+prompt, or a pattern the agent greps for, names an HTTP route (`GET /api/users/{id}`) or an
+environment variable (`DATABASE_URL`), the plugin adds where the code registers and handles
+that route or reads that variable, from source code only (not documentation or tests). Most requests
+name neither, and then nothing is added: on 1,504 ordinary issues in six languages a note was
+added to 2.7%.
 
 **Decision records.** Ranks a repository's ADRs for a task, or lists those that apply to a
 file, so the agent sees what was already decided.
@@ -163,7 +169,7 @@ reads when Claude Code starts it: from the next session.
 | Option | Values | What it does |
 |---|---|---|
 | `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: the four search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a search with Claude Code's Grep tool, or a recursive `grep`, `rg`, `git grep` or `find`, that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
-| `graph` | `on`/`off` (default `on`) | Also offer the agent the code-graph (`references`: who calls what), architecture-facts and decision-record tools, and say in the standing instruction when to use them. Measured once (2026-10-16, 28 tasks, two passes, sonnet): not shown to help; the agent did not call them in 56 sessions, though it saw only their names (Claude Code held them back until asked for; a later check found this), and tokens were +3% with an interval through no change. They are on by the owner's decision; `off` leaves the agent the search tools alone. |
+| `graph` | `on`/`off` (default `on`) | The knowledge graph and the other graph tools. On: when a prompt or a grep names an HTTP route or an environment variable, the plugin adds where the code handles or reads it; the `facts` tool is shown to the agent in full, and `references` (who calls what) and `decisions` (decision records) are offered on demand. Measured (2026-10-16, sonnet, [ADR-011](docs/adr/ADR-011-steering.md)): on 30 route and environment questions, the agent called `facts` 19 times and read the right file first in 26 of 30 against 24 with it off, at the same tokens (×0.99, interval through no change); earlier, offered by name only, the graph tools were not called in 56 sessions. On by the owner's decision; `off` leaves the agent the search tools alone. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |
 
@@ -201,6 +207,7 @@ aleph symbol refresh_token          # where a name is defined
 aleph outline src/auth/store.py     # what a file defines
 aleph callers TokenStore.get        # who calls it
 aleph facts route --like users      # routes the code declares
+aleph facts --mentioned "GET /api/users/7 returns 500"   # where what a text names is handled
 aleph decisions "cache invoice totals in redis"
 ```
 
@@ -217,7 +224,7 @@ terminal it only prints the list.
 | `aleph outline PATH` | What a file defines, with line ranges |
 | `aleph callers NAME` / `aleph callees NAME` | The call graph, with how sure each answer is; the first question reads every file once |
 | `aleph scip import\|run\|list\|forget` | A compiler's [SCIP](https://github.com/sourcegraph/scip) index for exact call answers while its files are unchanged (`import FILE [--tree REV\|--worktree]`; `run` needs the language's indexer installed, e.g. `scip-python`) |
-| `aleph facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states |
+| `aleph facts [KIND] [--like TEXT]` | Routes, models, environment variables, tasks … the code states. `--mentioned TEXT`: the routes and environment variables TEXT names, with where the code handles or reads each (the handler's definition included) |
 | `aleph decisions [TASK]` / `--for PATH` | Decision records that govern a task or a file; all of them with neither |
 | `aleph source add\|list\|remove\|refresh` | Repositories searched beside this one (`name:path` in results) |
 | `aleph memory list\|recall\|forget` | What earlier sessions kept |
@@ -259,7 +266,7 @@ model after ten idle minutes and exits after thirty.
 | Variable | Effect |
 |---|---|
 | `ALEPH_DENSE=1\|0` | Search by meaning on or off, overriding the project's setting |
-| `ALEPH_GRAPH=1` | Offer the code-graph, facts and decisions tools (the plugin's `graph` option sets it) |
+| `ALEPH_GRAPH=1` | Offer the code-graph, facts and decisions tools, and read a worktree's facts when a session starts (the plugin's `graph` option sets it) |
 | `ALEPH_SCIP_MEMORY_MB` | Memory limit for `aleph scip run` (2,048 MB by default; JavaScript 3,072) |
 | `ALEPH_AEON_LIB` | Path to Aeon's core library, for recalling memories by meaning |
 | `XDG_CACHE_HOME` | Where the machine-wide cache lives (`~/.cache` by default) |

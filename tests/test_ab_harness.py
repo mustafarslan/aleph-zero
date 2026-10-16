@@ -304,7 +304,8 @@ def test_tasks_can_come_from_the_other_languages_question_sets(tmp_path, monkeyp
 def test_what_the_mod_counted_for_a_session_is_read_from_its_store(tmp_path):
     store = tmp_path / "aleph-zero_inline-abc.json"
     store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": {"turns": 1, "aleph": 0, "added": {"prompt": 1, "grep": 0}}}}))
-    assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "aleph_calls": 0, "listed": []}
+    assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "added_facts": 0, "aleph_calls": 0,
+                                     "listed": []}
     store.write_text("not json")
     assert ab.mod_meter(tmp_path) is None and ab.mod_meter(tmp_path / "nowhere") is None      # no store, or not readable: nothing known
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.15
+
+- **The knowledge graph is handed to the agent, on by default** (the `graph` option, the owner's ask). When a prompt, a
+  Grep or a recursive grep names an HTTP route (`GET /api/users/{id}`, a local URL, a path of two segments or more) or
+  an environment variable (`DATABASE_URL`), the plugin looks it up and adds where the code registers and handles that
+  route or reads that variable, from source code only (not documentation, example environment files, OpenAPI files or
+  tests). Each name is looked up once a session; a text that names nothing costs no call.
+- Go (gin, echo, chi, net/http) and Express routes record their handler, and an answer gives where the handler is
+  defined. `facts` takes `mentioned` (an issue, an error, a log line); on the command line `aleph facts --mentioned TEXT`.
+  The facts are read again once (version 5).
+- The `facts` tool is shown to the agent in full; `references` and `decisions` stay on demand. The server reads a
+  worktree's facts in the background when a session starts while the graph tools are offered (0.2 to 6 s, once).
+- Measured (DEFERRED 0-graph part 4, ADR-011): on 137 route and environment questions, what is handed over then search
+  finds +4.8 points more answers than search (+1.6 to +8.7) and puts the right file first in 65% of questions against
+  35%; on 1,504 ordinary issues it adds a note to 2.7%. In 60 sonnet sessions on 30 of those questions the agent called
+  `facts` 19 times (0 before, when it saw only the tool's name) and read the right file first in 26 of 30 against 24
+  with the graph off, at the same tokens (×0.991, 0.911 to 1.082): not shown to save tokens.
+- Corrected: 0.1.14's run offered the graph tools by name only (Claude Code kept them behind its tool search).
+
 ## 0.1.14
 
 - The call graph and the knowledge graph measured, by rules written first (DEFERRED entry 0-graph, ADR-011):
