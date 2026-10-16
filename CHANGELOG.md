@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.19
+
+- **Routes from a committed OpenAPI document.** Where a server is generated from its spec (Spring with
+  openapi-generator, Python with connexion), the code states no route; each operation now leads to its handler by its
+  `operationId` (the controller module first, where the document names it). The document itself is never handed over.
+  Judged on Apache Airflow 2.10.5 (not tuned on): operations with their handler 0 → 88 of 89, none of the 94 handlers
+  wrong; spring-petclinic-rest 0 → 35 of 37; the route hand-over +8.7 points (from +7.1) and the right file first
+  65.7% → 75.9%. Facts are read again once (version 11).
+- Paths that agree only through parameters no longer tie: the one whose words agree more wins.
+- Measured, not shipped: the call graph's neighbours ranked by meaning (−0.8; the call graph's ranking is closed after
+  three tries); documentation ranked by whole documents (+9.4, under the +10 asked for).
+
 ## 0.1.18
 
 - **Install in three lines.** `uv tool install …`, `uv tool update-shell`, then `aleph-zero setup` in a project: it now

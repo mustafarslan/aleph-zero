@@ -49,7 +49,9 @@ the files it still matches.
 are mounted, models and tables, environment variables, background tasks, queues and gRPC
 services, each with its file and line; routes are read for Express, NestJS, FastAPI, Flask, Django
 URL patterns, Spring and Go (gin, echo, chi, net/http; gin's and echo's groups made in the same file), and where a handler is
-given by name, where it is defined.
+given by name, where it is defined. Where a server is generated from a committed OpenAPI document
+(Spring's openapi-generator, connexion), each operation leads to its handler by its `operationId`;
+the document itself is never given as an answer.
 With an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer a file belongs to
 and what that layer may depend on. With the plugin these are looked up for the agent: when a
 prompt, or a pattern the agent greps for, names an HTTP route (`GET /api/users/{id}`) or an
