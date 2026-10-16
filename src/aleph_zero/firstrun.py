@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -201,6 +202,21 @@ def allow_tools() -> str:
     return f"added \"{TOOLS_RULE}\" to permissions.allow in {path}; the next Claude Code session uses it"
 
 
+PLUGIN_COMMANDS = (["claude", "plugin", "marketplace", "add", "mustafarslan/aleph-zero"],
+                   ["claude", "plugin", "install", "aleph-zero@aleph-zero"])
+
+
+def install_plugin() -> str:
+    """Claude Code's own two commands for the plugin, on the person's yes: the marketplace (left as it is when it is
+    there already), then the plugin. A failure is said with Claude Code's own words."""
+    for argv in PLUGIN_COMMANDS:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=300)
+        said = (done.stdout + done.stderr).strip()
+        if done.returncode != 0 and not (argv[2] == "marketplace" and "already" in said.lower()):
+            raise SettingsError(f"`{' '.join(argv)}` did not work: {said.splitlines()[-1] if said else done.returncode}")
+    return "installed the plugin in Claude Code: start a new Claude Code session (or restart it) to load it"
+
+
 def plugin_installed() -> bool:
     """Claude Code lists the aleph-zero plugin among its installed ones (in any scope). Read from its own file, not
     by running `claude`: this is asked on every setup list and every agent's status."""
@@ -348,8 +364,16 @@ class Menu:
             self.say(f"  not done: {problem}\n  left open; by hand: {step.command}")
 
     def _ask(self, step: Step, found: Found, kept: Path) -> None:
-        if step.key == "claude":
-            self.say(f"  run {step.command}\n  (Aleph does not change Claude Code's settings itself)")
+        if step.key == "claude" and found.claude and not found.plugin:
+            commands = " and ".join("`" + " ".join(argv) + "`" for argv in PLUGIN_COMMANDS)
+            if self._yes(f"Install the plugin in Claude Code now (runs {commands})?", step.suggested):
+                settings.answer(kept, "claude", None)
+                self.say(f"  {self.act('plugin')}")
+            else:
+                self.say(f"  by hand: {step.command}")
+                settings.answer(kept, "claude", "declined")
+        elif step.key == "claude":
+            self.say(f"  run {step.command}")
             settings.answer(kept, "claude", "done" if self._yes("Is Claude Code connected, or will you run that now?", step.suggested) else "declined")
         elif step.key == "allow":
             if self._yes("Allow Claude Code to use Aleph's tools without asking?", step.suggested):

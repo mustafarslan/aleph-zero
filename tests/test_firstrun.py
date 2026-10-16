@@ -202,3 +202,24 @@ def test_allowing_the_tools_adds_one_rule_and_keeps_everything_else(tmp_path, mo
     with pytest.raises(firstrun.SettingsError, match="by hand"):
         firstrun.allow_tools()
     assert path.read_text() == "{ not json"                                               # a file it cannot read is left
+
+
+def test_installing_the_plugin_runs_claude_code_s_own_two_commands(tmp_path, monkeypatch):
+    import pytest
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    fake = bin_dir / "claude"
+    fake.write_text('#!/bin/sh\necho "$@" >> "%s"\n'
+                    'if [ "$2" = "marketplace" ] && [ -n "$ALREADY" ]; then echo "Marketplace already installed" >&2; exit 1; fi\n'
+                    'if [ -n "$BROKEN" ] && [ "$2" = "install" ]; then echo "network down" >&2; exit 1; fi\n' % calls)
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{__import__('os').environ['PATH']}")
+    assert "installed the plugin" in firstrun.install_plugin()
+    assert calls.read_text().splitlines() == ["plugin marketplace add mustafarslan/aleph-zero", "plugin install aleph-zero@aleph-zero"]
+    monkeypatch.setenv("ALREADY", "1")                                   # added before: not an error
+    assert "installed the plugin" in firstrun.install_plugin()
+    monkeypatch.setenv("BROKEN", "1")
+    with pytest.raises(firstrun.SettingsError, match="network down"):
+        firstrun.install_plugin()

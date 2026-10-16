@@ -279,7 +279,7 @@ def _setup(args) -> int:
 
     if args.embed and (args.no_dense or args.auto_dense):
         raise SystemExit("aleph setup: --embed makes this repository's vectors in order to use them; it goes with --dense only")
-    others = bool(args.worker or args.allow_tools or args.memory or args.aeon_source or args.embed or args.source or args.untracked_cache or args.again)
+    others = bool(args.worker or args.plugin or args.allow_tools or args.memory or args.aeon_source or args.embed or args.source or args.untracked_cache or args.again)
     if (args.dense or args.no_dense or args.auto_dense) and not others and not args.json and _in_repository(args.cwd):
         # A switch (for a person, or /aleph configure): one line, no pass over the repository, no list.
         repo_file = settings.repo_file(gitio.common_dir(args.cwd))
@@ -313,6 +313,8 @@ def _setup(args) -> int:
             return f"installed Aeon's core in {aeon_setup.install(None, say)}: memories are recalled by meaning from now on"
         if what == "allow":
             return firstrun.allow_tools()
+        if what == "plugin":
+            return firstrun.install_plugin()
         if what == "source":
             added = sources.add(args.cwd, given[0])
             return f"linked {added.name} ({added.kind}): {added.location}"
@@ -338,12 +340,14 @@ def _setup(args) -> int:
     # home directory, which is not walked, and that is where the README's first step runs `setup --worker`.
     if args.worker:
         flag("--worker", lambda: (settings.answer(settings.machine_file(), "worker", None), say(act("worker"))))
+    if args.plugin:
+        flag("--plugin", lambda: (settings.answer(settings.machine_file(), "claude", None), say(act("plugin"))))
     if args.allow_tools:
         flag("--allow-tools", lambda: (settings.answer(settings.machine_file(), "allow", None), say(act("allow"))))
     if args.memory or args.aeon_source:
         flag("--memory", lambda: say(f"installed Aeon's core in {aeon_setup.install(args.aeon_source, say)}: memories are "
                                      f"recalled by meaning from now on"))
-    machine_flags = bool(args.worker or args.memory or args.aeon_source or args.allow_tools)
+    machine_flags = bool(args.worker or args.memory or args.aeon_source or args.allow_tools or args.plugin)
     project_flags = bool(args.embed or args.source or args.untracked_cache or args.dense or args.no_dense)
     if machine_flags and not project_flags and not _in_repository(args.cwd):
         # Not a project (the home directory, ~/Downloads): nothing of it is walked for a list that is a project's.
@@ -384,9 +388,14 @@ def _setup(args) -> int:
         menu = firstrun.Menu(status, say, input, act)
         asked_any = False
         try:
-            for key in [step.key for step in steps]:
-                status, found, steps = now()                    # an answer changes what the next question is
-                step = next(step for step in steps if step.key == key)
+            visited: set[str] = set()
+            while True:
+                status, found, steps = now()                    # an answer changes what the next question is, and adds
+                step = next((step for step in steps if step.key not in visited), None)    # steps (the plugin's tools)
+                if step is None:
+                    break
+                visited.add(step.key)
+                key = step.key
                 # Asked again: what was declined, and the one line that is done only on the person's word.
                 asked = step.state == "open" or (args.again and (step.state == "declined" or (key == "claude" and step.state == "done")))
                 # Search by meaning and memory by meaning both need the worker's vectors: asked once it is there.
@@ -409,7 +418,7 @@ def _setup(args) -> int:
         return 2 if failed else 0
     say(firstrun.text(steps))
     if firstrun.open_steps(steps) and not firstrun.on_terminal():
-        say(f"\nAnswer these on a terminal with `{COMMAND} setup`, or one at a time: --allow-tools, --worker, --source LOCATION, --embed, "
+        say(f"\nAnswer these on a terminal with `{COMMAND} setup`, or one at a time: --plugin, --allow-tools, --worker, --source LOCATION, --embed, "
             "--dense or --no-dense, --untracked-cache. Nothing that costs is done without its own flag.")
     return 2 if failed else 0
 
@@ -588,6 +597,8 @@ def main(argv: list[str] | None = None) -> int:
     first.add_argument("--again", action="store_true", help="ask again about what was declined")
     first.add_argument("--json", action="store_true", help="the checklist as JSON; nothing is asked")
     first.add_argument("--worker", action="store_true", help="install the embedding worker and its model (310 MB; uses the network)")
+    first.add_argument("--plugin", action="store_true", help="install the plugin in Claude Code: runs `claude plugin marketplace add "
+                       "mustafarslan/aleph-zero` and `claude plugin install aleph-zero@aleph-zero`")
     first.add_argument("--allow-tools", action="store_true", help="let the plugin's automatic look-ups use Aleph's tools: adds one rule, "
                        "\"mcp__plugin_aleph-zero_aleph__*\", to permissions.allow in Claude Code's user settings")
     first.add_argument("--source", action="append", metavar="LOCATION", help="link a repository by path or URL (a URL uses the network)")

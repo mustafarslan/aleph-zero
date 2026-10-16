@@ -30,6 +30,8 @@ def _terminal(monkeypatch, *replies):
 
     monkeypatch.setattr("builtins.input", reply)
     monkeypatch.setattr(firstrun, "on_terminal", lambda: True)
+    # A yes to the plugin runs Claude Code's own commands: never from a test. Nothing is installed, so it stays open.
+    monkeypatch.setattr(firstrun, "install_plugin", lambda: "installed the plugin (a test: nothing was run)")
     return asked, left
 
 
@@ -54,7 +56,7 @@ def test_without_a_terminal_the_list_is_shown_and_nothing_is_asked_or_kept(repo,
 
 
 def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, monkeypatch):
-    asked, left = _terminal(monkeypatch, "y",                      # Claude Code is connected
+    asked, left = _terminal(monkeypatch, "y",                      # install the plugin (faked: nothing is run)
                             "n",                                   # no worker
                             str(docs_repo.root), "",               # one source, then none
                             "y")                                   # git's untracked cache; vectors are not asked: no worker
@@ -63,15 +65,17 @@ def test_a_person_answers_once_and_is_not_asked_again(repo, docs_repo, capsys, m
     out = capsys.readouterr().out
     assert "claude" in out and "handbook" in out
     assert "aleph update" in out and "--print-hook" in out         # and how it stays up to date afterwards
-    assert settings.read(settings.machine_file())["setup"] == {"claude": "done", "worker": "not-needed"}   # no where no was suggested
+    assert settings.read(settings.machine_file())["setup"] == {"worker": "not-needed"}   # no where no was suggested; the
+    # plugin's step is done when Claude Code lists the plugin, which the faked install does not make it do
     assert gitio.untracked_cache_enabled(repo.root)
     configured = subprocess.run(["git", "-C", str(repo.root), "config", "--get", "core.untrackedCache"], capture_output=True)
     assert configured.stdout.strip() == b""                        # no configuration was changed
     assert [hit.path for hit in Engine(repo.root).search("zeppelin_mooring").hits] == ["handbook:guides/mooring.md"]
-    assert _states(repo, capsys) == {"claude": "done", "worker": "declined", "memory": "declined", "sources": "done", "vectors": "declined", "untracked_cache": "done"}
-    _terminal(monkeypatch)                                         # again: nothing is open, so nothing is asked
+    assert _states(repo, capsys) == {"claude": "open", "worker": "declined", "memory": "declined", "sources": "done", "vectors": "declined", "untracked_cache": "done"}
+    asked, left = _terminal(monkeypatch, "n")                      # again: only the plugin is open (not installed), asked once more
     assert _setup(repo) == 0
-    asked, left = _terminal(monkeypatch, "y", "n")                 # asked for again: the line done on their word, and what was declined
+    assert len(asked) == 1 and "Install the plugin" in asked[0]
+    asked, left = _terminal(monkeypatch, "y", "n")                 # asked for again: the plugin, and what was declined
     assert _setup(repo, "--again") == 0
     assert len(asked) == 2 and "Claude Code" in asked[0] and "worker" in asked[1] and left == []
 
@@ -335,9 +339,9 @@ def test_a_no_to_the_worker_where_nothing_needed_it_is_asked_again_where_vectors
     monkeypatch.setattr(dense_policy, "VERDICTS", {"python": Verdict(True, "test")})      # vectors help here
     states = _states(other, capsys)
     assert states["worker"] == "open" and states["vectors"] != "declined"
-    asked, left = _terminal(monkeypatch, "n", "", "n")             # asked again; a no where yes was suggested is final
-    assert cli.main(["--cwd", str(other.root), "setup"]) == 0
-    assert "embedding worker" in asked[0] and "[Y/n]" in asked[0] and left == []
+    asked, left = _terminal(monkeypatch, "n", "n", "", "n")        # the plugin (still open: the install was faked), then the
+    assert cli.main(["--cwd", str(other.root), "setup"]) == 0     # worker asked again; a no where yes was suggested is final
+    assert "Install the plugin" in asked[0] and "embedding worker" in asked[1] and "[Y/n]" in asked[1] and left == []
     assert _states(other, capsys)["worker"] == "declined"
 
 
