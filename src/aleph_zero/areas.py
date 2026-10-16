@@ -46,6 +46,8 @@ def decide(language: str | None) -> tuple[bool, str]:
 _lock = threading.Lock()
 _bags: dict[str, dict[tuple[str, str], collections.Counter]] = {}     # by index file: (blob, family) -> its words
 _views: collections.OrderedDict = collections.OrderedDict()            # (index file, view) -> Summary
+_paths: dict[str, dict[str, tuple]] = {}      # by index file: path -> (its family, its module, its path's words), or None
+_last: dict[str, "Summary"] = {}              # by index file: the summary made last, which the next one starts from
 
 
 @dataclass
@@ -53,12 +55,17 @@ class Summary:
     modules: dict[str, collections.Counter]
     files: dict[str, collections.Counter]                   # path -> its words (its bag and its path's)
     members: dict[str, list[str]] = field(default_factory=dict)   # module -> its files
+    contents: dict[str, tuple[str, str]] = field(default_factory=dict)   # path -> the content its words were made from
 
     def __post_init__(self) -> None:
         self._modules = _Ranking(self.modules)
-        self._files = _Ranking(self.files)
-        for path in self.files:
-            self.members.setdefault(str(PurePosixPath(path).parent), []).append(path)
+        self._file_ranking: _Ranking | None = None          # made when a question first picks a module
+
+    @property
+    def _files(self) -> "_Ranking":
+        if self._file_ranking is None:
+            self._file_ranking = _Ranking(self.files)
+        return self._file_ranking
 
     def best_modules(self, words: set[str], floor: bool) -> list[str]:
         ranked = [module for module, _ in self._modules.rank(words)]
@@ -117,32 +124,60 @@ def _read(index: Index, wanted: list[tuple[str, str]]) -> dict[tuple[str, str], 
     return bags
 
 
+def _about(index_key: str, path: str) -> tuple | None:
+    """What a path is to the summaries, kept by path (paths rarely change): (family, module, its words), or None."""
+    known = _paths.setdefault(index_key, {})
+    if path not in known:
+        family = filters.family(path)
+        known[path] = None if NEVER_AN_ANSWER.search(path) or family not in CODE else (
+            family, str(PurePosixPath(path).parent), collections.Counter(words_of(path)))
+    return known[path]
+
+
 def summary(index: Index, view: View) -> Summary:
-    """The view's module summaries: made from the bags kept in this process, reading only contents not seen before."""
+    """The view's module summaries. A file's words are made once for its content; after an edit only the modules of the
+    files that changed are summed again, from the summary made last."""
     key = (_index_key(index), view.fingerprint)
     with _lock:
         if key in _views:
             _views.move_to_end(key)
             return _views[key]
         kept = _bags.setdefault(key[0], {})
-    paths = [path for path in view.files if not NEVER_AN_ANSWER.search(path) and filters.family(path) in CODE]
-    contents = {path: (view.files[path], filters.family(path)) for path in paths}
+        last = _last.get(key[0])
+    about = {path: found for path in view.files if (found := _about(key[0], path)) is not None}
+    contents = {path: (view.files[path], family) for path, (family, _, _) in about.items()}
     missing = sorted({content for content in contents.values() if content not in kept})
     if missing:
         read = _read(index, missing)
         with _lock:
             kept.update(read)
+    previous = last.contents if last is not None else {}
+    changed = {path for path in contents.keys() | previous.keys() if contents.get(path) != previous.get(path)}
     files: dict[str, collections.Counter] = {}
+    members: dict[str, list[str]] = {}
     for path, content in contents.items():
-        bag = kept.get(content)
-        if bag:                                   # a file that defines and states nothing is in no summary
-            files[path] = bag + collections.Counter(words_of(path))
-    modules: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-    for path, counts in files.items():
-        modules[str(PurePosixPath(path).parent)].update(counts)
-    made = Summary(dict(modules), files)
+        if last is not None and path not in changed and path in last.files:
+            words = last.files[path]
+        else:
+            bag = kept.get(content)
+            words = bag + about[path][2] if bag else None       # a file that defines and states nothing is in no summary
+        if words:
+            files[path] = words
+            members.setdefault(about[path][1], []).append(path)
+    touched = {str(PurePosixPath(path).parent) for path in changed}
+    modules: dict[str, collections.Counter] = {}
+    for module, inside in members.items():
+        if last is not None and module not in touched and module in last.modules:
+            modules[module] = last.modules[module]
+        else:
+            total = collections.Counter()
+            for path in inside:
+                total.update(files[path])
+            modules[module] = total
+    made = Summary(modules, files, members, contents)
     with _lock:
         _views[key] = made
+        _last[key[0]] = made
         while len(_views) > _KEPT_VIEWS:
             _views.popitem(last=False)
     return made
