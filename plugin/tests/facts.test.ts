@@ -68,7 +68,28 @@ test('at the default rung, every prompt that names something new gets its facts;
   expect(JSON.stringify(asked[0])).toContain('"timeout_ms":400')
   expect(sent[0].context[0]).toContain('handler defined at api/client.go:216')
   expect(sent[1].context).toBeUndefined()
-  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toMatch(/^rung 1 /)
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('facts added 1 times')
+})
+
+test('after /clear the next conversation gets the facts again', { options: { rung: '1' } }, async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  const asked: any[] = []
+  on('mcp.call', ($, e) => {
+    asked.push(e)
+    return reply(FOUND)
+  })
+  const sent: any[] = []
+  on('prompt.submit', ($, e) => {
+    sent.push(e)
+    return { text: e.text }
+  })
+  on('session.end', () => ({ sessionId: 's' }))
+  await $.prompt.submit({ text: 'the server ignores DB_URL when it starts up' })
+  await $.session.end({ reason: 'clear' })
+  await $.prompt.submit({ text: 'the server ignores DB_URL when it starts up' })
+  expect(asked.length).toBe(2)
+  expect(sent[1].context[0]).toContain('- DB_URL: read at config/db.go:2')
 })
 
 test('a Grep or a recursive grep for a name, whatever it found, gets the facts as context', { options: { rung: '1' } }, async ($, on) => {

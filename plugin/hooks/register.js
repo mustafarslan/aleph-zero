@@ -403,6 +403,7 @@ function report(rung, meter) {
     + ' · aleph calls ' + meter.aleph + ' · grep calls ' + meter.grep
     + (meter.first ? ' · first to be used: ' + meter.first : '')
     + ' · locations added to ' + meter.added.prompt + ' prompts and ' + meter.added.grep + ' empty greps'
+    + ' · facts added ' + (meter.added.facts || 0) + ' times'
     + (tools ? ' · tools: ' + tools : '')
 }
 
@@ -960,6 +961,7 @@ export function register(on, options) {
   on('session.end', async ($, e, next) => {
     await restore($)
     prompts = 0  // /clear, /resume and /branch end one conversation and start another
+    handed = []  // the next conversation has not seen the facts handed over in this one
     await saveSession($)
     return next(e)
   })

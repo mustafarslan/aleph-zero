@@ -7,8 +7,8 @@
   an environment variable (`DATABASE_URL`), the plugin looks it up and adds where the code registers and handles that
   route or reads that variable, from source code only (not documentation, example environment files, OpenAPI files or
   tests). Each name is looked up once a session; a text that names nothing costs no call.
-- Go (gin, echo, chi, net/http) and Express routes record their handler, and an answer gives where the handler is
-  defined. `facts` takes `mentioned` (an issue, an error, a log line); on the command line `aleph facts --mentioned TEXT`.
+- Go (gin, echo, chi, net/http) and Express routes record their handler when it is given by name
+  (`clientHandler.DeleteClient`), and an answer gives where that handler is defined. `facts` takes `mentioned` (an issue, an error, a log line); on the command line `aleph facts --mentioned TEXT`.
   The facts are read again once (version 5).
 - The `facts` tool is shown to the agent in full; `references` and `decisions` stay on demand. The server reads a
   worktree's facts in the background when a session starts while the graph tools are offered (0.2 to 6 s, once).
