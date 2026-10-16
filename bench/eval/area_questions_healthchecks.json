@@ -1,0 +1,128 @@
+[
+  {
+    "question": "How does the service notice that a check has stopped reporting in time, mark it as down, and send out alerts to the configured notification methods?",
+    "doc": "templates/docs/self_hosted.md",
+    "gold": [
+      "hc/api/management/commands/sendalerts.py",
+      "hc/api/models.py",
+      "hc/api/transports.py"
+    ]
+  },
+  {
+    "question": "How are the different kinds of schedules (a fixed period, a cron expression with a time zone, or a systemd calendar expression) set up and validated, and how is the next expected ping time worked out from them?",
+    "doc": "templates/docs/configuring_checks.md",
+    "gold": [
+      "hc/api/models.py",
+      "hc/front/views.py",
+      "hc/front/forms.py",
+      "hc/front/validators.py"
+    ]
+  },
+  {
+    "question": "How does keyword filtering decide whether an incoming ping is a start, a success or a failure, and what happens when no keywords match?",
+    "doc": "templates/docs/configuring_checks.md",
+    "gold": [
+      "hc/api/views.py",
+      "hc/lib/string.py",
+      "hc/api/management/commands/smtpd.py",
+      "hc/front/forms.py",
+      "hc/front/views.py"
+    ]
+  },
+  {
+    "question": "How is a job's run time measured from its start and finish signals, including matching them up by run ID when several runs overlap?",
+    "doc": "templates/docs/measuring_script_run_time.md",
+    "gold": [
+      "hc/api/models.py",
+      "hc/api/views.py",
+      "hc/front/views.py",
+      "hc/front/templatetags/hc_extras.py",
+      "hc/lib/date.py"
+    ]
+  },
+  {
+    "question": "When a job sends its log output in the body of a ping, how is that body cut to size, stored (possibly in external object storage) and later shown or downloaded?",
+    "doc": "templates/docs/attaching_logs.md",
+    "gold": [
+      "hc/api/models.py",
+      "hc/lib/s3.py",
+      "hc/api/views.py",
+      "hc/front/views.py"
+    ]
+  },
+  {
+    "question": "How do human-readable ping addresses made of a project key and a short name work, and how does the service create a missing check automatically on its first ping?",
+    "doc": "templates/docs/autoprovisioning.md",
+    "gold": [
+      "hc/api/views.py",
+      "hc/api/urls.py",
+      "hc/accounts/models.py",
+      "hc/api/models.py"
+    ]
+  },
+  {
+    "question": "How are status badges for a project, a tag or a single check generated, signed so they cannot be guessed, and served as an image or as JSON?",
+    "doc": "templates/docs/badges.md",
+    "gold": [
+      "hc/lib/badges.py",
+      "hc/api/views.py",
+      "hc/front/views.py",
+      "hc/api/urls.py"
+    ]
+  },
+  {
+    "question": "How are check statuses exported as Prometheus metrics, and how is the scrape request authenticated with a read-only key?",
+    "doc": "templates/docs/configuring_prometheus.md",
+    "gold": [
+      "hc/integrations/prometheus/views.py",
+      "hc/integrations/prometheus/urls.py",
+      "hc/accounts/models.py"
+    ]
+  },
+  {
+    "question": "How does inviting people to a project's team work, and how are the different roles (regular member, manager, read-only) enforced?",
+    "doc": "templates/docs/projects_teams.md",
+    "gold": [
+      "hc/accounts/views.py",
+      "hc/accounts/models.py",
+      "hc/accounts/forms.py",
+      "hc/front/views.py"
+    ]
+  },
+  {
+    "question": "How are the periodic monthly, weekly or daily summary emails and the hourly or daily reminders about down checks scheduled, put together and sent?",
+    "doc": "templates/docs/configuring_notifications.md",
+    "gold": [
+      "hc/api/management/commands/sendreports.py",
+      "hc/accounts/models.py",
+      "hc/lib/emails.py",
+      "hc/lib/date.py",
+      "hc/accounts/views.py",
+      "hc/accounts/forms.py"
+    ]
+  },
+  {
+    "question": "How is a notification delivered to a user-defined web address when a check goes up or down, including the custom request body, headers and placeholder substitution?",
+    "doc": "templates/docs/self_hosted_configuration.md",
+    "gold": [
+      "hc/integrations/webhook/transport.py",
+      "hc/api/transports.py",
+      "hc/lib/curl.py",
+      "hc/integrations/webhook/forms.py",
+      "hc/integrations/webhook/views.py",
+      "hc/api/models.py"
+    ]
+  },
+  {
+    "question": "How does the service clean up old data, such as old pings, status changes and notifications, stale user accounts, rate-limit records and leftover objects in external storage?",
+    "doc": "templates/docs/self_hosted.md",
+    "gold": [
+      "hc/api/models.py",
+      "hc/api/management/commands/prunepingsslow.py",
+      "hc/api/management/commands/pruneobjects.py",
+      "hc/accounts/management/commands/pruneusers.py",
+      "hc/api/management/commands/prunetokenbucket.py",
+      "hc/lib/s3.py"
+    ]
+  }
+]

@@ -527,6 +527,18 @@ class Engine:
         return archfacts.Answer(kind, like, listed, counts, pending, left[0], late or left[0] > 0 and until is not None,
                                 _elapsed(started), truncated)
 
+    def prepare_areas(self, cwd: Path | str | None = None) -> bool:
+        """Make the worktree's module summaries (areas.py) before a first question needs them; seconds once on a large
+        repository, then only for files that changed. Never raises: whether they were made."""
+        from . import areas
+
+        try:
+            index, view, _, _ = self._ready(cwd, time.monotonic(), None)
+            areas.summary(index, view)
+        except Exception:  # noqa: BLE001 - the first search makes them itself
+            return False
+        return True
+
     def _record_nearness(self, view: View, task: str, records: decisions.Records,
                          within: float | None = None) -> tuple[dict[str, float] | None, str]:
         """The cosine of the task with every record's own vector, by path, and how vectors took part. None when

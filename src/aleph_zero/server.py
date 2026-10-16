@@ -315,6 +315,8 @@ class _Facts:
                 self.unread = self._engine.facts(prepare_seconds=self.ROUND_SECONDS).unread
                 if not self.unread:
                     break
+            if not self._stopping.is_set():
+                self._engine.prepare_areas()          # the module summaries search places first (areas.py), from those facts
         except Exception:  # noqa: BLE001 - not a repository, a locked index: the first question reads them itself
             pass
         finally:

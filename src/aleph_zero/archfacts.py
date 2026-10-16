@@ -150,6 +150,11 @@ def pack(found: list[Fact]) -> bytes:
     return zlib.compress(json.dumps(listed, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogateescape"), 1)
 
 
+def unpack(stored: bytes) -> list:
+    """A stored row's facts: [kind, name, line, detail] each."""
+    return json.loads(zlib.decompress(stored).decode("utf-8", "surrogateescape"))
+
+
 def load(index: Index) -> list[Found]:
     """Every fact of the synced view that has been read, by name, then path, then line."""
     out: list[Found] = []

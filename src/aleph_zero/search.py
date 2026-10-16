@@ -32,6 +32,9 @@ MORE_PLACES = 3
 # back for a third reading on whole issue text, by a rule written before it, on questions never asked:
 DOTTED_FALLBACK = False     # `self.rotate`, `pkg.Func`: looked up without what stands before the dot when the whole finds nothing
 PATH_VOTE = "first"         # "found": a file's path votes for the best chunk found in it, not for its first lines
+# Module summaries (areas.py; DEFERRED 0-graph part 17): "off", "M2" (the two best modules' files first, as part 14
+# measured) or "M2floor" (only a module sharing two of the question's words). Set by part 17's reading.
+AREAS = "off"
 SYMBOL_TIE_LIMIT = 25
 # What makes a word of a longer query look like an identifier: an underscore, a digit, a
 # capital after the first letter, or a qualifier.
@@ -185,6 +188,33 @@ def arrange(hits: list[Hit], k: int, kind: str) -> list[Hit]:
     return code[:n_code] + docs[:n_docs]
 
 
+def _areas_first(index: Index, view: View, query: str, merged: list[Hit], accept, columns: str) -> list[Hit]:
+    """The files of the modules whose summaries match the question best, before search's others (code only). A file
+    search found keeps its own results; one it did not enters by its first chunk."""
+    from . import areas
+
+    searched = list(dict.fromkeys(hit.path for hit in merged if hit.kind != "doc"))
+    chosen = areas.first_files(areas.summary(index, view), query, searched, AREAS == "M2floor", accept)
+    if not chosen:
+        return merged
+    top = max((hit.score for hit in merged), default=0.0)
+    first: list[Hit] = []
+    moved: set[int] = set()
+    for place, path in enumerate(chosen):
+        boost = top + (len(chosen) - place)               # kept first, in this order, by any later sort on score
+        own = next((n for n, hit in enumerate(merged) if hit.path == path), None)
+        if own is not None:                                # its best result goes first; its others stay where they were
+            moved.add(own)
+            first.append(replace(merged[own], score=boost, sources=(*merged[own].sources, "module")))
+            continue
+        oid, family = view.files[path], filters.family(path)
+        for (chunk_id, _, _, _, start, end, scope_start, scope_end, chunk_kind, symbol, signature, breadcrumb, text) in \
+                index.conn.execute(columns + "WHERE bc.blob_oid = ? AND bc.family = ? AND bc.ord = 0", (oid, family)):
+            first.append(Hit(path, start, end, chunk_kind, symbol, signature, breadcrumb, text, boost, ("module",),
+                             scope_start or start, scope_end or end))
+    return first + [hit for n, hit in enumerate(merged) if n not in moved]
+
+
 def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
            path_glob: str | None = None, families: frozenset[str] | None = None,
            dense: Callable[[int, bool], list[int]] | None = None, more_files: list[Hit] | None = None) -> list[Hit]:
@@ -275,6 +305,8 @@ def search(index: Index, view: View, query: str, k: int = 8, kind: str = "any",
         hits += shown
     hits.sort(key=lambda hit: (-hit.score, hit.path, hit.start_line))
     merged = merge_pieces(hits)
+    if AREAS != "off" and kind != "docs":
+        merged = _areas_first(index, view, query, merged, accept, columns)
     found = arrange(one_a_file(merged) if ONE_A_FILE else merged, k, kind)
     if more_files is not None:
         # Ten results named about seven files: the next files of the same ranking follow them, as places only, until

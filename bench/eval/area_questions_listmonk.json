@@ -1,0 +1,62 @@
+[
+  {
+    "question": "How does a running campaign fetch its recipients from the database in batches and throttle how fast messages go out?",
+    "doc": "docs/docs/content/configuration.md",
+    "gold": ["internal/manager/manager.go", "internal/manager/pipe.go", "cmd/manager_store.go", "queries/campaigns.sql", "internal/manager/message.go", "cmd/init.go"]
+  },
+  {
+    "question": "How does a subscriber added to a double opt-in list get a confirmation e-mail, and what happens when they click to confirm?",
+    "doc": "docs/docs/content/concepts.md",
+    "gold": ["cmd/subscribers.go", "cmd/public.go", "internal/core/subscribers.go", "queries/subscribers.sql", "internal/notifs/notifs.go"]
+  },
+  {
+    "question": "How are bounced e-mails read from a POP3 mailbox, classified as soft or hard, and used to blocklist or delete subscribers?",
+    "doc": "docs/docs/content/bounces.md",
+    "gold": ["internal/bounce/mailbox/pop.go", "internal/bounce/bounce.go", "internal/core/bounces.go", "queries/bounces.sql", "cmd/init.go"]
+  },
+  {
+    "question": "How can an admin filter subscribers with a raw SQL expression on their attributes, and how is that query kept read-only?",
+    "doc": "docs/docs/content/querying-and-segmentation.md",
+    "gold": ["internal/core/subscribers.go", "queries/subscribers.sql", "cmd/subscribers.go", "internal/core/subscriptions.go"]
+  },
+  {
+    "question": "How are campaign messages pushed as JSON to an external HTTP messenger service instead of being sent over SMTP?",
+    "doc": "docs/docs/content/messengers.md",
+    "gold": ["internal/messenger/postback/postback.go", "cmd/init.go", "internal/manager/manager.go", "models/messages.go"]
+  },
+  {
+    "question": "How does the API send a one-off transactional message from a template, including to addresses that are not existing subscribers?",
+    "doc": "docs/docs/content/apis/transactional.md",
+    "gold": ["cmd/tx.go", "models/messages.go", "internal/manager/manager.go", "internal/core/subscribers.go"]
+  },
+  {
+    "question": "How does bulk importing subscribers from an uploaded CSV file work, including progress tracking and stopping an import?",
+    "doc": "docs/docs/content/apis/import.md",
+    "gold": ["internal/subimporter/importer.go", "cmd/import.go", "cmd/init.go", "queries/subscribers.sql"]
+  },
+  {
+    "question": "How are campaigns published to the public mailing list archive and rendered there using substitute subscriber data?",
+    "doc": "docs/docs/content/archives.md",
+    "gold": ["cmd/archive.go", "internal/core/campaigns.go", "queries/campaigns.sql", "models/campaigns.go", "internal/manager/manager.go"]
+  },
+  {
+    "question": "How are e-mail opens and link clicks tracked, and how does the anonymous tracking option change what gets recorded?",
+    "doc": "docs/docs/content/concepts.md",
+    "gold": ["cmd/public.go", "internal/manager/manager.go", "internal/core/campaigns.go", "models/common.go", "queries/links.sql", "cmd/manager_store.go"]
+  },
+  {
+    "question": "How does the option to cache slow database queries work, and how are the cached counts and dashboard statistics refreshed on a schedule?",
+    "doc": "docs/docs/content/maintenance/performance.md",
+    "gold": ["internal/core/core.go", "cmd/init.go", "internal/core/dashboard.go", "internal/core/lists.go", "queries/misc.sql"]
+  },
+  {
+    "question": "How are user roles and per-list roles defined, and how are their permissions checked on each admin request?",
+    "doc": "docs/docs/content/roles-and-permissions.md",
+    "gold": ["internal/auth/models.go", "internal/auth/auth.go", "cmd/roles.go", "internal/core/roles.go", "queries/roles.sql", "cmd/handlers.go"]
+  },
+  {
+    "question": "How does single sign-on through an OpenID Connect provider log users in, and how are new accounts auto-created with roles mapped from claims?",
+    "doc": "docs/docs/content/oidc.md",
+    "gold": ["cmd/auth.go", "internal/auth/auth.go", "internal/core/users.go", "cmd/init.go", "models/settings.go"]
+  }
+]
