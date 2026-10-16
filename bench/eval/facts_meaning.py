@@ -122,7 +122,7 @@ def handover(index, view, found, text: str) -> list[str]:
     if not any(mention.kind == "route" for mention in mentions):
         listed += [each for each in archfacts.with_mounts(found, archfacts.by_words(found, text)) if each not in listed]
     listed += archfacts.handlers(index, view, [each for each in listed if each.kind == "route"])
-    return list(dict.fromkeys(each.path for each in listed))
+    return list(dict.fromkeys(each.path for each in listed if not archfacts.is_spec_route(each)))
 
 
 def _files_of_routes(chosen, handled, found) -> list[str]:

@@ -30,6 +30,8 @@ test('the facts are written as where each route is registered and handled, and w
   expect(note).toContain('- DB_URL: read at config/db.go:2')
   expect(factsNote(reply({ kind: '', like: 'MAX_SIZE', facts: [] }).value)).toBe('')
   expect(factsNote(null)).toBe('')
+  const spec = reply({ kind: '', like: 'GET /owners', facts: [{ kind: 'handler', name: 'GET /owners', path: 'src/OwnerController.java', line: 76, detail: 'openapi listOwners' }] })
+  expect(factsNote(spec.value)).toContain('- GET /owners: handler defined at src/OwnerController.java:76')
 })
 
 test('the facts tool is shown in full while the graph tools are on; the others stay on demand', { options: { rung: '1' } }, async ($, on) => {

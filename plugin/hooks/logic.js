@@ -150,7 +150,7 @@ export function mayName(text) {
 export function factsNamed(answer) {
   try {
     const facts = JSON.parse(resultText(answer)).facts
-    return Array.isArray(facts) ? [...new Set(facts.filter((fact) => fact.kind === 'route' || fact.kind === 'env').map((fact) => fact.name))] : []
+    return Array.isArray(facts) ? [...new Set(facts.filter((fact) => fact.kind === 'route' || fact.kind === 'env' || fact.kind === 'handler').map((fact) => fact.name))] : []
   } catch {
     return []
   }
@@ -168,7 +168,7 @@ export function factsNote(answer, skip = []) {
   // What was handed over before in this conversation is not said again: a route, with its handler, or a variable.
   const all = Array.isArray(parsed && parsed.facts) ? parsed.facts : []
   const facts = all.filter((fact) => !skip.includes(fact.name))
-  if (!facts.some((fact) => fact.kind === 'route' || fact.kind === 'env')) return ''
+  if (!facts.some((fact) => fact.kind === 'route' || fact.kind === 'env' || fact.kind === 'handler')) return ''
   const at = (fact) => fact.path + ':' + fact.line
   const lines = []
   const mounts = facts.filter((fact) => fact.kind === 'mount')
@@ -177,6 +177,11 @@ export function factsNote(answer, skip = []) {
     const by = route.detail && route.detail.includes(' ') ? route.detail.slice(route.detail.indexOf(' ') + 1) : ''
     lines.push('- ' + route.name + ': registered at ' + at(route) + (by ? ' (' + by + ')' : '')
       + (handled.length ? '; handler defined at ' + handled.map(at).join(', ') : ''))
+  }
+  // A route an OpenAPI document states (its handler found by its operationId): the handler alone, the document never.
+  const routed = new Set(facts.filter((fact) => fact.kind === 'route').map((fact) => fact.name))
+  for (const name of [...new Set(facts.filter((fact) => fact.kind === 'handler' && !routed.has(fact.name)).map((fact) => fact.name))]) {
+    lines.push('- ' + name + ': handler defined at ' + facts.filter((fact) => fact.kind === 'handler' && fact.name === name).map(at).join(', '))
   }
   if (mounts.length) lines.push('- mounted: ' + mounts.map((fact) => fact.name + ' at ' + at(fact)).join(', '))
   const names = [...new Set(facts.filter((fact) => fact.kind === 'env').map((fact) => fact.name))]
