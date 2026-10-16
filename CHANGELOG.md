@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.18
+
+- **Install in three lines.** `uv tool install …`, `uv tool update-shell`, then `aleph-zero setup` in a project: it now
+  installs the Claude Code plugin on a yes (it runs Claude Code's own `claude plugin marketplace add mustafarslan/aleph-zero`
+  and `claude plugin install aleph-zero@aleph-zero`, and says what failed in Claude Code's words), then asks to allow
+  the plugin's tools, then the optional parts. `aleph-zero setup --plugin` does the first step alone. The menu now asks
+  a step that an earlier answer made possible (allowing the tools, once the plugin is in) in the same run.
+- **One name.** The README and the plugin's own texts say `aleph-zero` everywhere (TeX Live also installs an `aleph`);
+  the `aleph` command is still installed.
+- **Where to start.** `aleph-zero --help` says where to start and lists the everyday commands first; nothing was
+  renamed or removed. `/aleph configure` puts the two switches that exist for measurements last, said so.
+- **Module summaries after an edit:** made again only for the modules whose files changed: the first search after an
+  edit on the largest project measured is as fast as with summaries off (was about 70 ms more).
+- DEFERRED keeps only what waits; the lines that the graph tools' defaults made untrue are marked so.
+
 ## 0.1.17
 
 - **Module summaries in search, on for Python projects** (DEFERRED 0-graph part 17; your decision on the readings).
