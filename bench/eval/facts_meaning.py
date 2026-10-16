@@ -87,6 +87,34 @@ def _route_text(route, handled) -> str:
                      re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", handler.rsplit(".", 1)[-1])])
 
 
+def _path_words(route) -> set[str]:
+    return _words(" ".join(part for part in route.name.partition(" ")[2].split("/") if part and not part.startswith("{")))
+
+
+def floored(routes, texts, asked: set[str]) -> list:
+    """The routes a request may be about (part 6b's floor): two words or more in common, one of them a word of the path;
+    best first."""
+    scored = []
+    for route in routes:
+        shared = asked & _words(texts[route.name])
+        if len(shared) >= 2 and shared & _path_words(route):
+            scored.append((len(shared), route))
+    return [route for _, route in sorted(scored, key=lambda pair: -pair[0])]
+
+
+def floor_arms(row, routes, texts, handled, found, searched, client, asked) -> dict:
+    """`route_words_floor` and `route_vectors_floor`: part 6's two arms with part 6b's floor."""
+    passing = floored(routes, texts, asked)
+    by_vectors = []
+    if client is not None and passing:
+        import numpy as np
+        vectors = client.embed([texts[route.name] for route in passing], kind="document")
+        question = client.embed([row["problem_statement"][:2000]], kind="query")[0]
+        by_vectors = [passing[i] for i in np.argsort(-(vectors @ question))[:3]]
+    return {"route_words_floor": _ten(_files_of_routes(passing[:3], handled, found) + searched),
+            "route_vectors_floor": _ten(_files_of_routes(by_vectors, handled, found) + searched)}
+
+
 def _files_of_routes(chosen, handled, found) -> list[str]:
     files: list[str] = []
     for route in chosen:
@@ -147,7 +175,8 @@ def score_row(row, workdir: Path, client) -> dict | None:
             by_vectors = [listed[i] for i in order]
         arms = {"search": searched, "search_graph": _ten(reached + searched),
                 "route_words": _ten(_files_of_routes(by_words, handled, found) + searched),
-                "route_vectors": _ten(_files_of_routes(by_vectors, handled, found) + searched)}
+                "route_vectors": _ten(_files_of_routes(by_vectors, handled, found) + searched),
+                **floor_arms(row, routes, texts, handled, found, searched, client, asked)}
 
         def mrr(files):
             return next((1 / place for place, path in enumerate(files, 1) if path in gold), 0.0)
@@ -160,14 +189,76 @@ def score_row(row, workdir: Path, client) -> dict | None:
         index.conn.close()
 
 
+def issue_row(row, workdir: Path, client, ships_vectors: bool) -> dict | None:
+    """Part 6b (b): an issue people wrote; search on its first line as part 1 asks it, the floored arms on the whole issue."""
+    try:
+        view = bench.view_at(bench.clone_of(workdir, row["repo"]), row["base_commit"])
+    except Exception:  # noqa: BLE001
+        return None
+    index = Index(open_db(index_file(view.common_dir)))
+    try:
+        if index.sync(view, budget_seconds=0.0).pending:
+            return None
+        while archfacts.prepare(index, view, 600.0):
+            pass
+        question = bench.question_forms(index, row["problem_statement"])["title"]
+        nearest = None
+        if ships_vectors and client is not None:
+            store = VectorStore(index.conn, index_file(view.common_dir).parent, VECTOR_KIND)
+            have, total = store.coverage(index)
+            if total and have == total:
+                vector = client.embed([question], kind="query")[0]
+                nearest = lambda limit, scoped: [c for c, _ in store.search(index, vector, limit, scoped)]  # noqa: E731
+        searched = bench.first_files([hit.path for hit in bench.search(index, view, question, k=bench.DEEP, dense=nearest)], 10)
+        found = archfacts.load(index)
+        routes = [each for each in found if each.kind == "route" and not archfacts.NEVER_AN_ANSWER.search(each.path)]
+        handled = _handled_at(index, view, routes)
+        texts = {route.name: _route_text(route, handled) for route in routes}
+        asked = _words(row["problem_statement"][:4000])
+        arms = {"search": searched, **floor_arms(row, routes, texts, handled, found, searched, client, asked)}
+        gold = set(row["gold"])
+        return {"instance": row["instance_id"], "repo": row["repo"], "language": row.get("language", "python"),
+                "draw": draw_of(row["instance_id"]), "gold": sorted(gold), "routes": len(routes),
+                "fired": {name: files[: len(files)] != searched for name, files in arms.items() if name != "search"},
+                "recall": {name: len(set(files) & gold) / len(gold) for name, files in arms.items()}}
+    finally:
+        index.conn.close()
+
+
+def issues(args) -> int:
+    from graph_expand import GRADED, SHIPS_WITH_VECTORS as SHIPS
+    rows = [row for row in bench.instances(None, args.set, args.language, 40) if row["repo"] not in GRADED]
+    done = {json.loads(line)["instance"] for line in args.out.read_text().splitlines() if line.strip()} if args.out.exists() else set()
+    ships = (args.language or "python") in SHIPS
+    client = EmbedClient(worker.ensure(), capacity=worker.capacity_tokens(), timeout=60)
+    with args.out.open("a") as out:
+        for number, row in enumerate(rows, 1):
+            if row["instance_id"] in done:
+                continue
+            entry = issue_row(row, args.where.resolve(), client, ships)
+            if entry is None:
+                print(f"{number:4}/{len(rows)} {row['instance_id']}: not prepared, left out", file=sys.stderr, flush=True)
+                continue
+            out.write(json.dumps(entry) + "\n")
+            out.flush()
+            if any(entry["fired"].values()):
+                print(f"{number:4}/{len(rows)} {row['instance_id']:40} " + " ".join(f"{k} {v:.2f}" for k, v in entry["recall"].items()),
+                      file=sys.stderr, flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("action", choices=["questions", "ceiling"])
+    parser.add_argument("action", choices=["questions", "ceiling", "issues"])
     parser.add_argument("where", type=Path)
     parser.add_argument("out_or_none", type=Path, nargs="?")
     parser.add_argument("--questions", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--set", default="locbench")
+    parser.add_argument("--language")
     args = parser.parse_args(argv)
+    if args.action == "issues":
+        return issues(args)
     if args.action == "questions":
         made = questions(Path(__file__).with_name("facts_questions.json"), args.where)
         args.out_or_none.write_text(json.dumps(made, indent=1))
