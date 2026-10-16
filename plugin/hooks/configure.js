@@ -12,8 +12,8 @@ export const LABEL_COLUMNS = 22   // a row's key and name, so that values line u
 // The plugin's options as the manifest names them, each with its values in the order a key steps through them.
 export const OPTIONS = [
   { key: 'rung', hotkey: 's', label: 'steering', values: ['0', '1', '2', '3'], default: '1' },
-  { key: 'grep_pointer', hotkey: 'p', label: 'pointer', values: ['on', 'off'], default: 'on' },
-  { key: 'lines', hotkey: 'l', label: 'rung-2 lines', values: ['places', 'signatures'], default: 'places' },
+  { key: 'grep_pointer', hotkey: 'p', label: 'pointer', values: ['on', 'off'], default: 'on', advanced: true },
+  { key: 'lines', hotkey: 'l', label: 'rung-2 lines', values: ['places', 'signatures'], default: 'places', advanced: true },
   { key: 'graph', hotkey: 'g', label: 'graph tools', values: ['on', 'off'], default: 'on' },
 ]
 
@@ -118,8 +118,8 @@ const VALUES = {
 
 const OPTION_HELP = {
   rung: { text: 'How far the plugin steers Claude Code towards Aleph\'s search before it reaches for a recursive grep.', applies: 'Applies at once.', note: ['No rung has yet been shown to save tokens or tool calls (ADR-011).', 'warning'] },
-  grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1.', applies: 'Applies at once.' },
-  lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt. Used at rung 2 and above only.', applies: 'Applies at once.' },
+  grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1. Kept as a switch so a measurement can tell it from the rest of the rung; leave it on.', applies: 'Applies at once.' },
+  lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt; used at rung 2 and above only. Kept for measuring; `places` is what was measured.', applies: 'Applies at once.' },
   graph: { text: 'When a prompt or a grep names a route or an environment variable, or a prompt\'s words point to a route, the agent is given where the code handles it (`facts`). Also `references` (who calls what) and `decisions`.', applies: 'From the next session. Needs the engine\'s tools allowed: `aleph setup --allow-tools`.', note: ['Measured: `facts` was used and the right file read first more often, at the same tokens (ADR-011).', 'subtle'] },
 }
 

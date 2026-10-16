@@ -716,7 +716,12 @@ export function register(on, options) {
 
     // The plugin's options: through Claude Code's settings, as /plugin would; they need neither the engine nor its tools.
     heading('h-plugin', 'Plugin', true)
-    for (const option of OPTIONS) {
+    // The two that exist for measurements (a rung's parts) last, under their own line: the defaults are what was measured.
+    const ordered = [...OPTIONS.filter((option) => !option.advanced), ...OPTIONS.filter((option) => option.advanced)]
+    for (const option of ordered) {
+      if (option.advanced && option === ordered.find((each) => each.advanced)) {
+        say('h-advanced', 'advanced: parts of a rung, kept for measuring; the defaults are what was measured')
+      }
       const value = valueOf(options, option)
       row('o-' + option.key, Button({
         key: 'b-' + option.key, label: option.label, hotkey: option.hotkey, plain: true,

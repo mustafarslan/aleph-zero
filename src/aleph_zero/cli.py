@@ -494,10 +494,15 @@ def _version() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog=COMMAND, description="Local code search for coding agents.")
+    parser = argparse.ArgumentParser(
+        prog=COMMAND, formatter_class=argparse.RawDescriptionHelpFormatter, description=(
+            "Local code search for coding agents.\n\n"
+            "Start here: `setup` once in a project (it asks about each optional part), then\n"
+            "`search`, `symbol` and `outline`; `update` after a pull. The other commands are\n"
+            "for looking closer, or for scripts."))
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="a directory inside the repository")
     parser.add_argument("--version", action="version", version=f"aleph-zero {_version()}")
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command", required=True, title="commands", metavar="COMMAND")
 
     index = commands.add_parser("index", help="index everything in the current view")
     index.add_argument("--budget", type=float, default=30.0, help="seconds per pass")
@@ -657,6 +662,9 @@ def main(argv: list[str] | None = None) -> int:
     gc.set_defaults(run=_gc)
 
     _cwd_after_the_command_too(parser)
+    # Listed by use: what a person runs every day first, then the rest. Nothing is renamed or taken away.
+    everyday = ["setup", "search", "symbol", "outline", "update", "status", "doctor"]
+    commands._choices_actions.sort(key=lambda action: everyday.index(action.dest) if action.dest in everyday else len(everyday))
     args = parser.parse_args(argv)
     from . import firstrun
     from .lang import parse

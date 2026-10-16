@@ -109,7 +109,7 @@ returned, with the additions above.
 
 Each finding of the directory's check of 0.1.15, answered (line numbers are `hooks/register.js`'s):
 
-- **Settings it writes** (`config.set`, lines 735–738): only the plugin's own four options, each
+- **Settings it writes** (`config.set`, lines 740–743): only the plugin's own four options, each
   written by its fixed key: `aleph-zero.rung`, `aleph-zero.grep_pointer`, `aleph-zero.lines`,
   `aleph-zero.graph`. Only when the person presses that option's key in `/aleph configure`, as
   `/plugin` would. It never writes a permission, the permission mode or any other setting, and
@@ -122,7 +122,7 @@ Each finding of the directory's check of 0.1.15, answered (line numbers are `hoo
 - **What it sends and where** (line 100): to the local engine only, as above. The one request that
   leaves the machine is the side chat's question to Claude, made through Claude Code's own
   `model.complete`, only when the person asks it.
-- **Programs it starts** (`process.run`, lines 173 and 230; `process.spawn`, line 269; `process.run` of git, line 774):
+- **Programs it starts** (`process.run`, lines 173 and 230; `process.spawn`, line 269; `process.run` of git, line 779):
   the engine's `status`, run as `sh <plugin>/scripts/engine.sh --cwd <the session's directory>
   status` (the settings pane and the vectors line); from `/aleph configure`, on a key the person
   presses, the engine's `setup --dense`, `--no-dense` or `--auto-dense`, `source add` with the path
@@ -134,14 +134,14 @@ Each finding of the directory's check of 0.1.15, answered (line numbers are `hoo
   Claude Code's own model connection (`model.complete`), the host's own vendor. `.mcp.json` passes
   the plugin's `graph` option (`on` or `off`) to the engine as `ALEPH_GRAPH`: an on/off switch,
   not a credential.
-- **Changes a tool's input** (`tool.call`, line 933): no. That hook only counts calls for
+- **Changes a tool's input** (`tool.call`, line 938): no. That hook only counts calls for
   `/aleph stats` and passes every event on unchanged (`return next(e)`).
-- **Answers in place of a tool** (`tool.call`, lines 1006 and 1029): no. Each first runs the tool
+- **Answers in place of a tool** (`tool.call`, lines 1011 and 1034): no. Each first runs the tool
   (`await next(e)`) and returns its own result, with the additions in the table above.
 - **Hooks an event that is a call** (`command.run`, line 462): it answers only the plugin's own
   `/aleph` command.
-- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 950 and 960;
-  `prompt.compose`, line 966): the changes are the ones in the table above.
+- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 955 and 965;
+  `prompt.compose`, line 971): the changes are the ones in the table above.
 - **`types` in `plugin.json`:** the mod's type contract, read by `claude plugin validate` for the
   values it keeps in `$.state`; Claude Code ignores it when loading, as the check says.
 - **Scripts** (`scripts/serve.sh`, `scripts/engine.sh`): they start the separately installed
