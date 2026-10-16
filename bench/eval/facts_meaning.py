@@ -6,6 +6,11 @@ left out. `ceiling`: search on the summary, and the answering files its ten miss
 five results: the definitions they lie in, the routes those definitions handle, and those routes' registering lines,
 handlers and mounts.
 
+Arms (`ceiling` scores them too), each ten files: `search`; `search_graph`, the graph's files from search's first five,
+then search's; `route_words`, the three routes whose method, path and handler share most of the question's words, with
+their handlers and mounts, then search's; `route_vectors`, the same by the cosine of the question with a vector made
+for each route from those words.
+
     facts_meaning.py questions SRC_DIR OUT.json
     facts_meaning.py ceiling WORKDIR --questions FILE --out FILE
 """
@@ -63,6 +68,35 @@ def _handled_at(index, view, routes) -> dict:
     return where
 
 
+STOP = frozenset("the a an of to for with and or by in on is are all from this that its it be".split())
+_route_vectors: dict = {}      # (repository, commit) -> (routes, their vectors): made once a repository
+
+
+def _words(text: str) -> set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text or "")
+    found = {word for word in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if len(word) >= 2 and word not in STOP}
+    return found | {word[:-1] for word in found if word.endswith("s") and len(word) > 3}     # users ~ user
+
+
+def _route_text(route, handled) -> str:
+    method, _, path = route.name.partition(" ")
+    verbs = {"GET": "get return list show", "POST": "create add post", "PUT": "update replace set", "PATCH": "update change",
+             "DELETE": "delete remove", "ANY": ""}
+    handler = route.detail.partition(" ")[2]
+    return " ".join([verbs.get(method, ""), " ".join(part for part in path.split("/") if part and not part.startswith("{")),
+                     re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", handler.rsplit(".", 1)[-1])])
+
+
+def _files_of_routes(chosen, handled, found) -> list[str]:
+    files: list[str] = []
+    for route in chosen:
+        for path in [route.path, *(path for path, _ in handled.get(route.name, []))] + \
+                [each.path for each in archfacts.matching(found, [archfacts.Mention("route", route.name)])]:
+            if path not in files:
+                files.append(path)
+    return files
+
+
 def score_row(row, workdir: Path, client) -> dict | None:
     try:
         view = bench.view_at(bench.clone_of(workdir, row["repo"]), row["base_commit"])
@@ -97,10 +131,30 @@ def score_row(row, workdir: Path, client) -> dict | None:
                     files += [each.path for each in archfacts.matching(found, [archfacts.Mention("route", route.name)])]
                     reached += [path for path in files if path not in reached]
         gold = set(row["gold"])
+        asked = _words(row["problem_statement"])
+        texts = {route.name: _route_text(route, handled) for route in routes}
+        by_words = sorted(((len(asked & _words(texts[route.name])), route) for route in routes), key=lambda pair: -pair[0])
+        by_words = [route for score, route in by_words if score > 0][:3]
+        by_vectors = []
+        if client is not None and routes:
+            import numpy as np
+            key = (row["repo"], row["base_commit"])
+            if key not in _route_vectors:
+                _route_vectors[key] = (routes, client.embed([texts[route.name] for route in routes], kind="document"))
+            listed, vectors = _route_vectors[key]
+            question = client.embed([row["problem_statement"]], kind="query")[0]
+            order = np.argsort(-(vectors @ question))[:3]
+            by_vectors = [listed[i] for i in order]
+        arms = {"search": searched, "search_graph": _ten(reached + searched),
+                "route_words": _ten(_files_of_routes(by_words, handled, found) + searched),
+                "route_vectors": _ten(_files_of_routes(by_vectors, handled, found) + searched)}
+
+        def mrr(files):
+            return next((1 / place for place, path in enumerate(files, 1) if path in gold), 0.0)
         return {"instance": row["instance_id"], "repo": row["repo"], "draw": draw_of(row["instance_id"]), "gold": sorted(gold),
-                "question": row["problem_statement"], "search": searched, "graph": reached,
-                "recall": len(set(searched) & gold) / len(gold),
-                "mrr": next((1 / place for place, path in enumerate(searched, 1) if path in gold), 0.0),
+                "question": row["problem_statement"], "files": arms, "graph": reached,
+                "recall": {name: len(set(files) & gold) / len(gold) for name, files in arms.items()},
+                "mrr": {name: mrr(files) for name, files in arms.items()},
                 "beyond": sorted((gold & set(reached)) - set(searched)), "routes_reached": len(reached) > 0}
     finally:
         index.conn.close()
@@ -129,8 +183,8 @@ def main(argv=None) -> int:
             print(f"{number:4}/{len(rows)} {row['instance_id']}: not prepared, left out", file=sys.stderr, flush=True)
             continue
         results.append(entry)
-        print(f"{number:4}/{len(rows)} {row['instance_id']:32} search {entry['recall']:.2f} beyond +{len(entry['beyond'])}",
-              file=sys.stderr, flush=True)
+        print(f"{number:4}/{len(rows)} {row['instance_id']:32} " + " ".join(f"{k} {v:.2f}" for k, v in entry["recall"].items())
+              + f" beyond +{len(entry['beyond'])}", file=sys.stderr, flush=True)
     args.out.write_text(json.dumps(results, indent=1) + "\n")
     return 0
 
