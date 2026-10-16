@@ -255,3 +255,19 @@ def test_the_worker_says_what_it_was_built_from_and_is_out_of_date_when_the_pin_
     assert embed_setup.current()
     monkeypatch.setattr(embed_setup, "LLAMA_COMMIT", "e" * 40)
     assert not embed_setup.current()
+    from aleph_zero import doctor
+    row = doctor._worker()
+    assert row.level == "note" and "older" in row.detail and "setup --worker" in row.detail    # doctor says so too
+
+
+def test_a_worker_built_before_records_were_kept_is_known_by_what_it_says_it_is(home):
+    binary = worker.binary()
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text("#!/bin/sh\necho 'version: 0.6.0-dev (build 1, commit c83f305)'\n")
+    binary.chmod(0o755)
+    worker.model().parent.mkdir(parents=True, exist_ok=True)
+    worker.model().write_bytes(b"x")
+    assert embed_setup.built_from() == "c83f305"                         # no record: its own --version
+    assert not embed_setup.current()                                    # older than the pin: doctor and setup say so
+    binary.write_text("#!/bin/sh\necho 'version: 0.7.0-dev (build 1, commit %s)'\n" % embed_setup.LLAMA_COMMIT[:7])
+    assert embed_setup.current()

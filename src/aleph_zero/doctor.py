@@ -142,6 +142,11 @@ def _worker() -> Row:
         return Row("note", "embedding worker", "embedding worker: not installed, so search is by words and names only. "
                                                f"`{COMMAND} embed setup` builds it and downloads the model (310 MB, uses the network)")
     running = "running" if worker.available() else "not running (it starts when vectors are needed)"
+    if not setup.current():
+        # It keeps working, and its vectors stay valid (the move of 2026-10-16 left them the same); the new build is a command away.
+        return Row("note", "embedding worker", f"embedding worker: installed in {worker.home()}, {running}; built from an older "
+                                               f"llama.cpp than this Aleph pins ({(setup.built_from() or '?')[:12]} against "
+                                               f"{setup.LLAMA_COMMIT[:12]}): `{COMMAND} update` or `{COMMAND} setup --worker` builds the new one")
     return Row("ok", "embedding worker", f"embedding worker: installed in {worker.home()}, {running}")
 
 

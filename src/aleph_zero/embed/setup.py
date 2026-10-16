@@ -225,17 +225,27 @@ def _record(built_from: str) -> None:
 
 
 def built_from() -> str | None:
+    """The llama.cpp commit the worker was built from: as recorded at the build, or, for a build from before records
+    were kept, as the server itself says (`llama-server --version`: "commit c83f305"); None when neither says."""
     try:
-        return (worker.where() / "built-from").read_text().strip() or None
+        recorded = (worker.where() / "built-from").read_text().strip()
+        if recorded:
+            return recorded
     except OSError:
+        pass
+    try:
+        said = subprocess.run([str(worker.binary()), "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
         return None
+    found = __import__("re").search(r"commit ([0-9a-f]{7,40})", said.stdout + said.stderr)
+    return found.group(1) if found else None
 
 
 def current() -> bool:
     """The worker is built from the llama.cpp commit this Aleph pins (or from a checkout the person gave). A build
     from an older pin keeps working; `setup --worker` or `update` builds the new one."""
     found = built_from()
-    return installed() and (found is None or found == LLAMA_COMMIT or found.startswith("local:"))
+    return installed() and (found is None or LLAMA_COMMIT.startswith(found) or found.startswith("local:"))
 
 
 def installed() -> bool:

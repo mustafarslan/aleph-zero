@@ -9,6 +9,8 @@
   same ten nearest chunks: **vectors made before stay valid; nothing is embedded again.** An installed worker is now
   older than the one this Aleph pins: `aleph-zero update` (or `aleph-zero setup --worker`) builds the new one, about
   30 s once the source is fetched; until then the old one keeps working, and setup and doctor say so.
+- `aleph-zero doctor` now says when the worker is built from an older llama.cpp than this Aleph pins, also for a worker
+  built before builds were recorded (it asks the server's own `--version`).
 
 ## 0.1.19
 
