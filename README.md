@@ -30,14 +30,17 @@ the files it still matches.
 
 **Architecture facts.** What the code states about the system: HTTP routes and where routers
 are mounted, models and tables, environment variables, background tasks, queues and gRPC
-services, each with its file and line; for Go and Express routes, where the handler is defined.
+services, each with its file and line; routes are read for Express, NestJS, FastAPI, Flask, Django
+URL patterns, Spring and Go (gin, echo, chi, net/http; gin's and echo's groups made in the same file), and where a handler is
+given by name, where it is defined.
 With an [oxn](docs/adr/ADR-007-relationship-to-oxn.md) `oxn.yaml`, the layer a file belongs to
 and what that layer may depend on. With the plugin these are looked up for the agent: when a
 prompt, or a pattern the agent greps for, names an HTTP route (`GET /api/users/{id}`) or an
-environment variable (`DATABASE_URL`), the plugin adds where the code registers and handles
-that route or reads that variable, from source code only (not documentation or tests). Most requests
-name neither, and then nothing is added: on 1,504 ordinary issues in six languages a note was
-added to 2.7%.
+environment variable (`DATABASE_URL`), or a prompt's words point to a route ("deleting a client
+fails" to `DELETE /client/{id}`), the plugin adds where the code registers and handles that route
+or reads that variable, from source code only (not documentation or tests). Most requests
+name neither, and then nothing is added: on 1,398 issues people wrote, in six languages, files
+were added to 8.6%, without lowering how often the right files were found.
 
 **Decision records.** Ranks a repository's ADRs for a task, or lists those that apply to a
 file, so the agent sees what was already decided.

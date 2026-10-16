@@ -476,7 +476,7 @@ class Engine:
     @_rebuilding
     def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
               timeout_ms: int | None = None, prepare_seconds: float | None = None,
-              mentioned: str | None = None) -> archfacts.Answer:
+              mentioned: str | None = None, words: bool = False) -> archfacts.Answer:
         """What the worktree states about its architecture: with no argument, how many routes, models,
         tables, environment names, tasks and services it has; with a kind or a part of a name, those
         facts with where each is stated. The first question about a view reads its files for them,
@@ -484,7 +484,8 @@ class Engine:
 
         With `mentioned` (a request, an error, a grep pattern), the routes and environment names it names, answered from
         source code only, each route with where its handler is defined (kind 'handler'); `kind` and `like` are not read.
-        A text that names none is answered at once, without the index."""
+        A text that names none is answered at once, without the index; with `words`, it is answered by the routes whose
+        words it shares (at most three, above a floor: archfacts.by_words), with their handlers and mounts."""
         kind, like = kind or "", like or ""
         if kind and kind not in archfacts.KINDS:
             raise ValueError("kind is one of: " + ", ".join(archfacts.KINDS))
@@ -492,7 +493,7 @@ class Engine:
         mentions = archfacts.mentioned(mentioned) if mentioned is not None else None
         if mentions is not None:
             kind, like = "", " | ".join(mention.name for mention in mentions)
-            if not mentions:
+            if not mentions and not words:
                 return archfacts.Answer("", "", [], elapsed_ms=_elapsed(started))
         left = [0]
 
@@ -508,6 +509,9 @@ class Engine:
                 def answer():
                     found = archfacts.load(index)
                     listed = archfacts.matching(found, mentions)
+                    if words and not any(mention.kind == "route" for mention in mentions):
+                        listed += [each for each in archfacts.with_mounts(found, archfacts.by_words(found, mentioned or ""))
+                                   if each not in listed]
                     listed += archfacts.handlers(index, view, [each for each in listed if each.kind == "route"])
                     return listed[:k], archfacts.select(found, "", "", 0)[1], len(listed) > k
                 return (answer,)

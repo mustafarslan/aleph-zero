@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.16
+
+- **Routes read in more frameworks** (DEFERRED 0-graph part 12), each judged on a project that was not tuned on:
+  NestJS (`@Controller('albums')` with `@Get(':id')`: ghostfolio 0 → 120 of 120 routes), Django URL patterns (`path()`,
+  `re_path()`, `include()` as a mount: healthchecks 0 → 156 of 179), and gin and echo router groups made in the same file
+  (gin-vue-admin 0 → 123 of 127). Among the projects measured before: gotify 23 → 39 of 42, immich 1 → 251 of 279.
+- **Handlers wrapped in calls** (`pm(hasID(a.GetSubscriber))`) are read by their innermost name, and a handler made by
+  a call by the name of what makes it: listmonk's routes with a handler found 27 → 126 of 132.
+- **A prompt that names no route is matched by its words** ("deleting a client fails" → `DELETE /client/{id}`): at most
+  three routes, only those sharing two words or more with it, one of them a word of the route's path. On 99 questions
+  asked by an API operation's summary: +16.4 points of right files found, the right file first in 17 points more; on
+  1,398 issues people wrote, files added to 8.6% and how often the right files are found not lowered. `facts` takes
+  `words`; the plugin asks it for every prompt that is a question.
+- **One step to turn the look-ups on, said plainly:** the plugin's look-ups use the engine's tools, which Claude Code
+  asks about first. `aleph setup` now asks to allow them once the plugin is installed ("Allow Claude Code to use Aleph's
+  tools without asking?"; or `aleph setup --allow-tools`): it adds one rule to `permissions.allow` and nothing else.
+  Until then the plugin says so once a session and `/aleph check` says how. The plugin itself never writes a permission.
+- **The graph tools are on by default in the engine's own server too** (a bare `claude mcp add`); `ALEPH_GRAPH=0` turns
+  them off, as the plugin's `graph=off` does.
+- **For the plugin directory's review:** each plugin option is written by its fixed key; the settings pane no longer
+  starts a shell to find the engine (`status` reports it); the plugin README says what the mod runs, calls and sends.
+- `/aleph stats` counts look-ups that came back too late and refused calls.
+- The facts are read again once, in the background when a session starts (0.2 to 6 s on the projects measured).
+- Measured and not shipped: summaries of a module made without a model gain +8.7 points on 48 questions about a whole
+  area (next: in the engine, then a model-written summary as a priced ask); the call graph's neighbours ranked by their
+  own text gain +1.8, under the 5 points asked for.
+
 ## 0.1.15
 
 - **The knowledge graph is handed to the agent, on by default** (the `graph` option, the owner's ask). When a prompt, a

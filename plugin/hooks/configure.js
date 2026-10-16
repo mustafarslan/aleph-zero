@@ -27,7 +27,7 @@ const MEANING = {
   },
   grep_pointer: { on: 'Grep and Glob point to search', off: 'Grep and Glob as they are' },
   lines: { places: 'rung 2 lists each file\'s places', signatures: '+ each file\'s first signature' },
-  graph: { off: 'not offered', on: 'callers, facts, decisions' },
+  graph: { off: 'not offered', on: 'routes and variables looked up for you' },
 }
 
 // An option's value as the mod was loaded with it; anything else is the manifest's default.
@@ -113,14 +113,14 @@ const VALUES = {
   ],
   grep_pointer: [['on', 'one sentence in Grep\'s and Glob\'s descriptions points to `search`'], ['off', 'Grep and Glob as Claude Code has them']],
   lines: [['places', 'each file with its line ranges'], ['signatures', 'also each file\'s first signature']],
-  graph: [['on', '`references`, `facts` and `decisions` offered to the agent'], ['off', 'the search tools alone']],
+  graph: [['on', 'the default: nothing to activate. Routes and environment variables a prompt or a grep names (or a prompt\'s words point to) are looked up and given to the agent; `facts` shown in full, `references` and `decisions` on demand'], ['off', 'the search tools alone; nothing is looked up']],
 }
 
 const OPTION_HELP = {
   rung: { text: 'How far the plugin steers Claude Code towards Aleph\'s search before it reaches for a recursive grep.', applies: 'Applies at once.', note: ['No rung has yet been shown to save tokens or tool calls (ADR-011).', 'warning'] },
   grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1.', applies: 'Applies at once.' },
   lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt. Used at rung 2 and above only.', applies: 'Applies at once.' },
-  graph: { text: 'Who calls what (`references`), the routes, models and environment names a repository states (`facts`), and the decision records behind a change (`decisions`).', applies: 'From the next session: the engine reads it when Claude Code starts it.', note: ['Not yet measured to help an agent.', 'warning'] },
+  graph: { text: 'When a prompt or a grep names a route or an environment variable, or a prompt\'s words point to a route, the agent is given where the code handles it (`facts`). Also `references` (who calls what) and `decisions`.', applies: 'From the next session. Needs the engine\'s tools allowed: `aleph setup --allow-tools`.', note: ['Measured: `facts` was used and the right file read first more often, at the same tokens (ADR-011).', 'subtle'] },
 }
 
 // The help for the element `key` (a Button's or the field's key); null for one without help.

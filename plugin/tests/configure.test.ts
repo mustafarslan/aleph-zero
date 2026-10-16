@@ -229,7 +229,7 @@ test('the help under the rows follows the focus ring: what the row does, its val
   expect(await ui.find({ type: 'Text', text: /No rung has yet been shown to save tokens/ })).toBeDefined()
   await $.ui.focus({ requestId: 'aleph-config', key: 'b-graph' })
   expect(await ui.find({ type: 'Text', text: /^── graph tools ─/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Not yet measured to help an agent/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /the right file read first more often/ })).toBeDefined()
 })
 
 test('every row that can take the ring has help, and the help keeps to the facts it states', () => {

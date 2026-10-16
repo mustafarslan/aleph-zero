@@ -295,6 +295,66 @@ def matching(found: list[Found], mentions: list[Mention]) -> list[Found]:
     return unique
 
 
+# ---- a request that names no route: its words (DEFERRED 0-graph, parts 6b and 13) --------------------------------------
+# "Deleting a client fails" names no path; the route DELETE /client/{id} shares its words. Offered only above a floor: two
+# words or more in common, one of them a word of the route's path; at most three routes. Measured: on 99 questions asked
+# by an operation's summary, +12.9 points of recall@10 where routes are read; on 1,398 issues people wrote, files added to
+# 6.6% and recall not lowered.
+
+_STOP = frozenset("the a an of to for with and or by in on is are all from this that its it be".split())
+_VERBS = {"GET": "get return list show", "POST": "create add post", "PUT": "update replace set", "PATCH": "update change",
+          "DELETE": "delete remove", "ANY": ""}
+WORD_ROUTES = 3
+
+
+def _stem(word: str) -> str:
+    """A word without its commonest English ending, so that deleting, deleted, deletes and delete are one."""
+    for ending in ("ing", "ed", "es", "s", "e"):
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            return word[: -len(ending)]
+    return word
+
+
+def words_of(text: str) -> set[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text or "")
+    return {_stem(word) for word in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if len(word) >= 2 and word not in _STOP}
+
+
+def _path_words(route: Found) -> set[str]:
+    return words_of(" ".join(part for part in route.name.partition(" ")[2].split("/") if part and not part.startswith("{")))
+
+
+def route_words(route: Found) -> set[str]:
+    """What a route is about, in words: its method as verbs, its path's words, its handler's name."""
+    method = route.name.partition(" ")[0]
+    handler = route.detail.partition(" ")[2].rsplit(".", 1)[-1]
+    return words_of(_VERBS.get(method, "")) | _path_words(route) | words_of(handler)
+
+
+def by_words(found: list[Found], text: str, k: int = WORD_ROUTES) -> list[Found]:
+    """The routes of source code a request may be about by its words, best first, above the floor."""
+    asked = words_of(text)
+    scored = []
+    for route in found:
+        if route.kind != "route" or NEVER_AN_ANSWER.search(route.path):
+            continue
+        shared = asked & route_words(route)
+        if len(shared) >= 2 and shared & _path_words(route):
+            scored.append((len(shared), route))
+    scored.sort(key=lambda pair: -pair[0])
+    return [route for _, route in scored[:k]]
+
+
+def with_mounts(found: list[Found], routes: list[Found]) -> list[Found]:
+    """Routes, each followed by the mounts its path starts with."""
+    out: list[Found] = []
+    for route in routes:
+        for each in [route] + [m for m in matching(found, [Mention("route", route.name)]) if m.kind == "mount"]:
+            if each not in out:
+                out.append(each)
+    return out
+
+
 def handlers(index: Index, view: View, routes: list[Found]) -> list[Found]:
     """Where the handler a route names is defined (`clientHandler.DeleteClient`: the definition of DeleteClient), as a fact of
     kind 'handler' named by the route. Left out when the name is defined in more than three places outside tests."""
