@@ -418,3 +418,18 @@ def test_nestjs_routes_join_the_controller_s_path_and_the_method_s():
         ("route", "GET /users/me", 19, "nestjs")]                                   # a computed path is not read
     elsewhere = ts.replace("'@nestjs/common'", "'./decorators'")
     assert [fact for fact in found("server/album.controller.ts", elsewhere) if fact[0] == "route"] == []   # not NestJS's
+
+
+def test_django_url_patterns_are_routes_and_includes_are_mounts():
+    py = ('from django.urls import include, path, re_path\nfrom . import views\n\n'
+          'check_urls = [\n    path("", views.details, name="details"),\n    path("log/", views.log),\n]\n\n'
+          'urlpatterns = [\n    path("", views.index),\n    path("checks/<uuid:code>/", include(check_urls)),\n'
+          '    path("api/", include("hc.api.urls")),\n    re_path(r"^ping/(?P<code>[^/]+)/?$", views.ping),\n'
+          '    re_path(r"^b(a|o)d/$", views.bad),\n    path(f"{prefix}admin/", views.admin),\n'
+          '    path("projects/", views.ProjectList.as_view()),\n]\n')
+    assert found("hc/front/urls.py", py) == [
+        ("route", "ANY /checks/{code}", 5, "django views.details"), ("route", "ANY /checks/{code}/log/", 6, "django views.log"),
+        ("route", "ANY /", 10, "django views.index"), ("mount", "/checks/{code}/", 11, "check_urls"),
+        ("mount", "/api/", 12, '"hc.api.urls"'), ("route", "ANY /ping/{code}/", 13, "django views.ping"),
+        ("route", "ANY /projects/", 16, "django views.ProjectList")]            # a regex that is not a path, a computed prefix: not read
+    assert found("hc/front/helpers.py", py.replace("from django.urls import include, path, re_path\n", "")) == []

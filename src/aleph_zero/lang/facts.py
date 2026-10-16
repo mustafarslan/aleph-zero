@@ -61,7 +61,7 @@ _PY_ROUTER_MAKERS = frozenset({"FastAPI", "APIRouter", "Flask", "Blueprint", "Sa
 _GO_NOT_ROUTERS = frozenset({"http", "client", "kv", "cache", "store", "conn", "db", "redis", "rdb", "consul", "etcd", "zk", "s3"})
 _GO_HANDLERS = frozenset({"identifier", "selector_expression", "func_literal", "call_expression"})
 # A handler given by its name, which `facts` can then find the definition of.
-_NAMED_HANDLERS = frozenset({"identifier", "selector_expression", "member_expression"})
+_NAMED_HANDLERS = frozenset({"identifier", "selector_expression", "member_expression", "attribute"})
 _BROKER = re.compile(r"redis|nats|mqtt|kafka|amqp|rabbit|broker", re.IGNORECASE)
 _BROKER_ONLY = frozenset({"publish", "subscribe", "psubscribe"})     # methods an in-process event bus has too
 _OS_IMPORT = re.compile(rb"^[ \t]*from[ \t]+os[ \t]+import[ \t]+\(?([^\n)]*)", re.MULTILINE)
@@ -99,10 +99,14 @@ def facts(profile: LanguageProfile, tree: Tree, data: bytes) -> list[Fact]:
     state: dict = {"os_names": {name.split(b" as ")[-1].strip().decode("utf-8", "replace")
                                 for found in _OS_IMPORT.findall(data) for name in found.split(b",")} if family == "python" else set(),
                    # NestJS's decorators are read only where the file takes them from NestJS: `@Get` is a common name.
-                   "nestjs": family == "ecma" and b"@nestjs/common" in data}
+                   "nestjs": family == "ecma" and b"@nestjs/common" in data,
+                   # Django's `path()` is read only where the file takes it from Django: `path` is a common name.
+                   "django": family == "python" and (b"django.urls" in data or b"django.conf.urls" in data)}
     for node in nodes:
         for fact in read(node, state):
             found.append((node.start_byte, fact))
+    if state.get("list_prefix"):
+        found = _django_joined(found, state)
     seen: set[Fact] = set()        # the same fact from two nodes is one; a name set and read on one line is two
     out = []
     for _, fact in sorted(found, key=lambda item: (item[1].line, item[0])):
@@ -202,6 +206,11 @@ def _handler_name(node: Node | None, depth: int = 0) -> Node | None:
         return None
     if node.type in _NAMED_HANDLERS:
         return node
+    if node.type == "call":                    # Django: `views.CheckList.as_view()` is served by the class
+        function = node.child_by_field_name("function")
+        if function is not None and function.type == "attribute" and _text(function.child_by_field_name("attribute")) == "as_view":
+            return _handler_name(function.child_by_field_name("object"), depth + 1)
+        return None
     if node.type == "call_expression":
         arguments = node.child_by_field_name("arguments")
         for argument in (arguments.named_children if arguments is not None else []):
@@ -362,6 +371,8 @@ def _python(node: Node, state: dict) -> list[Fact]:
         return _python_decorator(node, state)
     if kind == "call":
         function = _of_os(state, _text(node.child_by_field_name("function")))
+        if state.get("django") and function in _DJANGO_CALLS:
+            return _django_url(node, function, state)
         first = _first_argument(node)
         if function in ("os.getenv", "os.environ.get") and first and _ENV_NAME.match(first):
             return [Fact("env", first, _line(node), "read")]
@@ -391,6 +402,65 @@ def _python(node: Node, state: dict) -> list[Fact]:
             return [Fact("env", name, _line(node), "read")] if _ENV_NAME.match(name) else []
         return []
     return _python_class(node)
+
+
+_DJANGO_CALLS = frozenset({"path", "re_path", "url", "django.urls.path", "django.urls.re_path", "urls.path", "urls.re_path"})
+
+
+def _django_regex(written: str) -> str | None:
+    """`^checks/(?P<code>[^/]+)/$` as `checks/{code}/`; None for a pattern that is not a plain path once its groups go."""
+    plain = re.sub(r"\(\?P<(\w+)>[^)]*\)", r"{\1}", written.strip("^").removesuffix("$"))
+    plain = plain[:-1] if plain.endswith("/?") else plain          # an optional trailing slash: the path either way
+    return None if re.search(r"[\\()\[\]*+?|]", plain) else plain
+
+
+def _list_holding(node: Node) -> str | None:
+    """The name of the list a `path()` call is written in (`urlpatterns = [...]`, `check_urls += [...]`)."""
+    parent = node.parent
+    if parent is None or parent.type != "list" or parent.parent is None:
+        return None
+    holder = parent.parent
+    if holder.type in ("assignment", "augmented_assignment"):
+        left = holder.child_by_field_name("left")
+        return _text(left) if left is not None and left.type == "identifier" else None
+    return None
+
+
+def _django_url(node: Node, function: str, state: dict) -> list[Fact]:
+    """A Django URL pattern: `path("checks/<uuid:code>/", views.details)` is a route, ANY /checks/{code}/, served by
+    `views.details`; `path("api/", include("hc.api.urls"))` is a mount. A prefix computed at run time is not read."""
+    arguments = node.child_by_field_name("arguments")
+    given = [argument for argument in (arguments.named_children if arguments is not None else [])
+             if argument.type not in ("comment", "keyword_argument")]
+    written = _literal(given[0]) if given else None
+    if written is None or len(given) < 2:
+        return []
+    if not function.endswith("path") or function.endswith("re_path"):
+        written = _django_regex(written)
+        if written is None:
+            return []
+    path = _path("/" + written.lstrip("/"))
+    view = given[1]
+    if view.type == "call" and _text(view.child_by_field_name("function")).rsplit(".", 1)[-1] == "include":
+        inner = view.child_by_field_name("arguments")
+        included = next((child for child in (inner.named_children if inner is not None else []) if child.type != "comment"), None)
+        if included is not None and included.type == "identifier":
+            state.setdefault("list_prefix", {})[_text(included)] = path.rstrip("/")     # joined to that list's routes
+        return [Fact("mount", path, _line(node), _written(included))] if path.strip("/") else []
+    fact = Fact("route", f"ANY {path}", _line(node), _handled("django", view))
+    holder = _list_holding(node)
+    if holder:
+        state.setdefault("listed", []).append((fact, holder))
+    return [fact]
+
+
+def _django_joined(found: list, state: dict) -> list:
+    """The routes of a list that this file includes under a prefix, with that prefix (one file, as ADR-003 joins)."""
+    prefixes, renamed = state["list_prefix"], {}
+    for fact, holder in state.get("listed", []):
+        if holder in prefixes:
+            renamed[id(fact)] = Fact(fact.kind, "ANY " + _path(_join(prefixes[holder], fact.name.partition(" ")[2])), fact.line, fact.detail)
+    return [(start, renamed.get(id(fact), fact)) for start, fact in found]
 
 
 def _of_os(state: dict, written: str) -> str:
