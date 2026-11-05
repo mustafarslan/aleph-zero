@@ -43,6 +43,7 @@ class Found:
     worker_current: bool = True    # the worker is built from the llama.cpp this Aleph pins
     memory_current: bool = True    # Aeon's core is built from the commit this Aleph pins
     allowed: bool = False      # Claude Code's settings allow the plugin's engine tools: the plugin's look-ups can run
+    allows_reads: bool = False  # the installed plugin (0.1.21 and later) allows its read-only tools itself (allow_reads)
 
 
 @dataclass(frozen=True)
@@ -80,13 +81,15 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
              else "`claude` is on this machine" if found.claude else "`claude` was not found on PATH",
              "", connect, found.claude),
         *([Step("allow", "machine", "Let the plugin's automatic look-ups use Aleph's tools",
-                _state(found.allowed, machine, "allow"),
+                _state(found.allowed or found.allows_reads, machine, "allow"),
                 "allowed in Claude Code's settings" if found.allowed
+                else "the plugin allows its read-only tools itself (its option allow_reads); `remember`, which writes, "
+                     f"is still asked: `{COMMAND} setup --allow-tools` allows it too" if found.allows_reads
                 else "not allowed yet: the plugin's look-ups (where a route or an environment variable you name is handled; "
                      "rungs 2 and 3) and its side chat do nothing until they are",
                 "" if found.allowed else f"adds one rule, \"{TOOLS_RULE}\", to permissions.allow in {claude_settings_file()}; "
                                          "nothing else there is changed",
-                f"{COMMAND} setup --allow-tools", True)] if found.plugin else []),
+                f"{COMMAND} setup --allow-tools", not found.allows_reads)] if found.plugin else []),
         Step("worker", "machine", "The embedding worker and its model (search by meaning)",
              "open" if found.worker and not found.worker_current else _state(found.worker, machine, "worker", wanted),
              f"installed, from an older llama.cpp than this Aleph pins: `{COMMAND} setup --worker` (or `{COMMAND} update`) builds it again"
@@ -222,6 +225,33 @@ def claude_found() -> bool:
     return shutil.which("claude") is not None
 
 
+def plugin_allows_reads() -> bool:
+    """The installed plugin allows its read-only engine tools itself: version 0.1.21 or later, with its option
+    allow_reads not switched off in Claude Code's user settings (the only ones it takes options from; ADR-011)."""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        listed = json.loads((root / "plugins" / "installed_plugins.json").read_text()).get("plugins") or {}
+    except (OSError, ValueError, AttributeError):
+        return False
+    versions = [entry.get("version", "") for name, entries in listed.items() if name.split("@")[0] == "aleph-zero"
+                for entry in (entries if isinstance(entries, list) else [entries]) if isinstance(entry, dict)]
+
+    def numbers(version: str) -> tuple:
+        return tuple(int(part) for part in version.split(".") if part.isdigit())
+
+    if not any(numbers(version) >= (0, 1, 21) for version in versions):
+        return False
+    try:
+        configs = json.loads(claude_settings_file().read_text()).get("pluginConfigs") or {}
+    except (OSError, ValueError, AttributeError):
+        configs = {}
+    for name, config in configs.items():
+        value = ((config or {}).get("options") or {}).get("allow_reads") if name.split("@")[0] == "aleph-zero" else None
+        if value is not None and str(value).strip().lower() in ("off", "0", "false", "no"):
+            return False
+    return True
+
+
 def plugin_installed() -> bool:
     """Claude Code lists the aleph-zero plugin among its installed ones (in any scope). Read from its own file, not
     by running `claude`: this is asked on every setup list and every agent's status."""
@@ -263,6 +293,7 @@ def look(status: dict) -> Found:
 
     return Found(claude=claude_found(), plugin_dir=_plugin_dir(), worker=embed_setup.installed(),
                  plugin=plugin_installed(), memory=memories.aeon_available(), allowed=tools_allowed(),
+                 allows_reads=plugin_allows_reads(),
                  worker_current=embed_setup.current() if embed_setup.installed() else True,
                  memory_current=aeon_setup.current() if aeon_setup.installed() else True,
                  language=status.get("main_language"), verdict=verdict, verdict_why=why,

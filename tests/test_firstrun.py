@@ -223,3 +223,22 @@ def test_installing_the_plugin_runs_claude_code_s_own_two_commands(tmp_path, mon
     monkeypatch.setenv("BROKEN", "1")
     with pytest.raises(firstrun.SettingsError, match="network down"):
         firstrun.install_plugin()
+
+
+def test_a_plugin_that_allows_its_read_only_tools_itself_leaves_nothing_to_allow(tmp_path, monkeypatch):
+    import json
+
+    root = tmp_path / "claude"
+    (root / "plugins").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
+    installed = lambda version: (root / "plugins" / "installed_plugins.json").write_text(json.dumps(  # noqa: E731
+        {"plugins": {"aleph-zero@aleph-zero": [{"scope": "user", "version": version}]}}))
+    installed("0.1.20")
+    assert not firstrun.plugin_allows_reads()                       # before 0.1.21 the plugin allowed nothing itself
+    installed("0.1.21")
+    assert firstrun.plugin_allows_reads()                           # its option allow_reads is on by default
+    (root / "settings.json").write_text(json.dumps({"pluginConfigs": {"aleph-zero@aleph-zero": {"options": {"allow_reads": "off"}}}}))
+    assert not firstrun.plugin_allows_reads()
+    allow = _by_key(firstrun.plan(replace(PYTHON, plugin=True, allows_reads=True), repo={}, machine={}))["allow"]
+    assert allow.state == "done" and not allow.suggested
+    assert "allows its read-only tools itself" in allow.detail and "remember" in allow.detail

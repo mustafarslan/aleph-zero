@@ -21,6 +21,8 @@
   while your user settings give another rung) or CLAUDE.md naming a rung other than the one the plugin runs at.
 - Rung 3 can also help the first locating grep of each turn and subagent (option `grep_assist=first`; not measured).
 - Fixed: the vectors line's poll timing and estimate read `$.clock.now()` as a number; it resolves a promise.
+- `aleph-zero doctor` and `setup` count the tools as allowed when the installed plugin allows its read-only tools
+  itself (0.1.21 and later, `allow_reads` on), instead of listing it as an open step.
 
 ## 0.1.20
 
