@@ -21,9 +21,9 @@ cd path/to/your/project && aleph-zero setup
 
 `aleph-zero setup` asks about each part once, and does it on a yes: installing the Claude Code
 plugin (it runs Claude Code's own `claude plugin marketplace add` and `claude plugin install`),
-letting the plugin use the engine's tools (one rule in `~/.claude/settings.json`), the optional
-embedding worker and memory by meaning (built on this machine), documentation from another
-repository, and git's untracked cache. Then start a new Claude Code session. Everything else has
+the optional embedding worker and memory by meaning (built on this machine), documentation from
+another repository, and git's untracked cache. Then start a new Claude Code session, and set how
+far the plugin steers with `/aleph configure` (see [Steering](#steering-the-rung)). Everything else has
 working defaults; nothing else needs switching on. It needs macOS on Apple Silicon (Linux is
 untested), [uv](https://docs.astral.sh/uv/), git and Claude Code; the optional builds also need
 Xcode's command-line tools.
@@ -83,16 +83,18 @@ memory's text, except the copy Aeon's store keeps when it is used.
 **Linked sources.** Documentation or code from another repository, searched beside your own
 and cited as `name:path`.
 
-**Claude Code plugin.** Starts the engine, loads its tools, and steers the agent to search
-before it greps, in levels you choose: tool descriptions, ranked locations with the first
-prompt and with each subagent's task, and suggestions after a grep that found nothing. Whether steering saves tokens has
-not been shown yet: in measured sessions the agent often still greps first
-([ADR-011](docs/adr/ADR-011-steering.md)). `/aleph stats` counts how often the conversation and
-its subagents located code with Aleph rather than grep, and what came of it; `/aleph stats report`
-writes that up, beside what the with-and-without measurements showed. `/aleph advise` turns the
-figures into suggestions about Aleph's own setup (a rung, search by meaning, git's untracked cache, a rebuild), each
-with the figure behind it and whether its gain was measured; nothing changes until you type `/aleph advise apply N`. `/aleph` opens a side chat about the repository
-whose answers cite `path:line`.
+**Claude Code plugin.** Starts the engine and loads its tools, and:
+
+- steers the agent, and each subagent it starts, to search before it greps, at a level you
+  choose (see [Steering](#steering-the-rung));
+- counts whether Aleph is actually used, by the main conversation and by each kind of subagent
+  (`/aleph stats`), and suggests changes to its own setup from those figures (`/aleph advise`;
+  see [Is it used, and does it help?](#is-it-used-and-does-it-help));
+- opens a side chat about the repository whose answers cite `path:line` (`/aleph`).
+
+Whether steering saves tokens has not been shown yet: in the measured sessions the agent often
+still greps first, and no run has yet measured steered subagents
+([ADR-011](docs/adr/ADR-011-steering.md)).
 
 ## Requirements
 
@@ -139,39 +141,19 @@ whose answers cite `path:line`.
    claude plugin install aleph-zero@aleph-zero
    ```
 
-4. The engine's tools and permission. Since 0.1.21 the plugin allows the engine's read-only tools
-   itself (its `allow_reads` option, on by default; a deny rule you wrote still stands, and
-   `remember`, which writes, is still asked). With `allow_reads` off, Claude Code asks before any
-   of them runs, and the plugin's own look-ups (where a route or an environment variable you name
-   is handled, rungs 2 and 3, the side chat) do nothing until you allow them.
-   `aleph-zero setup` asks it once the plugin is installed; to give it directly:
+4. Start a new Claude Code session in the project and run `/aleph configure` to choose the rung
+   (see [Steering](#steering-the-rung)). `/aleph check` says whether the plugin reaches the engine.
 
-   ```sh
-   aleph-zero setup --allow-tools     # adds "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json
-   ```
+**Permissions.** The plugin allows the engine's read-only tools itself (`search`, `symbol`,
+`outline`, `status`, `facts`, `references`, `decisions`, `recall`) where Claude Code would ask you.
+It writes no setting to do so, and a deny rule you wrote still stands. `remember`, which writes to
+the repository's memory, is still asked. A place that wants every tool allowed by hand sets the
+plugin option `allow_reads` to `off`; the plugin's own look-ups then do nothing until the tools are
+allowed, which `aleph-zero setup --allow-tools` does (it adds `"mcp__plugin_aleph-zero_aleph__*"` to
+`permissions.allow` in `~/.claude/settings.json`), and the plugin says so once a session.
 
-   With `allow_reads` off, the look-ups are on after this one yes, not before it, in every
-   permission mode (auto mode included: the plugin makes no call Claude Code would ask about). Until
-   then they do nothing, the plugin says so once a session, and `/aleph check` says whether the
-   tools are allowed. Nothing else needs switching on: the plugin's options all have working defaults.
-
-The command is `aleph-zero`. It is also installed as `aleph-zero`, but TeX Live installs a program of
+The command is `aleph-zero`. It is also installed as `aleph`, but TeX Live installs a program of
 that name too, so this README and the plugin always use `aleph-zero`.
-
-The plugin installs at rung 1 with the graph tools on (see [Plugin options](#plugin-options)).
-To steer as far as it goes:
-
-```sh
-claude plugin install aleph-zero@aleph-zero --config rung=3
-```
-
-Rungs 2 and 3 and the side chat call the engine from the plugin itself, which Claude Code
-allows only when its tools are allowed. Add this to `~/.claude/settings.json`, merged into
-what is there:
-
-```json
-{ "permissions": { "allow": ["mcp__plugin_aleph-zero_aleph__*"] } }
-```
 
 ### Once per project
 
@@ -194,7 +176,7 @@ aleph-zero status
 - `aleph-zero status` shows the main language, whether vectors are on and why, and the linked
   sources. In Claude Code, `/aleph check` tests the plugin's connection to the engine.
 - In Claude Code, `/aleph configure` opens the same settings in a pane: the plugin's options
-  below, search by meaning and git's untracked cache for this project, linked sources (a
+  below (written to your user settings), search by meaning and git's untracked cache for this project, linked sources (a
   path or URL to link, a digit to unlink), and whether the worker and Aeon are built on this
   machine. A build takes minutes, so for those a key copies the command (`… setup --worker`,
   `… setup --memory`) for you to run in a terminal.
@@ -210,16 +192,37 @@ claude plugin marketplace update aleph-zero
 claude plugin update aleph-zero@aleph-zero
 ```
 
+### Steering: the rung
+
+How far the plugin pushes the agent towards Aleph instead of grep:
+
+| Rung | What it adds |
+|---|---|
+| `0` | The engine's tools, nothing more. |
+| `1` (default) | The search tools loaded up front with tuned descriptions; a short instruction to search before a recursive grep; a pointer in Grep's and Glob's descriptions; and the same instruction after each subagent's task (a subagent never sees the main conversation's instructions). |
+| `2` | Also the files the engine ranks highest, added to the first prompt of a conversation and to each subagent's task, when the engine is sure of them. |
+| `3` | Also ranked locations after a Grep tool search or a recursive `grep`, `rg`, `git grep` or `find` that found nothing. |
+
+None has yet been shown to save tokens or tool calls in measured sessions
+([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive.
+
+**Set it in your user settings**, with `/aleph configure` in Claude Code (or `/plugin`, or
+`claude plugin configure aleph-zero@aleph-zero`). A project's CLAUDE.md cannot set it, and a
+project's `.claude/settings.json` did not either while the user settings gave another rung
+(measured with Claude Code 2.1.318). When either names a rung other than the one the plugin runs
+at, the plugin says so once. In a team, have each person set it, and compare their figures only
+at the same rung.
+
 ### Plugin options
 
-Set at install (`--config KEY=VALUE`), later with `/aleph configure` or `/plugin` in Claude
-Code, or with `claude plugin configure aleph-zero@aleph-zero`. A change reaches the plugin
-at once (Claude Code loads it again with the new value), except `graph`, which the engine
-reads when Claude Code starts it: from the next session.
+Set with `/aleph configure` or `/plugin` in Claude Code, at install (`--config KEY=VALUE`), or
+with `claude plugin configure aleph-zero@aleph-zero`. A change reaches the plugin at once (Claude
+Code loads it again with the new value), except `graph`, which the engine reads when Claude Code
+starts it: from the next session.
 
 | Option | Values | What it does |
 |---|---|---|
-| `rung` | `0`–`3` (default `1`) | How far the plugin steers. `0`: the tools only. `1`: the four search tools loaded up front, a short instruction to search before a recursive grep, and a pointer in Grep's and Glob's descriptions. `2`: also ranked locations with the first prompt of a session. `3`: also ranked locations after a search with Claude Code's Grep tool, or a recursive `grep`, `rg`, `git grep` or `find`, that found nothing. In measured sessions no rung has yet been shown to save tokens or tool calls ([ADR-011](docs/adr/ADR-011-steering.md)); rung 1 is the default as the least intrusive. |
+| `rung` | `0`–`3` (default `1`) | How far the plugin steers (above). |
 | `graph` | `on`/`off` (default `on`) | The knowledge graph and the other graph tools. On: when a prompt or a grep names an HTTP route or an environment variable, the plugin adds where the code handles or reads it; the `facts` tool is shown to the agent in full, and `references` (who calls what) and `decisions` (decision records) are offered on demand. Measured (2026-10-16, sonnet, [ADR-011](docs/adr/ADR-011-steering.md)): on 30 route and environment questions, the agent called `facts` 19 times and read the right file first in 26 of 30, against 24 of 30 with it off (descriptive, not a test), at the same tokens (×0.99, interval through no change); earlier, offered by name only, the graph tools were not called in 56 sessions. On by the owner's decision; `off` leaves the agent the search tools alone. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |
@@ -227,9 +230,49 @@ reads when Claude Code starts it: from the next session.
 | `grep_assist` | `empty`/`first` (default `empty`) | Rung 3: locations after a grep that found nothing, or also beside the first locating grep of each turn and each subagent. `first` is not measured yet. |
 | `allow_reads` | `on`/`off` (default `on`) | The plugin allows the engine's read-only tools itself where Claude Code would ask; a deny rule still stands, and `remember` is still asked. |
 
-Set the rung in your user settings (`/aleph configure` writes it there). A project's CLAUDE.md cannot
-set it, and a project's `.claude/settings.json` did not either while the user settings gave another
-rung (measured with Claude Code 2.1.318); the plugin says so once when either names a different rung.
+### Is it used, and does it help?
+
+`/aleph stats` counts, for the current conversation, the main conversation and each kind of
+subagent apart:
+
+- how often code was located with Aleph (`search`, `symbol`, `facts`, `references`) against a
+  locating grep (a recursive grep, rg, git grep, `find -name` or a Grep tool search of the
+  repository; a grep of one file or of a command's output is not one);
+- in how many turns and subagents Aleph located something first;
+- how many reads went to a file Aleph named or the plugin added, and how often a grep came right
+  after Aleph (its answer was not enough);
+- what the plugin added, calls by feature (retrieval, architecture, memory, side chat), and how the
+  engine answered the plugin's own look-ups.
+
+`/aleph stats last` shows the conversation before, `/aleph stats all` every conversation of the
+session, and `/aleph stats report` writes the full report as Markdown and JSON to
+`.aleph/reports/` in the project (a `.gitignore` there keeps it out of git), with the
+with-and-without measurements quoted beside the counts.
+
+These are counts of **use**. What a session would have cost without Aleph cannot be read from
+one session; only running the same tasks with and without it can show that, and the runs so far
+show no saving either way ([ADR-011](docs/adr/ADR-011-steering.md)). The report says so, and gives
+no "tokens saved" figure.
+
+`/aleph advise` turns the same figures into suggestions about Aleph's own setup, each with the
+figure that triggered it, whether its gain was measured, what applying it does and what it costs:
+
+| Suggests | When |
+|---|---|
+| Rung 2 (or `subagents` on, if off) | At least five subagents and 20 locating calls, under a quarter of them with Aleph |
+| Rung 3 | At least 8 locating greps that found nothing, a fifth of all of them |
+| Search by meaning | Its benchmark says it helps for the project's language, and a grep followed Aleph's answer in a quarter of at least 15 cases (also when you turned it off before, and then it says so) |
+| The embedding worker | Search by meaning would help and the worker is not built |
+| Git's untracked cache | The engine's median answer is over 50 ms on 3,000 files or more |
+| A rebuild | The worker or Aeon is older than this Aleph pins |
+| Memory by meaning | Memory was used at least five times |
+
+Nothing changes until you type `/aleph advise apply N`. It sets a plugin option, runs the
+engine's own setup step for the project, or copies a build's command for a terminal.
+`/aleph advise dismiss N` stops suggesting one. When a suggestion is new you get a notice, and
+the agent is told once that `/aleph advise` has something for you, with no command or setting in
+it. Linked sources, the measurement switches (`grep_pointer`, `lines`, `grep_assist`),
+`allow_reads` and turning anything down are never suggested.
 
 ### Other MCP clients
 
@@ -254,8 +297,13 @@ tool takes the working directory, so one server answers for any worktree.
 - **Fetches, only when asked:** language grammars (the first time a language is read), the
   llama.cpp source and the embedding model (`aleph-zero setup --worker`), and repositories you
   link by URL (`aleph-zero setup --source URL`, `aleph-zero update`).
+- **Reads**, in a Claude Code session: the project's `.claude/settings.json`,
+  `.claude/settings.local.json` and CLAUDE.md, only to compare a rung named there with the one
+  the plugin runs at.
 - **Writes:** see [Where data lives](#where-data-lives). It changes no git configuration;
-  `--untracked-cache` writes git's cache into the worktree's index only.
+  `--untracked-cache` writes git's cache into the worktree's index only. The plugin writes into the
+  project only on `/aleph stats report`, and settings only on your key in `/aleph configure` or
+  your `/aleph advise apply N`.
 
 ## Command line
 
@@ -355,7 +403,8 @@ cache shortens it (vscode 36 → 13 ms); `aleph-zero setup` offers it, or run
 | The index, vectors, settings and memory of a repository | `<git-common-dir>/aleph-zero/`, shared by its worktrees; `~/.cache/aleph-zero/index/` when git's directory cannot be written or is on a network filesystem (`aleph-zero status` says which) |
 | The embedding worker, model and machine-wide answers | `~/.cache/aleph-zero/` (`$XDG_CACHE_HOME` if set) |
 | Clones of sources linked by URL; indexes of directories outside git | `~/.cache/aleph-zero/sources/`, `~/.cache/aleph-zero/index/` |
-| The plugin's session meter and side-chat settings | `~/.claude/plugins/store/aleph-zero_*.json` |
+| The plugin's meter (the latest and the previous conversation), dismissed suggestions and side-chat settings | `~/.claude/plugins/store/aleph-zero_*.json` |
+| Reports written by `/aleph stats report` | `.aleph/reports/` in the project, kept out of git by `.aleph/.gitignore` |
 | Language grammars | `tree-sitter-language-pack`'s cache (`~/Library/Caches/` on macOS, `~/.cache/` on Linux) |
 
 The index, vectors and facts are caches: deleting them is safe, they are rebuilt as
@@ -384,7 +433,7 @@ claude plugin uninstall aleph-zero@aleph-zero
 claude plugin marketplace remove aleph-zero
 claude mcp remove aleph-zero                          # only if you added the server without the plugin
 aleph-zero embed stop                                 # stop the embedding worker, if running
-uv tool uninstall aleph-zero                          # removes both `aleph-zero` and `aleph-zero`
+uv tool uninstall aleph-zero                          # removes both `aleph-zero` and `aleph`
 ```
 
 Then remove what it kept:
@@ -395,10 +444,12 @@ rm -rf "/tmp/aleph-zero-$(id -u)"                     # worker sockets, where a 
 rm -f ~/.claude/plugins/store/aleph-zero_*.json       # the plugin's meter and side-chat settings
 rm -rf ~/.claude/plugins/cache/aleph-zero             # the plugin's copies, which Claude Code keeps after an uninstall
 rm -rf "$(git rev-parse --git-common-dir)/aleph-zero" # in each project: its index, vectors, memories, settings
+rm -rf .aleph                                         # in each project where you wrote a stats report
 git update-index --no-untracked-cache                 # optional, in each worktree where setup turned it on
 ```
 
-Also remove the `permissions.allow` entry from your Claude Code settings, and any lines you
+Also remove the `permissions.allow` entry from your Claude Code settings if you added one, the plugin's
+options (`pluginConfigs`) there, and any lines you
 added from `aleph-zero update --print-hook` (git hooks, cron or launchd). The grammar cache
 (`tree-sitter-language-pack`) is shared with other tools; delete it only if nothing else
 uses it.
