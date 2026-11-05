@@ -241,7 +241,7 @@ export function summary(rung, meter) {
   const p95 = percentile(engine.ms, 0.95)
   const rungs = meter.rungs.length > 1 ? meter.rungs.join(' → ') : String(rung)
   const lines = [
-    'aleph-zero · rung ' + rungs + ' · ' + meter.turns + ' turns · ' + subagents.runs + ' subagents',
+    'aleph-zero · rung ' + rungs + ' · ' + meter.turns + ' turns · ' + subagents.runs + ' subagent runs',
     'locating code with Aleph instead of grep: main ' + adoption(main) + ' (' + main.locate.aleph + ' of ' + (main.locate.aleph + main.locate.grep)
       + ') · subagents ' + adoption(subagents) + ' (' + subagents.locate.aleph + ' of ' + (subagents.locate.aleph + subagents.locate.grep) + ')',
     'Aleph located first: main ' + firstRate(main) + ' of turns that located code · subagents ' + firstRate(subagents) + ' of subagents that did',
@@ -294,7 +294,7 @@ export function reportMarkdown(rung, meter, about = {}) {
   out.push('- Repository: ' + (about.repository || 'n/a') + '  ')
   out.push('- Written: ' + (about.written || 'n/a') + ' · plugin ' + (about.version || 'n/a') + ' · rung '
     + (meter.rungs.length > 1 ? meter.rungs.join(' → ') : rung) + '  ')
-  out.push('- ' + meter.turns + ' main turns, ' + subagents.runs + ' subagents')
+  out.push('- ' + meter.turns + ' main turns, ' + subagents.runs + ' subagent runs')
   out.push('')
   out.push('## What this shows, and what it does not')
   out.push('')

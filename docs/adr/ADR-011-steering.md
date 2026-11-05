@@ -270,6 +270,17 @@ The run above showed the graph tools only by name. On the owner's ask ("activate
 
 **Views on this pass, kept apart.** *agy (no boost):* ranked the causes as subagent blindness first, passive rung-1 steering second, the config gap third, the late look-ups fourth, the meter fifth. It proposed the spawn rewrite appended at the end, never denying a grep, a `tool.check` self-allow, a read mode that skips sync, the `handed` loop fix, and dropping any "tokens saved" estimate. It also proposed a registered `aleph-zero:explore` agent with the engine's tools, which is not built: the spawn note and rung 3 reach every agent type without a new one. Its claim that a late flag follows every edit was checked: true while sync runs out of its share of the limit, not after every edit. *Mine:* agy's order, with the rung finding measured rather than assumed. The project settings did not take effect while the user's rung differed; whether they would with no user value set was not tested, so as not to change the owner's own settings.
 
+**agy's review of the built change (no boost), checked one by one.** Adopted:
+- Every hook now awaits the same read-back of the kept state, so one that arrives during it cannot save a zeroed meter.
+- A main turn that called no tool is counted as a turn.
+- `stats last` no longer showed the current conversation, and `session.end` keeps its ended runs.
+- Paths are read from the engine's text answers as an agent gets them (facts and references name them mid-line, outline in its head line).
+- The facts the mod hands over count as added files.
+- A look-up that found nothing while files wait is asked once more.
+
+Not adopted: answering "late" with nothing whenever the read finishes after the limit with `stale_ok`. The read is
+interrupted by its own deadline, and one that finishes just past it is a real answer; the mod's 450 ms race bounds the wait.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

@@ -45,7 +45,7 @@ test('rung 1: a subagent\'s task gets the note after its brief, and its tool cal
   await $.tool.call({ tool: SEARCH, query: 'rotation', agentId: 'agent-1' } as any)
   await $.turn.complete({ turnId: 's', answer: 'done', durationMs: 5, isAborted: false, usage: null, agentId: 'agent-1' } as any)
   const text = (await $.command.run({ command: 'aleph', args: 'stats' })).text
-  expect(text).toContain('1 subagents')
+  expect(text).toContain('1 subagent runs')
   expect(text).toContain('subagents 50% (1 of 2)')
   expect(text).toContain('subagents 0% of subagents that did')          // it grepped first
   expect(text).toContain('to 1 subagent tasks (0 with locations)')
@@ -227,4 +227,26 @@ test('the engine\'s answer times are read from the clock Claude Code resolves', 
   await clock.advance(200)
   await pending
   expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('p50 120 ms')
+})
+
+test('a look-up that found nothing while files wait to be indexed is asked once more', options({ rung: '1' }), async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  let calls = 0
+  on('mcp.call', () => {
+    calls += 1
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ kind: '', like: 'DB_URL', facts: [], late: false, pending: 4, unread: 0 }) }] } }
+  })
+  on('tool.call', () => grep([]))
+  for (let index = 0; index < 4; index += 1) await $.tool.call({ tool: 'Grep', pattern: 'DB_URL' })
+  expect(calls).toBe(2)
+})
+
+test('a main turn that called no tool is counted as a turn that located nothing', options({ rung: '1' }), async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  on('store.set', () => ({ value: undefined }))
+  on('store.get', () => ({ value: undefined }))
+  await $.turn.complete({ turnId: 't', answer: 'hello', durationMs: 5, isAborted: false, usage: null })
+  const report = (await $.command.run({ command: 'aleph', args: 'stats' })).text
+  expect(report).toContain('rung 1 · 1 turns')
 })

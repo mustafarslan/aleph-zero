@@ -48,6 +48,12 @@ test('the files an engine answer names, as JSON or as text', async () => {
   expect(pathsIn(text(JSON.stringify({ symbols: [{ path: 'c.go' }] })))).toEqual(['c.go'])
   expect(pathsIn(text('src/auth/token.py:4-6  function  refresh\n  def refresh()\nlib/x.ts:9  class  X'))).toEqual(['src/auth/token.py', 'lib/x.ts'])
   expect(pathsIn(null)).toEqual([])
+  // As the engine prints them for an agent (text, its default): facts and references name the place mid-line, outline in its head.
+  expect(pathsIn(text('ALEPH_AEON_LIB  src/aleph_zero/memory.py:289  read\nnote: more match than are listed'))).toEqual(['src/aleph_zero/memory.py'])
+  expect(pathsIn(text('plugin/hooks/meter.js  javascript  389 lines\n  9  constant  export const X = 2'))).toEqual(['plugin/hooks/meter.js'])
+  expect(pathsIn(text('plugin/hooks/meter.js:102  function  recordCall\ncallers: 1 certain\n  plugin/hooks/register.js:1065  in register\n'
+    + 'callees: 1\n  plugin/hooks/meter.js:105  loopOf()  ->  plugin/hooks/logic.js:72  loopOf'))).toEqual(
+    ['plugin/hooks/meter.js', 'plugin/hooks/register.js', 'plugin/hooks/logic.js'])
   expect(relativePath('/repo/src/a.py', CWD)).toBe('src/a.py')
   expect(relativePath('./src/a.py', CWD)).toBe('src/a.py')
 })

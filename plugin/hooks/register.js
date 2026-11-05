@@ -43,11 +43,16 @@ const askedLate = new Set()   // names whose look-up came back late once: the ne
 // The session's meter, rung 2's one chance and the side chat's conversation, kept in $.state: a changed option loads the
 // mod again (its module state starts over), and what it had counted and said would be gone. Read back once a load.
 const SESSION_STATE = { plugin: 'aleph-zero', key: 'session' }
-let restored = false
+let restored = null
 
-async function restore($) {
-  if (restored) return
-  restored = true
+// Every hook awaits the same reading: one that arrives while it is in flight must not count on a zeroed meter, or save
+// one over what was kept (agy's review, 2026-11-05).
+function restore($) {
+  if (!restored) restored = readBack($)
+  return restored
+}
+
+async function readBack($) {
   try {
     const { value } = await $.state.get(SESSION_STATE)
     if (!value || typeof value !== 'object') return
@@ -175,20 +180,29 @@ function notAllowed($, error) {
 // only while the graph tools are on. Each name once a session, so a text that names nothing new costs no call
 // (DEFERRED 0-graph, part 4).
 // A prompt also by its words (`words`): the routes whose words it shares, when it names none (DEFERRED 0-graph part 13).
-async function lookUp($, text, words = false) {
+async function lookUp($, text, words = false, agentId = undefined) {
   const fresh = mayName(text).filter((name) => !handed.includes(name))
   if (!fresh.length && !words) return ''
   const answer = await ask($, 'facts', { mentioned: String(text).slice(0, 4000), k: 20, ...(words ? { words: true } : {}) })
   const note = answer ? factsNote(answer, handed) : ''
   const late = !answer || /"late": ?true/.test(resultText(answer))
+  // Nothing found while files still wait to be indexed or read: the name may be in one of them, so it is asked again too.
+  const waiting = Boolean(answer && !note && /"(pending|unread)": ?[1-9]/.test(resultText(answer)))
   if (answer) {
     // A late answer is asked once more, not on every grep that names the same thing (measured 2026-11-05: 110 look-ups
     // of one session counted late, mostly the same names asked again).
-    const again = late ? fresh.filter((name) => !askedLate.has(name)) : []
+    const again = late || waiting ? fresh.filter((name) => !askedLate.has(name)) : []
     for (const name of again) askedLate.add(name)
     handed = [...new Set([...handed, ...fresh.filter((name) => !again.includes(name)), ...factsNamed(answer)])].slice(-200)
   }
-  if (note) meter.added.facts = (meter.added.facts || 0) + 1
+  if (note) {
+    meter.added.facts = (meter.added.facts || 0) + 1
+    try {
+      recordAdded(runFor(agentId), pathsIn(answer))
+    } catch {
+      // the meter is best effort
+    }
+  }
   if (late) meter.added.factsLate = (meter.added.factsLate || 0) + 1  // counted, not told (part 9)
   return note
 }
@@ -586,7 +600,8 @@ export function register(on, options) {
     }
     if (args === 'stats last') {
       // The conversation before this one (any session on this machine): a headless run cannot be asked afterwards.
-      const kept = (await $.store.get(PREVIOUS)) || (await $.store.get(LAST))
+      // Before this conversation's first turn, the latest one kept is the one before; after it, the copy made then.
+      const kept = await $.store.get(meter.turns === 0 ? LAST : PREVIOUS)
       return { text: kept ? 'the conversation before · ' + summary(kept.rung, normalize(kept.meter)) : 'no conversation has been recorded yet' }
     }
     if (args === 'stats all') {
@@ -1032,7 +1047,8 @@ export function register(on, options) {
   on('turn.complete', async ($, e, next) => {
     await restore($)
     const key = e.agentId || 'main'
-    const run = runs.get(key)
+    // A main turn that called no tool is still a turn that located nothing; a subagent's turn is counted only if it ran.
+    const run = e.agentId ? runs.get(key) : runFor(null)
     if (run) {
       endRun(meter, run)
       runs.delete(key)
@@ -1167,7 +1183,7 @@ export function register(on, options) {
     for (const run of runs.values()) endRun(meter, run)
     runs.clear()
     if (meter.turns > 0) {
-      await $.store.set(PREVIOUS, { rung, meter })
+      await $.store.set(LAST, { rung, meter }).catch(() => null)   // with its open runs ended; the next first turn copies it
       allTime = combine(allTime, meter)
     }
     meter = createMeter()
@@ -1183,7 +1199,7 @@ export function register(on, options) {
     if (graph && readSearch(e.command)) {
       // A recursive grep for a route or an environment name, whatever it found: where the code states it, once a session.
       await restore($)
-      const note = await lookUp($, e.command)
+      const note = await lookUp($, e.command, false, e.agentId)
       if (note) result = { ...result, context: [...(result.context ?? []), note] }
     }
     if (rung < 3) return result
@@ -1214,7 +1230,7 @@ export function register(on, options) {
     if (rung < 1) return result
     if (graph && readGrepTool(e, await cwdOf($))) {
       await restore($)
-      const note = await lookUp($, String(e.pattern || ''))
+      const note = await lookUp($, String(e.pattern || ''), false, e.agentId)
       if (note) result = { ...result, context: [...(result.context ?? []), note] }
     }
     if (rung < 3) return result

@@ -8,6 +8,7 @@ const engine = (hits: unknown[]) => ({ value: { content: [{ type: 'text', text: 
 // A Bash result as Claude Code gives it: a search that matched nothing says so in returnCodeInterpretation.
 const bash = (stdout: string) => ({ ref: 1, result: { stdout, stderr: '', interrupted: false, returnCodeInterpretation: stdout ? 'Success' : 'No matches found' }, text: stdout || '(Bash completed with no output)' })
 const rung = (value: string) => ({ options: { rung: value } })
+const usage0 = () => ({ requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 // Claude Code's answer when the mod connects to its own server: the full name to call it by.
 const FULL_NAME = 'plugin:aleph-zero:aleph'
 const connected = (on: any) => on('mcp.connect', () => ({ value: { isConnected: true, server: FULL_NAME } }))
@@ -241,6 +242,8 @@ test('the meter adds up requests, keeps subagents apart, and knows which search 
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: 'ok' }))
   const saved = new Map<string, any>()
+  // A conversation kept from before this one: `stats last` shows it, not this one.
+  saved.set('aleph-zero.last-session', { rung: 3, meter: { turns: 7, main: usage0(), subagents: usage0(), tools: {}, aleph: 2, grep: 9, added: {} } })
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
     return { value: undefined }
@@ -267,7 +270,7 @@ test('the meter adds up requests, keeps subagents apart, and knows which search 
   expect(saved.get('aleph-zero.last-session').meter.aleph).toBe(1)
   expect(saved.get('aleph-zero.last-session').meter.grep).toBe(1)
   const last = (await $.command.run({ command: 'aleph', args: 'stats last' })).text
-  expect(last).toContain('the conversation before · aleph-zero · rung 1 · 1 turns')
+  expect(last).toContain('the conversation before · aleph-zero · rung 3 · 7 turns')
 })
 
 // ---- L1 ------------------------------------------------------------------------------------------

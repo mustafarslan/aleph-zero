@@ -462,7 +462,11 @@ export function pathsIn(answer) {
     // text: a location starts a line, `path:12` or `path:12-30`
   }
   const found = []
-  for (const match of text.matchAll(/^\s*(?:- )?([^\s:'"`]+\.[A-Za-z0-9]{1,8}):\d+/gm)) found.push(match[1])
+  // outline's first line: `path  language  N lines`
+  const head = /^(\S+\.[A-Za-z0-9]{1,8}) {2}\S+ {2}\d+ lines$/m.exec(text)
+  if (head) found.push(head[1])
+  // a location anywhere on a line: search's and symbol's first, facts' and references' in the middle (`->  path:12`)
+  for (const match of text.matchAll(/(?:^|\s)([^\s:'"`(]+\.[A-Za-z0-9]{1,8}):\d+/gm)) found.push(match[1])
   return [...new Set(found)]
 }
 
