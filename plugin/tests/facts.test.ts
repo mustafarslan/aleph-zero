@@ -72,7 +72,7 @@ test('at the default rung, every prompt that names something new gets its facts;
   expect(JSON.stringify(asked[0])).toContain('"timeout_ms":400')
   expect(sent[0].context[0]).toContain('handler defined at api/client.go:216')
   expect(sent[1].context).toBeUndefined()
-  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('facts added 1 times')
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('facts 1 times')
 })
 
 test('after /clear the next conversation gets the facts again', { options: { rung: '1' } }, async ($, on) => {
@@ -172,7 +172,7 @@ test('an engine that never answers the look-up does not hold the prompt', { opti
   await clock.advance(500)
   await pending
   expect(sent[0].context).toBeUndefined()
-  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('(1 look-ups too late)')
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('timed out 1')
 })
 
 test('when the engine\'s tools are not allowed, the person is told once what to add', { options: { rung: '1' } }, async ($, on) => {
@@ -189,10 +189,10 @@ test('when the engine\'s tools are not allowed, the person is told once what to 
   await $.prompt.submit({ text: 'and REDIS_URL too' })
   expect(toasts.length).toBe(1)
   expect(toasts[0]).toContain('permissions.allow')
-  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('not allowed yet')
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toContain('refused 2: not allowed')
 })
 
-test('a tool the person has not allowed is not called, so no permission dialog opens; they are told once', { options: { rung: '1' } }, async ($, on) => {
+test('a tool the person has not allowed is not called, so no permission dialog opens; they are told once', { options: { rung: '1', allow_reads: 'off' } }, async ($, on) => {
   mock.clock(on)
   connected(on)
   let decision = 'ask'
@@ -221,4 +221,34 @@ test('a tool the person has not allowed is not called, so no permission dialog o
   await $.prompt.submit({ text: 'and PORT_NUMBER is not read at start' })
   expect(asked.length).toBe(1)
   expect(sent[2].context[0]).toContain('- DB_URL: read at config/db.go:2')
+})
+
+test('the mod allows its own read-only tools where the person would be asked; a deny they wrote still stands', { options: { rung: '1' } }, async ($, on) => {
+  mock.clock(on)
+  connected(on)
+  let decision = 'ask'
+  on('tool.check', () => ({ decision }))
+  const asked: any[] = []
+  on('mcp.call', ($, e) => {
+    asked.push(e)
+    return reply(FOUND)
+  })
+  const sent: any[] = []
+  on('prompt.submit', ($, e) => {
+    sent.push(e)
+    return { text: e.text }
+  })
+  const check = (tool: string) => $.tool.check({ tool: 'mcp__plugin_aleph-zero_aleph__' + tool, input: {} })
+  expect((await check('search')).decision).toBe('allow')
+  expect((await check('facts')).decision).toBe('allow')
+  expect((await check('recall')).decision).toBe('allow')
+  expect((await check('remember')).decision).toBe('ask')                // it writes: left to the person
+  await $.prompt.submit({ text: 'the server ignores DB_URL when it starts up' })
+  expect(asked.length).toBe(1)
+  expect(JSON.stringify(asked[0])).toContain('"stale_ok":true')         // a hint, from what is indexed
+  expect(sent[0].context[0]).toContain('- DB_URL: read at config/db.go:2')
+  decision = 'deny'
+  expect((await check('search')).decision).toBe('deny')
+  await $.prompt.submit({ text: 'and REDIS_URL is not read either' })
+  expect(asked.length).toBe(1)
 })

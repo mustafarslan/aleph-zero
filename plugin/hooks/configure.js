@@ -15,6 +15,9 @@ export const OPTIONS = [
   { key: 'grep_pointer', hotkey: 'p', label: 'pointer', values: ['on', 'off'], default: 'on', advanced: true },
   { key: 'lines', hotkey: 'l', label: 'rung-2 lines', values: ['places', 'signatures'], default: 'places', advanced: true },
   { key: 'graph', hotkey: 'g', label: 'graph tools', values: ['on', 'off'], default: 'on' },
+  { key: 'subagents', hotkey: 'b', label: 'subagents', values: ['on', 'off'], default: 'on' },
+  { key: 'grep_assist', hotkey: 'f', label: 'rung-3 greps', values: ['empty', 'first'], default: 'empty', advanced: true },
+  { key: 'allow_reads', hotkey: 'r', label: 'allow reads', values: ['on', 'off'], default: 'on', advanced: true },
 ]
 
 // Short enough for one row of the pane beside the label and the value.
@@ -22,12 +25,15 @@ const MEANING = {
   rung: {
     0: 'the search tools only',
     1: 'tools up front, a rule, a pointer',
-    2: '+ locations with the first prompt',
+    2: '+ locations with first prompt and tasks',
     3: '+ locations after an empty search',
   },
   grep_pointer: { on: 'Grep and Glob point to search', off: 'Grep and Glob as they are' },
   lines: { places: 'rung 2 lists each file\'s places', signatures: '+ each file\'s first signature' },
   graph: { off: 'not offered', on: 'routes and variables looked up for you' },
+  subagents: { on: 'their tasks get the rule (and rung 2 locations)', off: 'their tasks as written' },
+  grep_assist: { empty: 'after a search that found nothing', first: '+ beside each run\'s first grep' },
+  allow_reads: { on: 'its read-only tools need no permission', off: 'each tool allowed by hand' },
 }
 
 // An option's value as the mod was loaded with it; anything else is the manifest's default.
@@ -108,11 +114,14 @@ const VALUES = {
   rung: [
     ['0', 'the search tools only'],
     ['1', 'tools up front, one standing rule, a Grep pointer'],
-    ['2', 'adds locations to a session\'s first prompt'],
+    ['2', 'adds locations to a session\'s first prompt and to each subagent\'s task'],
     ['3', 'adds locations after a search that found nothing'],
   ],
   grep_pointer: [['on', 'one sentence in Grep\'s and Glob\'s descriptions points to `search`'], ['off', 'Grep and Glob as Claude Code has them']],
   lines: [['places', 'each file with its line ranges'], ['signatures', 'also each file\'s first signature']],
+  subagents: [['on', 'the default: each subagent\'s task gets one paragraph after its brief saying to locate code with `search` before a recursive grep, and from rung 2 the locations the engine ranks highest for the task'], ['off', 'subagents\' tasks as the agent wrote them']],
+  grep_assist: [['empty', 'the default: locations only after a grep that found nothing'], ['first', 'also beside the first locating grep of each turn and each subagent, once (not measured yet)']],
+  allow_reads: [['on', 'the default: search, symbol, outline, status, facts, references, decisions and recall run without a permission dialog; a deny in your settings still stands, and remember (it writes) is still asked'], ['off', 'every engine tool needs your permission, as for any MCP server']],
   graph: [['on', 'the default: nothing to activate. Routes and environment variables a prompt or a grep names (or a prompt\'s words point to) are looked up and given to the agent; `facts` shown in full, `references` and `decisions` on demand'], ['off', 'the search tools alone; nothing is looked up']],
 }
 
@@ -120,6 +129,9 @@ const OPTION_HELP = {
   rung: { text: 'How far the plugin steers Claude Code towards Aleph\'s search before it reaches for a recursive grep.', applies: 'Applies at once.', note: ['No rung has yet been shown to save tokens or tool calls (ADR-011).', 'warning'] },
   grep_pointer: { text: 'A pointer in the descriptions of Claude Code\'s own **Grep** and **Glob** tools, part of rung 1. Kept as a switch so a measurement can tell it from the rest of the rung; leave it on.', applies: 'Applies at once.' },
   lines: { text: 'What rung 2 shows for each file it adds to a session\'s first prompt; used at rung 2 and above only. Kept for measuring; `places` is what was measured.', applies: 'Applies at once.' },
+  subagents: { text: 'Subagents get their own task as their prompt, so rung 1\'s rule never reached them: in one long session they made 86% of the requests and located code with grep almost every time. With this on, the mod adds the rule, and from rung 2 ranked locations, after each subagent\'s brief. Forks, resumed runs and workflow agents are left alone.', applies: 'Applies at once.', note: ['Not measured yet: whether it saves tokens is for an A/B run (ADR-011).', 'warning'] },
+  grep_assist: { text: 'What rung 3 adds to a grep: locations after one that found nothing, or also beside the first locating grep of each turn and each subagent. Used at rung 3 only.', applies: 'Applies at once.', note: ['`first` is not measured yet.', 'warning'] },
+  allow_reads: { text: 'Whether the mod allows Aleph\'s own read-only tools by itself. Without it, its look-ups and an agent\'s first search wait on a permission you would give anyway. Your own deny rules still win.', applies: 'Applies at once.' },
   graph: { text: 'When a prompt or a grep names a route or an environment variable, or a prompt\'s words point to a route, the agent is given where the code handles it (`facts`). Also `references` (who calls what) and `decisions`.', applies: 'From the next session. Needs the engine\'s tools allowed: `aleph-zero setup --allow-tools`.', note: ['Measured: `facts` was used and the right file read first more often, at the same tokens (ADR-011).', 'subtle'] },
 }
 

@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench" / "ab"))
 import run as ab  # noqa: E402
 
@@ -305,7 +307,14 @@ def test_what_the_mod_counted_for_a_session_is_read_from_its_store(tmp_path):
     store = tmp_path / "aleph-zero_inline-abc.json"
     store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 2, "meter": {"turns": 1, "aleph": 0, "added": {"prompt": 1, "grep": 0}}}}))
     assert ab.mod_meter(tmp_path) == {"rung": 2, "added_to_prompt": 1, "added_to_grep": 0, "added_facts": 0, "facts_late": 0, "aleph_calls": 0,
-                                     "listed": []}
+                                     "listed": [], "added_to_spawn": 0, "spawn_locations": 0, "added_first_grep": 0, "located": {},
+                                     "engine": {}}
+    # The meter of 0.1.21: what was added to subagents' tasks, and how each loop located code.
+    store.write_text(json.dumps({"aleph-zero.last-session": {"rung": 1, "meter": {
+        "turns": 1, "aleph": 1, "added": {"prompt": 0, "grep": 0, "spawn": 2, "spawnLocations": 1},
+        "loops": {"Explore": {"locate": {"aleph": 3, "grep": 1}}}, "engine": {"asked": 2, "ms": [5, 9]}}}}))
+    read = ab.mod_meter(tmp_path)
+    assert read["added_to_spawn"] == 2 and read["located"] == {"Explore": {"aleph": 3, "grep": 1}} and read["engine"] == {"asked": 2}
     store.write_text("not json")
     assert ab.mod_meter(tmp_path) is None and ab.mod_meter(tmp_path / "nowhere") is None      # no store, or not readable: nothing known
 
@@ -473,3 +482,24 @@ def test_an_arm_can_leave_the_graph_tools_out():
 
     assert options(ab.command("L1o", "sonnet", 1.0, "q")) == {"rung": "1", "graph": "off"}
     assert options(ab.command("L1", "sonnet", 1.0, "q")) == {"rung": "1"}
+
+
+def test_the_arms_for_subagents_and_the_task_form_that_uses_them():
+    # Rung 1 as it ships (the note in subagents' tasks) against rung 1 without it, and rung 3 with grep_assist first.
+    without = ab.command("L1x", "haiku", 1.0, "q")
+    assert json.loads(without[without.index("--settings") + 1])["pluginConfigs"]["aleph-zero@inline"]["options"] == {
+        "rung": "1", "subagents": "off"}
+    first = ab.command("L3f", "haiku", 1.0, "q")
+    assert json.loads(first[first.index("--settings") + 1])["pluginConfigs"]["aleph-zero@inline"]["options"] == {
+        "rung": "3", "grep_assist": "first"}
+    # The delegating form: the agent is told to search through an Explore subagent, and may start one; both arms alike.
+    plain = ab.command("none", "haiku", 1.0, "q", delegate=True)
+    steered = ab.command("L1", "haiku", 1.0, "q", delegate=True)
+    assert "Agent" in plain and "Agent" in steered and "Agent" not in ab.command("none", "haiku", 1.0, "q")
+    assert "Explore" in ab.DELEGATE and ab.DELEGATE not in ab.QUESTION
+
+
+def test_records_of_the_two_task_forms_are_not_read_together():
+    records = [{**_row("t1", "none", 1000, 10, True), "delegate": True}, _row("t1", "L1", 900, 5, True)]
+    with pytest.raises(ValueError, match="task form"):
+        ab.report(records, "none")

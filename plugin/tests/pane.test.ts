@@ -60,7 +60,7 @@ test('/aleph opens the pane and prints nothing; stats still prints', async ($, o
   expect(await $.command.run({ command: 'aleph', args: '' })).toEqual({})
   expect(seen.opened.length).toBe(1)
   expect(JSON.stringify(seen.opened[0])).toContain('aleph-chat')
-  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toMatch(/^rung 1 /)
+  expect((await $.command.run({ command: 'aleph', args: 'stats' })).text).toMatch(/^aleph-zero · rung 1 /)
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {

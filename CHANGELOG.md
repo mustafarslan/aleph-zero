@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.21
+
+- **Subagents are steered too.** A subagent is given only its task, so the instruction to search before grepping never
+  reached it, and in one long session subagents made 86% of the requests. Each subagent's task now ends with that
+  instruction, and from rung 2 with the files the engine ranks highest for it (option `subagents`, on). The brief
+  itself is not changed; forks, resumed runs and workflow agents are left alone. Not measured yet (DEFERRED 0-sub).
+- **`/aleph stats` says whether Aleph is used, and by whom.** The main conversation and each subagent type apart:
+  locating with Aleph against locating with grep, what located code first in each turn and subagent, reads of a
+  file Aleph named, a grep right after Aleph, calls by feature, and how the engine answered. `stats last`, `stats all`,
+  and `stats report`, which writes Markdown and JSON to `.aleph/reports/` with the with-and-without measurements
+  quoted beside the counts. It counts use; it claims no saving.
+- **The read-only tools need no permission dialog** (option `allow_reads`, on): the plugin allows search, symbol,
+  outline, status, facts, references, decisions and recall itself where Claude Code would ask. A deny you wrote
+  still stands, and `remember` is still asked.
+- **Look-ups no longer come back "too late" while the index catches up with your edits:** the plugin's own look-ups
+  are answered from what is indexed within their time (engine `stale_ok`), and a late name is asked once more,
+  not on every grep.
+- **The rung set in the wrong place is pointed out:** a project's `.claude/settings.json` (measured: not applied
+  while your user settings give another rung) or CLAUDE.md naming a rung other than the one the plugin runs at.
+- Rung 3 can also help the first locating grep of each turn and subagent (option `grep_assist=first`; not measured).
+- Fixed: the vectors line's poll timing and estimate read `$.clock.now()` as a number; it resolves a promise.
+
 ## 0.1.20
 
 - **The embedding worker is built from a newer llama.cpp, with no patch of Aleph's own** (`b76b133`, your decision on

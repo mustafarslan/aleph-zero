@@ -42,7 +42,7 @@ def stateless_enabled() -> bool:
     `initialize` on the wire (2.1.296, 2026-10-13). Switched off, the server says "method not found" to that first
     question and the client falls back to the handshake, as every session did before."""
     return os.environ.get("ALEPH_MCP_STATELESS", "") != "0"
-SERVER_INFO = {"name": "aleph-zero", "version": "0.1.20"}
+SERVER_INFO = {"name": "aleph-zero", "version": "0.1.21"}
 
 INSTRUCTIONS = """\
 Aleph Zero is a local index of this repository's code and documentation. It always \
@@ -512,8 +512,13 @@ def _call(engine: Engine, name: str, arguments: dict) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": False}
 
 
+# Arguments only the plugin's own look-ups send, kept out of the schemas every agent reads (engine.facts: stale_ok).
+_HOOK_ONLY = {"search": {"stale_ok": {"type": "boolean"}}, "facts": {"stale_ok": {"type": "boolean"}}}
+
+
 def _checked(name: str, arguments) -> dict:
     schema = _SCHEMAS[name]
+    properties = {**schema["properties"], **_HOOK_ONLY.get(name, {})}
     if arguments is None:
         arguments = {}
     if not isinstance(arguments, dict):
@@ -523,7 +528,7 @@ def _checked(name: str, arguments) -> dict:
             raise _BadArguments(f"missing required argument: {required}")
     checked = {}
     for key, value in arguments.items():
-        spec = schema["properties"].get(key)
+        spec = properties.get(key)
         if spec is None or value is None:
             continue  # an argument we do not know is ignored, not an error
         expected = _JSON_TYPES[spec["type"]]
@@ -569,7 +574,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
     if name == "search":
         answer = engine.search(args["query"], k=args.get("k", 8), kind=args.get("kind", "any"),
                                path_glob=args.get("path_glob"), lang=args.get("lang"), cwd=cwd,
-                               timeout_ms=args.get("timeout_ms"))
+                               timeout_ms=args.get("timeout_ms"), stale_ok=bool(args.get("stale_ok")))
         if as_json:
             return json.dumps(render.as_json(answer))
         return engine.render(answer, detail=args.get("detail", "snippets"))
@@ -589,6 +594,7 @@ def _run(engine: Engine, name: str, args: dict) -> str:
     if name == "facts":
         found = engine.facts(args.get("kind"), like=args.get("like"), k=args.get("k", 200), cwd=cwd,
                              timeout_ms=args.get("timeout_ms"), mentioned=args.get("mentioned"), words=bool(args.get("words")),
+                             stale_ok=bool(args.get("stale_ok")),
                              prepare_seconds=None if args.get("timeout_ms") else GRAPH_SECONDS)
         return json.dumps(asdict(found)) if as_json else archfacts.text(found)
     if name == "references":

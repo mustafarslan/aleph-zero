@@ -125,7 +125,7 @@ test('a question typed as an argument is not answered with the stats report', as
     expect(text).not.toContain('rung ')
     expect(text).not.toContain('engine')
   }
-  expect((await $.command.run({ command: 'aleph', args: 'stats last' })).text).toContain('no session has been recorded yet')
+  expect((await $.command.run({ command: 'aleph', args: 'stats last' })).text).toContain('no conversation has been recorded yet')
 })
 
 test('where no pane can be placed, the command says so', async ($, on) => {

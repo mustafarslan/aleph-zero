@@ -16,7 +16,7 @@ const COMPOSE = { model: 'm', promptModel: 'm', tools: ['Bash'], outputStyle: nu
 
 test('options reach the mod: the command reports the rung', rung('3'), async ($) => {
   const answer = await $.command.run({ command: 'aleph', args: 'stats' })
-  expect(answer.text).toMatch(/^rung 3 /)
+  expect(answer.text).toMatch(/^aleph-zero · rung 3 /)
 })
 
 // ---- L3 ------------------------------------------------------------------------------------------
@@ -258,15 +258,16 @@ test('the meter adds up requests, keeps subagents apart, and knows which search 
   await drain($.turn.step({ turnId: 's', index: 0, model: 'm', messageCount: 1, agentId: 'agent-1' }))
   await $.turn.complete({ turnId: 't', answer: 'done', durationMs: 5, isAborted: false, usage: null })
   const text = (await $.command.run({ command: 'aleph', args: 'stats' })).text
-  expect(text).toContain('turns 1')
-  expect(text).toContain('tokens 740 (740 a turn; input 20, output 40, cache read 600, cache write 80) in 2 requests')
-  expect(text).toContain('subagents 370 tokens in 1 requests')
-  expect(text).toContain('aleph calls 1 · grep calls 1')
-  expect(text).toContain('first to be used: aleph')
+  expect(text).toContain('rung 1 · 1 turns')
+  expect(text).toContain('tokens: main 740 in 2 requests · subagents 370 in 1')
+  expect(text).toContain('main 50% (1 of 2)')                         // one search, one recursive grep
+  expect(text).toContain('Aleph located first: main 100%')
+  expect(text).toContain('a grep within two calls in 1 cases')
   // The same figures are kept for a later session to read: a headless run cannot be asked afterwards.
+  expect(saved.get('aleph-zero.last-session').meter.aleph).toBe(1)
+  expect(saved.get('aleph-zero.last-session').meter.grep).toBe(1)
   const last = (await $.command.run({ command: 'aleph', args: 'stats last' })).text
-  expect(last).toContain('last session · rung 1 · turns 1')
-  expect(last).toContain('aleph calls 1 · grep calls 1')
+  expect(last).toContain('the conversation before · aleph-zero · rung 1 · 1 turns')
 })
 
 // ---- L1 ------------------------------------------------------------------------------------------

@@ -371,3 +371,157 @@ export function isSearchCommand(command) {
   return /(^|[\s;&|(])(?:[^\s;&|()]*\/)?(grep|egrep|fgrep|ggrep|rg|ag|ack)\s/.test(text) || /(^|[\s;&|(])git\s+grep\s/.test(text)
     || /(^|[\s;&|(])(?:[^\s;&|()]*\/)?find\s[^|;]*-i?name\s/.test(text)
 }
+
+// ---- the engine's tools, by what they are for ------------------------------------------------
+
+// Every tool of the engine as Claude Code names it.
+export const ENGINE_ANY = /^mcp__plugin_aleph-zero_aleph__(\w+)$/
+// The tools the mod allows by itself: they read the index and change nothing (remember writes, and is left to the person).
+export const READ_ONLY_TOOL = /^mcp__plugin_aleph-zero_aleph__(search|symbol|outline|status|facts|references|decisions|recall)$/
+const FEATURES = {
+  search: 'retrieval', symbol: 'retrieval', outline: 'retrieval',
+  facts: 'architecture', references: 'architecture', decisions: 'architecture',
+  recall: 'memory', remember: 'memory', status: 'status',
+}
+// The engine's tools that locate code, set against a locating grep in the meter's adoption.
+const LOCATING = new Set(['search', 'symbol', 'facts', 'references'])
+
+// 'retrieval', 'architecture', 'memory', 'status' or 'other' for a tool of the engine; null for any other tool.
+export function engineFeature(tool) {
+  const match = ENGINE_ANY.exec(String(tool || ''))
+  return match ? FEATURES[match[1]] || 'other' : null
+}
+
+export function engineLocates(tool) {
+  const match = ENGINE_ANY.exec(String(tool || ''))
+  return Boolean(match && LOCATING.has(match[1]))
+}
+
+// ---- what kind of search an agent made, for the meter ---------------------------------------------
+
+// A command's parts between unquoted pipes ('||' is not one).
+export function pipeParts(command) {
+  const parts = []
+  let current = ''
+  let quote = ''
+  const text = String(command || '')
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (quote) {
+      if (char === quote) quote = ''
+      else if (char === '\\' && quote === '"') {
+        current += char + (text[index + 1] ?? '')
+        index += 1
+        continue
+      }
+    } else if (char === '"' || char === "'") quote = char
+    else if (char === '|' && text[index + 1] === '|') {
+      current += '||'
+      index += 1
+      continue
+    } else if (char === '|') {
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += char
+  }
+  parts.push(current)
+  return parts
+}
+
+// What follows a search only to shorten or count what it printed.
+const SHORTENS = /^\s*(head|tail|wc|sort|uniq|cut|less|more|nl)\b[^;&<>`$]*$/
+
+// 'locate' for a search of the repository for where something is (a recursive grep, rg, git grep or find -name, also
+// one whose output is only shortened: `| head`), 'filter' for any other grep (of one file, of a command's output),
+// 'glob' for the Glob tool, null for anything else.
+export function searchKind(tool, input, cwd) {
+  if (tool === 'Glob') return 'glob'
+  if (tool === 'Grep') return readGrepTool(input, cwd) ? 'locate' : 'filter'
+  if (tool !== 'Bash') return null
+  const command = String((input && input.command) || '')
+  if (!isSearchCommand(command)) return null
+  if (readSearch(command)) return 'locate'
+  const [first, ...rest] = pipeParts(command)
+  if (rest.length && rest.every((part) => SHORTENS.test(part)) && readSearch(first)) return 'locate'
+  return 'filter'
+}
+
+// The files an answer of the engine names: a search's or a symbol's (JSON or text), an outline's path. Relative paths.
+export function pathsIn(answer) {
+  const text = resultText(answer)
+  if (!text) return []
+  try {
+    const parsed = JSON.parse(text)
+    const listed = [...(parsed.hits || []), ...(parsed.symbols || []), ...(parsed.facts || [])]
+    const paths = listed.map((item) => item && item.path).filter((path) => typeof path === 'string')
+    if (typeof parsed.path === 'string') paths.push(parsed.path)
+    return [...new Set(paths)]
+  } catch {
+    // text: a location starts a line, `path:12` or `path:12-30`
+  }
+  const found = []
+  for (const match of text.matchAll(/^\s*(?:- )?([^\s:'"`]+\.[A-Za-z0-9]{1,8}):\d+/gm)) found.push(match[1])
+  return [...new Set(found)]
+}
+
+// A path as the agent gave it to Read (often absolute), relative to the session's directory.
+export function relativePath(path, cwd) {
+  const given = String(path || '')
+  const root = String(cwd || '').replace(/\/$/, '')
+  if (root && given.startsWith(root + '/')) return given.slice(root.length + 1)
+  return given.replace(/^\.\//, '')
+}
+
+// ---- subagents: what their task is given ------------------------------------------------------
+
+// Appended to a subagent's task, after the brief, so a brief's own structure is left as it is. A subagent whose type lists
+// its tools may not have the engine's: the sentence says what to do when it does, and the locations help either way.
+export const SPAWN_NOTE = '[aleph-zero] This repository is indexed by Aleph Zero. If you have its `search` tool '
+  + '(mcp__plugin_aleph-zero_aleph__search), locate code with it, or with `symbol` for a name, before a recursive grep or '
+  + 'reading whole files; grep stays right for an exact string whose every occurrence matters.'
+
+export function spawnBlock(hits = [], signatures = false) {
+  const listed = hits.length
+    ? '\nIt ranks these locations highest for this task (a starting point, not an answer):\n' + locations(hits, 5, signatures)
+    : ''
+  return '\n\n' + SPAWN_NOTE + listed
+}
+
+// Whether a spawn is one whose task the mod may add to: not a fork (it shares its parent's context), not a resumed run
+// (its task is fixed), not a workflow agent (its script owns the prompt), and with a task of some words to it.
+export function spawnTakesNote(e) {
+  if (!e || e.fork || e.resume || e.workflow) return false
+  return String(e.prompt || '').trim().split(/\s+/).length >= 4
+}
+
+// The `rung` a project's CLAUDE.md says, when it says one ("rung 3", "rung: 3", "rung=3"); null otherwise.
+export function rungInInstructions(text) {
+  const match = /\brung\b\s*[:=]?\s*([0-3])\b/i.exec(String(text || ''))
+  return match ? Number(match[1]) : null
+}
+
+// Rung 3 with grep_assist `first`: beside what the first locating grep of a turn or a subagent found, as context after its
+// result. Worded so that it reads as a second opinion, never as more occurrences of the pattern.
+export function assistNote(pattern, hits) {
+  return '[aleph-zero] Beside what the search found: code search by meaning, asked for "' + pattern + '", ranks these '
+    + 'locations highest. They are not occurrences of the pattern; read them if they look like what you are after.\n' + locations(hits, 5)
+}
+
+// The `rung` a project's .claude/settings.json or settings.local.json gives this plugin (pluginConfigs, under any of its
+// install names); null when it gives none. Measured 2026-11-05 (Claude Code 2.1.318): a rung set there did not take
+// effect while the user's own settings gave another; only the user's settings and --settings did.
+export function rungInSettings(text) {
+  try {
+    const configs = JSON.parse(String(text || '')).pluginConfigs || {}
+    for (const [name, config] of Object.entries(configs)) {
+      if (!name.startsWith('aleph-zero@')) continue
+      const value = config && config.options && config.options.rung
+      if (value !== undefined && /^[0-3]$/.test(String(value).trim())) return Number(value)
+    }
+  } catch {
+    // not JSON: nothing said
+  }
+  return null
+}

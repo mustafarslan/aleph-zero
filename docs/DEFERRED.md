@@ -2,6 +2,23 @@
 
 Things that are not being done now on purpose. Each entry says what it is, why it waits, and how to start it. Newest decisions first. Remove an entry when it is done.
 
+## 0-sub. Subagents steered: with and without, on tasks that use them (spends plan usage; rules written 2026-11-05, before any run)
+
+- **What:** whether 0.1.21's steering of subagents (ADR-011, "2026-11-05") saves tokens or tool calls. This is the number a team presentation could quote; `/aleph stats` counts use, not savings. No earlier run steered subagents, and the harness's tasks hardly spawned any.
+- **Why it waits:** it spends plan usage, and $0.63 of the earlier $45 limit is left. **The go-ahead and the limit are yours.**
+- **The design, fixed now:**
+  - *Arms:* `none` against `L1` (rung 1 as 0.1.21 ships it: the note in subagents' tasks, the read-only tools allowed). `L1x` (the same without the note) is the second question, what the note itself adds; it runs only if the first is read.
+  - *Task form:* `--delegate`. The issue text and the usual question, plus one line asking the agent to search through an Explore subagent, in both arms alike. The harness refuses to report records of both forms together.
+  - *Size:* Loc-Bench, `--count 30 --seed 11`, sonnet, each task once in each arm, 60 sessions; `--budget-usd 0.75 --max-sessions 60 --spend-usd 45`. Expected about $20 to $25 (the pilot's $0.30 a session, more with a subagent).
+  - *Read as in ADR-011:* primary is total session tokens, subagents included; the ratio per task, geometric mean, bootstrap 95% interval. Secondary is tool calls the same way. The hit rate may not drop by more than one task. An interval that holds 1 is "not shown".
+  - *First, compliance:* from each record's `mod.located`, the share of subagents' locating calls that were Aleph's. Under a quarter means the note was not followed, and that is said before any ratio.
+  - *A second pass* of the same 60 sessions only if the token ratio is 0.90 or lower and the first pass cost under half the limit.
+- **How to start it:**
+
+      uv run --group bench python bench/ab/run.py run bench/data/benchc --arms none,L1 --delegate --count 30 --seed 11 --model sonnet --budget-usd 0.75 --max-sessions 60 --spend-usd 45
+
+  `bench/ab/run.py pause|resume|stop|status <results directory>` steers it from another shell.
+
 ## 0. The A/B run that decides whether v1 ships (spends Claude plan usage)
 
 - **What:** `bench/ab/run.py` runs Claude Code headless on Loc-Bench issues with and without the plugin and compares tokens, tool calls and whether the right files were named (ADR-011). The design's gate: the best rung gives at least 20% fewer tokens or tool calls than no plugin, with no drop in hit rate.

@@ -85,9 +85,11 @@ and cited as `name:path`.
 
 **Claude Code plugin.** Starts the engine, loads its tools, and steers the agent to search
 before it greps, in levels you choose: tool descriptions, ranked locations with the first
-prompt, and suggestions after a grep that found nothing. Whether steering saves tokens has
+prompt and with each subagent's task, and suggestions after a grep that found nothing. Whether steering saves tokens has
 not been shown yet: in measured sessions the agent often still greps first
-([ADR-011](docs/adr/ADR-011-steering.md)). `/aleph` opens a side chat about the repository
+([ADR-011](docs/adr/ADR-011-steering.md)). `/aleph stats` counts how often the conversation and
+its subagents located code with Aleph rather than grep, and what came of it; `/aleph stats report`
+writes that up, beside what the with-and-without measurements showed. `/aleph` opens a side chat about the repository
 whose answers cite `path:line`.
 
 ## Requirements
@@ -135,19 +137,21 @@ whose answers cite `path:line`.
    claude plugin install aleph-zero@aleph-zero
    ```
 
-4. Let the plugin use the engine's tools. This is the one step that is yours to give: Claude Code
-   asks before any tool runs, and the plugin's own look-ups (where a route or an environment
-   variable you name is handled, rungs 2 and 3, the side chat) do nothing until it is allowed.
+4. The engine's tools and permission. Since 0.1.21 the plugin allows the engine's read-only tools
+   itself (its `allow_reads` option, on by default; a deny rule you wrote still stands, and
+   `remember`, which writes, is still asked). With `allow_reads` off, Claude Code asks before any
+   of them runs, and the plugin's own look-ups (where a route or an environment variable you name
+   is handled, rungs 2 and 3, the side chat) do nothing until you allow them.
    `aleph-zero setup` asks it once the plugin is installed; to give it directly:
 
    ```sh
    aleph-zero setup --allow-tools     # adds "mcp__plugin_aleph-zero_aleph__*" to permissions.allow in ~/.claude/settings.json
    ```
 
-   So the look-ups are on after this one yes, not before it, in every permission mode (auto mode
-   included: the plugin makes no call Claude Code would ask about). Until then they do nothing, the plugin
-   says so once a session, and `/aleph check` says whether the tools are allowed. Nothing else needs
-   switching on: the plugin's options all have working defaults.
+   With `allow_reads` off, the look-ups are on after this one yes, not before it, in every
+   permission mode (auto mode included: the plugin makes no call Claude Code would ask about). Until
+   then they do nothing, the plugin says so once a session, and `/aleph check` says whether the
+   tools are allowed. Nothing else needs switching on: the plugin's options all have working defaults.
 
 The command is `aleph-zero`. It is also installed as `aleph-zero`, but TeX Live installs a program of
 that name too, so this README and the plugin always use `aleph-zero`.
@@ -217,6 +221,13 @@ reads when Claude Code starts it: from the next session.
 | `graph` | `on`/`off` (default `on`) | The knowledge graph and the other graph tools. On: when a prompt or a grep names an HTTP route or an environment variable, the plugin adds where the code handles or reads it; the `facts` tool is shown to the agent in full, and `references` (who calls what) and `decisions` (decision records) are offered on demand. Measured (2026-10-16, sonnet, [ADR-011](docs/adr/ADR-011-steering.md)): on 30 route and environment questions, the agent called `facts` 19 times and read the right file first in 26 of 30, against 24 of 30 with it off (descriptive, not a test), at the same tokens (×0.99, interval through no change); earlier, offered by name only, the graph tools were not called in 56 sessions. On by the owner's decision; `off` leaves the agent the search tools alone. |
 | `grep_pointer` | `on`/`off` (default `on`) | The pointer in Grep's and Glob's descriptions (part of rung 1). |
 | `lines` | `places`/`signatures` (default `places`) | What rung 2 shows for each file. |
+| `subagents` | `on`/`off` (default `on`) | Each subagent's task gets the instruction to locate code with `search` before a recursive grep, after the brief (rung 1 and above), and from rung 2 the locations the engine ranks highest for the task. Forks, resumed runs and workflow agents are left alone. Not measured yet. |
+| `grep_assist` | `empty`/`first` (default `empty`) | Rung 3: locations after a grep that found nothing, or also beside the first locating grep of each turn and each subagent. `first` is not measured yet. |
+| `allow_reads` | `on`/`off` (default `on`) | The plugin allows the engine's read-only tools itself where Claude Code would ask; a deny rule still stands, and `remember` is still asked. |
+
+Set the rung in your user settings (`/aleph configure` writes it there). A project's CLAUDE.md cannot
+set it, and a project's `.claude/settings.json` did not either while the user settings gave another
+rung (measured with Claude Code 2.1.318); the plugin says so once when either names a different rung.
 
 ### Other MCP clients
 

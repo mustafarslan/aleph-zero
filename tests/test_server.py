@@ -624,3 +624,13 @@ def test_a_status_that_finds_vectors_missing_wakes_the_server_s_background_as_a_
     status = engine.status()
     assert status["vectors"]["with_vector"] < status["vectors"]["chunks"]
     assert engine.vectors_wanted() is True
+
+
+def test_a_hooks_flag_is_passed_to_search_and_facts_and_shown_to_no_agent():
+    # The plugin's own look-ups ask with stale_ok (engine.facts); the agent's tool list does not offer it.
+    assert server._checked("facts", {"mentioned": "DB_URL", "stale_ok": True})["stale_ok"] is True
+    assert server._checked("search", {"query": "x", "stale_ok": True})["stale_ok"] is True
+    assert "stale_ok" not in server._checked("outline", {"path": "a.py", "stale_ok": True})
+    with pytest.raises(server._BadArguments):
+        server._checked("search", {"query": "x", "stale_ok": "yes"})
+    assert all("stale_ok" not in tool["inputSchema"]["properties"] for tool in server.TOOLS)

@@ -38,6 +38,7 @@ SEARCH_SHARE = 0.25      # of a time limit, kept for the search itself
 SHOWN_LIMIT = 5000       # texts remembered as shown before the memory starts over
 GRAPH_SECONDS = 60.0     # how long a graph question without a time limit may spend reading files first
 GRAPH_SHARE = 0.6        # of what a time limit leaves after indexing, for reading the graph's facts
+STALE_SYNC_SHARE = 0.4   # of a hook's time limit (stale_ok), for indexing first: the rest is the answer's, from what is indexed
 # How long a query waits for its own vector. Awake, the worker answers in 6 to 20 ms. Asleep it
 # takes half a second to wake: that query is answered by words and names, and the next one finds it awake.
 QUERY_EMBED_SECONDS = 0.3
@@ -260,7 +261,7 @@ class Engine:
     @_rebuilding
     def search(self, query: str, k: int = 8, kind: str = "any", path_glob: str | None = None,
                lang: str | None = None, cwd: Path | str | None = None,
-               timeout_ms: int | None = None) -> render.Answer:
+               timeout_ms: int | None = None, stale_ok: bool = False) -> render.Answer:
         families = _families(lang)
         started, until = _limits(timeout_ms)
         asked_from = str(self.default_cwd if cwd is None else cwd)
@@ -280,7 +281,8 @@ class Engine:
             return note, covered, chunks, ranked
 
         try:
-            (note, covered, chunks, hits), pending, late = self._consistent(cwd, started, until, read, ("", 0, 0))
+            (note, covered, chunks, hits), pending, late = self._consistent(cwd, started, until, read, ("", 0, 0),
+                                                                             stale_ok=stale_ok)
         except gitio.GitTimeout:
             return render.Answer(query, [], 0, True, _elapsed(started))  # not even the worktree was read in time
         self._with_vectors[asked_from] = note == "used"
@@ -477,7 +479,7 @@ class Engine:
     @_rebuilding
     def facts(self, kind: str | None = None, like: str | None = None, k: int = 200, cwd: Path | str | None = None,
               timeout_ms: int | None = None, prepare_seconds: float | None = None,
-              mentioned: str | None = None, words: bool = False) -> archfacts.Answer:
+              mentioned: str | None = None, words: bool = False, stale_ok: bool = False) -> archfacts.Answer:
         """What the worktree states about its architecture: with no argument, how many routes, models,
         tables, environment names, tasks and services it has; with a kind or a part of a name, those
         facts with where each is stated. The first question about a view reads its files for them,
@@ -486,7 +488,11 @@ class Engine:
         With `mentioned` (a request, an error, a grep pattern), the routes and environment names it names, answered from
         source code only, each route with where its handler is defined (kind 'handler'); `kind` and `like` are not read.
         A text that names none is answered at once, without the index; with `words`, it is answered by the routes whose
-        words it shares (at most three, above a floor: archfacts.by_words), with their handlers and mounts."""
+        words it shares (at most three, above a floor: archfacts.by_words), with their handlers and mounts.
+
+        With `stale_ok` (a hook's look-up, a hint beside the agent's own work) and a time limit: indexing is given part of
+        the limit, and the answer is read from what is indexed then; files still waiting are counted in `pending` and
+        `unread`, and `late` means only that the read itself ran out of time."""
         kind, like = kind or "", like or ""
         if kind and kind not in archfacts.KINDS:
             raise ValueError("kind is one of: " + ", ".join(archfacts.KINDS))
@@ -521,13 +527,14 @@ class Engine:
             return (lambda: archfacts.select(archfacts.load(index), kind, like, k),)
 
         try:
-            (found,), pending, late = self._consistent(cwd, started, until, prepare, ())
+            (found,), pending, late = self._consistent(cwd, started, until, prepare, (), stale_ok=stale_ok)
         except gitio.GitTimeout:
             return archfacts.Answer(kind, like, [], late=True, elapsed_ms=_elapsed(started))
         if not found:       # out of time before the index could be read
             return archfacts.Answer(kind, like, [], pending=pending, unread=left[0], late=True, elapsed_ms=_elapsed(started))
         listed, counts, truncated = found
-        return archfacts.Answer(kind, like, listed, counts, pending, left[0], late or left[0] > 0 and until is not None,
+        return archfacts.Answer(kind, like, listed, counts, pending, left[0],
+                                late or left[0] > 0 and until is not None and not stale_ok,
                                 _elapsed(started), truncated)
 
     def prepare_areas(self, cwd: Path | str | None = None) -> bool:
@@ -1057,16 +1064,18 @@ class Engine:
         return index
 
     def _ready(self, cwd: Path | str | None, started: float, until: float | None,
-               sync_seconds: float = SYNC_SECONDS, symbols: bool = False) -> tuple[Index, View, int, bool]:
+               sync_seconds: float = SYNC_SECONDS, symbols: bool = False,
+               stale_ok: bool = False) -> tuple[Index, View, int, bool]:
         """The index of the worktree containing `cwd`, synced to its current view within
-        the time allowed. Returns (index, view, files still pending, out of time)."""
+        the time allowed. Returns (index, view, files still pending, out of time). With `stale_ok`
+        indexing has a smaller share of the limit, and files still pending are not "out of time"."""
         with gitio.until(until):
             view = self._view(cwd)
         index = self._index(view)
         if until is None:
             budget = sync_seconds
         else:
-            budget = max(0.0, (until - time.monotonic()) * (1 - SEARCH_SHARE))
+            budget = max(0.0, (until - time.monotonic()) * (STALE_SYNC_SHARE if stale_ok else 1 - SEARCH_SHARE))
         report = index.sync(view, budget_seconds=budget, stop=self._stop.is_set, symbols=symbols)
         if self._stop.is_set():
             raise Cancelled
@@ -1080,10 +1089,11 @@ class Engine:
                     vectorfile.give_back(index.conn, index_file(view.common_dir).parent)
             except (apsw.BusyError, OSError):
                 pass
-        return index, view, report.pending, until is not None and report.pending > 0
+        return index, view, report.pending, until is not None and report.pending > 0 and not stale_ok
 
 
-    def _consistent(self, cwd: Path | str | None, started: float, until: float | None, prepare, empty: tuple):
+    def _consistent(self, cwd: Path | str | None, started: float, until: float | None, prepare, empty: tuple,
+                    stale_ok: bool = False):
         """Answer from one state of the index that holds the worktree's view.
 
         `prepare(index, view)` returns a tuple whose last item is the function that reads
@@ -1097,7 +1107,7 @@ class Engine:
         synced again. On the last attempt an incomplete state is answered from and said so."""
         attempts = 3
         for attempt in range(attempts):
-            index, view, pending, late = self._ready(cwd, started, until)
+            index, view, pending, late = self._ready(cwd, started, until, stale_ok=stale_ok)
             *before, read = prepare(index, view)
             result = empty[len(before):] if empty else ()
             if late and time.monotonic() >= until:

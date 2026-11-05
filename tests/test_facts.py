@@ -485,3 +485,22 @@ def test_an_openapi_path_written_as_an_explicit_key_is_its_own():
             "  ? /tasks/{id}/logs/{try_number}\n  : get:\n      operationId: get_log\n")
     assert [(name, detail) for kind, name, _, detail in found("api/openapi/v1.yaml", spec)] == [
         ("GET /tasks/{id}/links", "openapi get_extra_links"), ("GET /tasks/{id}/logs/{try_number}", "openapi get_log")]
+
+
+def test_a_hooks_look_up_answers_from_what_is_indexed_while_the_index_catches_up(repo):
+    # A session that edits all day leaves files to index before every look-up. A hook's look-up (stale_ok) is a hint:
+    # it answers from what is indexed within its time and says how many files wait, and is late only when the read
+    # itself ran out of time. Measured on a real session (2026-11-05): 110 of 111 look-ups were reported too late.
+    repo.write("config/db.go", 'package config\nfunc url() string { return os.Getenv("DB_URL") }\n')
+    repo.commit("db")
+    engine = Engine(repo.root)
+    assert engine.facts(mentioned="DB_URL").facts                             # indexed and read, with no time limit
+    for i in range(400):
+        repo.write(f"gen/module_{i}.go", "package gen\n" + "".join(f"func F{i}_{j}() int {{ return {j} }}\n" for j in range(40)))
+    strict = engine.facts(mentioned="DB_URL is not read", timeout_ms=150)
+    assert strict.late and strict.pending > 0                                 # an agent's question still says it is partial
+    hinted = engine.facts(mentioned="DB_URL is not read", timeout_ms=150, stale_ok=True)
+    assert not hinted.late and hinted.pending > 0
+    assert [(f.kind, f.name, f.path) for f in hinted.facts] == [("env", "DB_URL", "config/db.go")]
+    searched = engine.search("DB_URL", timeout_ms=150, stale_ok=True)
+    assert not searched.timed_out and "config/db.go" in [hit.path for hit in searched.hits]

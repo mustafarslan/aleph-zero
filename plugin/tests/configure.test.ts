@@ -98,6 +98,16 @@ test('a plugin option is changed through Claude Code\'s settings, to the next va
   expect(seen.sets.map((set: any) => [set.key, set.value])).toEqual([['aleph-zero.rung', '3'], ['aleph-zero.graph', 'off']])
 })
 
+test('the options for subagents, rung 3\'s greps and the read-only tools are written by their own keys', { options: { rung: '3' } }, async ($, on) => {
+  const seen = world(on)
+  const ui = await open($)
+  await ui.press({ key: 'b-subagents' })
+  await ui.press({ key: 'b-grep_assist' })
+  await ui.press({ key: 'b-allow_reads' })
+  expect(seen.sets.map((set: any) => [set.key, set.value])).toEqual([
+    ['aleph-zero.subagents', 'off'], ['aleph-zero.grep_assist', 'first'], ['aleph-zero.allow_reads', 'off']])
+})
+
 test('a refused change says why', async ($, on) => {
   world(on, { denied: 'a managed setting owns it' })
   const ui = await open($)

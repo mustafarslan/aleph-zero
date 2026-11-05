@@ -7,9 +7,14 @@
 //   3  a recursive grep that found nothing gets ranked locations appended
 // The meter runs on every rung.
 import {
-  DESCRIPTIONS, ENGINE_TOOL, FACTS_DESCRIPTION, GRAPH_LINE, POINTERS, SECTION, SECTION_ID, confident, foundNothing, grepNote, hitsOf, isSearchCommand,
-  ALLOW_HINT, factsNamed, factsNote, grepToolFoundNothing, mayName, promptContext, readGrepTool, readSearch, resultText, worthAsking,
+  DESCRIPTIONS, FACTS_DESCRIPTION, GRAPH_LINE, POINTERS, READ_ONLY_TOOL, SECTION, SECTION_ID, assistNote, confident, foundNothing,
+  grepNote, hitsOf, ALLOW_HINT, factsNamed, factsNote, grepToolFoundNothing, mayName, pathsIn, promptContext, readGrepTool,
+  readSearch, resultText, rungInInstructions, rungInSettings, spawnBlock, spawnTakesNote, worthAsking,
 } from './logic.js'
+import {
+  addUsage, combine, createMeter, endRun, loopOf, newRun, normalize, noteRung, recordAdded, recordAsk, recordCall, reportMarkdown,
+  summary,
+} from './meter.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
   CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help,
@@ -20,17 +25,20 @@ import {
 const SERVER = 'aleph'
 const ENGINE_MS = 400   // what the engine is given to answer
 const HOOK_MS = 450     // after which the hook stops waiting, whatever the engine or its transport does
-const LAST = 'aleph-zero.last-session'   // where the meter of the latest finished turn is kept
+const LAST = 'aleph-zero.last-session'   // where the meter of the latest finished turn is kept (the A/B harness reads it)
+const PREVIOUS = 'aleph-zero.previous-conversation'   // the meter of the conversation before this one, for `stats last`
 
-function usage() {
-  return { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-}
-
-// This session, since the mod loaded.
-const meter = { turns: 0, main: usage(), subagents: usage(), tools: {}, aleph: 0, grep: 0, first: null, added: { prompt: 0, grep: 0, facts: 0 }, listed: [] }
+// This conversation (since the mod loaded, or since /clear), and every conversation of this session together.
+let meter = createMeter()
+let allTime = createMeter()
+// What each turn of the main loop and each subagent has seen so far (meter.js newRun), by its agentId ('main' for the
+// main loop), and the type each subagent was spawned as.
+const runs = new Map()
+const agentTypes = new Map()
 let prompts = 0
 // The names facts were looked up for this session (a route's path, an environment name): each is looked up once.
 let handed = []
+const askedLate = new Set()   // names whose look-up came back late once: the next one hands them over whatever comes back
 
 // The session's meter, rung 2's one chance and the side chat's conversation, kept in $.state: a changed option loads the
 // mod again (its module state starts over), and what it had counted and said would be gone. Read back once a load.
@@ -43,7 +51,8 @@ async function restore($) {
   try {
     const { value } = await $.state.get(SESSION_STATE)
     if (!value || typeof value !== 'object') return
-    if (value.meter && typeof value.meter === 'object') Object.assign(meter, value.meter)
+    if (value.meter && typeof value.meter === 'object') meter = combine(value.meter, meter)
+    if (value.allTime && typeof value.allTime === 'object') allTime = normalize(value.allTime)
     if (typeof value.prompts === 'number') prompts = value.prompts
     if (Array.isArray(value.handed)) handed = value.handed
     if (Array.isArray(value.turns) && !chat.turns.length) chat.turns.push(...value.turns)
@@ -59,7 +68,7 @@ async function saveSession($) {
   const turns = chat.turns.slice(-8).map((turn) => turn.state === 'searching' || turn.state === 'thinking'
     ? { ...turn, state: 'failed', answer: 'Stopped: the plugin was loaded again.' } : { ...turn })
   try {
-    await $.state.set(SESSION_STATE, { meter, prompts, handed, turns, tokens: chat.tokens, focused: cfg.focused })
+    await $.state.set(SESSION_STATE, { meter, allTime, prompts, handed, turns, tokens: chat.tokens, focused: cfg.focused })
   } catch {
     // the session goes on without it
   }
@@ -104,13 +113,47 @@ async function reach($, tool, args) {
 // not count against a hook's own limit, so a transport that never answers would hold the
 // prompt for ever. $.clock.sleep is the one call that does count. A refusal (the user has
 // not allowed the engine's tools) and any other failure are "no answer".
+// Asked as a hint (stale_ok): from what is indexed within the time, while the index catches up with the session's edits
+// (engine.facts). How it ended and how long it took go into the meter.
 async function ask($, tool, args) {
-  const answered = reach($, tool, { ...args, format: 'json', timeout_ms: ENGINE_MS }).catch((error) => {
-    notAllowed($, error)
+  const started = await now($)
+  let outcome = null
+  const answered = reach($, tool, { ...args, format: 'json', timeout_ms: ENGINE_MS, stale_ok: true }).then((answer) => {
+    outcome = answer ? answerOutcome(answer) : 'failed'
+    return answer
+  }, (error) => {
+    outcome = notAllowed($, error) ? 'refused' : 'failed'
     return null
   })
   const waited = $.clock.sleep(HOOK_MS).then(() => null)
-  return Promise.race([answered, waited])
+  const answer = await Promise.race([answered, waited])
+  recordAsk(meter, (await now($)) - started, outcome || 'timeout')
+  return outcome && outcome !== 'refused' && outcome !== 'failed' ? answer : null
+}
+
+// The time in milliseconds. $.clock.now resolves it (a promise, not a number: read as a number it was NaN, and the meter's
+// engine times and the vectors line's timing were wrong). The last reading is kept for what cannot wait for one.
+let lastNow = 0
+
+async function now($) {
+  try {
+    lastNow = Number(await $.clock.now()) || lastNow
+  } catch {
+    // no clock here: the last reading stands
+  }
+  return lastNow
+}
+
+// How an answer of the engine ended: late (out of time), stale (answered while files wait to be indexed), or answered.
+function answerOutcome(answer) {
+  try {
+    const parsed = JSON.parse(resultText(answer))
+    if (parsed.late === true || parsed.timed_out === true) return 'late'
+    if (Number(parsed.pending) > 0 || Number(parsed.unread) > 0) return 'stale'
+  } catch {
+    // a text answer: nothing more is known of it
+  }
+  return 'answered'
 }
 
 // The engine's tools are refused until the person allows them (measured: Claude Code 2.1.301 refuses the mod's own calls
@@ -120,11 +163,12 @@ let told = false
 
 function notAllowed($, error) {
   const why = String((error && error.message) || error || '')
-  if (!/permission|granted/i.test(why)) return
-  meter.refused = (meter.refused || 0) + 1
-  if (told) return
-  told = true
-  $.ui.toast(ALLOW_HINT, { timeoutMs: 20000 })
+  if (!/permission|granted|not allowed/i.test(why)) return false
+  if (!told) {
+    told = true
+    $.ui.toast(ALLOW_HINT, { timeoutMs: 20000 })
+  }
+  return true
 }
 
 // What a text names (a route, an environment name), looked up in the engine's facts: a note for the agent, or ''. Asked
@@ -136,11 +180,16 @@ async function lookUp($, text, words = false) {
   if (!fresh.length && !words) return ''
   const answer = await ask($, 'facts', { mentioned: String(text).slice(0, 4000), k: 20, ...(words ? { words: true } : {}) })
   const note = answer ? factsNote(answer, handed) : ''
-  if (answer && (note || !/"late": ?true/.test(resultText(answer)))) {
-    handed = [...new Set([...handed, ...fresh, ...factsNamed(answer)])].slice(-200)  // a late answer is asked again
+  const late = !answer || /"late": ?true/.test(resultText(answer))
+  if (answer) {
+    // A late answer is asked once more, not on every grep that names the same thing (measured 2026-11-05: 110 look-ups
+    // of one session counted late, mostly the same names asked again).
+    const again = late ? fresh.filter((name) => !askedLate.has(name)) : []
+    for (const name of again) askedLate.add(name)
+    handed = [...new Set([...handed, ...fresh.filter((name) => !again.includes(name)), ...factsNamed(answer)])].slice(-200)
   }
   if (note) meter.added.facts = (meter.added.facts || 0) + 1
-  if (!answer || /"late": ?true/.test(resultText(answer))) meter.added.factsLate = (meter.added.factsLate || 0) + 1  // counted, not told (part 9)
+  if (late) meter.added.factsLate = (meter.added.factsLate || 0) + 1  // counted, not told (part 9)
   return note
 }
 
@@ -215,16 +264,16 @@ let quickUntil = 0           // after an action in the settings pane, looked at 
 
 async function readProgress($) {
   let status = null
-  const asked = $.clock.now()
+  const asked = await now($)
   try {
     const answer = await reach($, 'status', { format: 'json', timeout_ms: 2000 })
     status = answer ? JSON.parse(resultText(answer)) : null
   } catch {
     status = null
   }
-  lookMs = $.clock.now() - asked
-  if (!status && $.clock.now() - fallbackAt >= 30000) {
-    fallbackAt = $.clock.now()
+  lookMs = (await now($)) - asked
+  if (!status && (await now($)) - fallbackAt >= 30000) {
+    fallbackAt = lastNow
     try {
       const cwd = await cwdOf($)
       const done = await $.process.run(['sh', $.plugin.root + '/scripts/engine.sh', '--cwd', cwd, 'status'], { timeoutMs: 20000 })
@@ -235,7 +284,7 @@ async function readProgress($) {
   }
   if (!status) return progress
   const before = progress
-  progress = progressOf(status, progress, $.clock.now())
+  progress = progressOf(status, progress, await now($))
   $.ui.status(statusLine(progress))
   if (!before || before.have !== progress.have || before.active !== progress.active || before.pending !== progress.pending) {
     $.ui.invalidate('ui.render')        // the side chat's header and the settings pane say it too
@@ -246,7 +295,7 @@ async function readProgress($) {
 function watchProgress($) {
   try {
     if (progressTimer) progressTimer.cancel()
-    const quick = $.clock.now() < quickUntil
+    const quick = lastNow < quickUntil
     progressTimer = $.clock.after(quick ? Math.max(5000, 30 * lookMs) : progress ? nextPoll(progress, lookMs) : 1000, async () => {
       progressTimer = null
       await readProgress($).catch(() => null)
@@ -291,11 +340,7 @@ async function runEngine($, args, doing) {
     $.ui.invalidate('ui.render')
     // A linked source or a switch to search by meaning brings vectors to make: look now, not at the next slow poll.
     if (progressTimer) {
-      try {
-        quickUntil = $.clock.now() + 30000
-      } catch {
-        quickUntil = 0
-      }
+      quickUntil = (await now($)) + 30000
       await readProgress($).catch(() => null)
       watchProgress($)
     }
@@ -319,6 +364,7 @@ function symbolsOf(answer) {
 }
 
 async function count($, field) {
+  if (field in meter.chat) meter.chat[field] += 1
   // A key of its own for each counter, read just before writing: every session on the machine
   // shares the store. A count that cannot be kept must never cost the user an answer.
   try {
@@ -407,36 +453,71 @@ async function answerQuestion($, question) {
   }
 }
 
-function add(into, counted) {
-  if (!counted) return
-  into.requests += 1
-  into.input += counted.input_tokens || 0
-  into.output += counted.output_tokens || 0
-  into.cacheRead += counted.cache_read_input_tokens || 0
-  into.cacheWrite += counted.cache_creation_input_tokens || 0
+// The run a tool call belongs to: the main loop's current turn, or a subagent by its agentId. A subagent the mod did not
+// see start (it started before the mod was loaded) is counted under its type when Claude Code lists it, or as 'subagent'.
+function runFor(agentId) {
+  const key = agentId || 'main'
+  let run = runs.get(key)
+  if (!run) {
+    run = newRun(agentId ? agentTypes.get(agentId) || 'subagent' : 'main')
+    loopOf(meter, run.loop).runs += 1
+    runs.set(key, run)
+  }
+  return run
 }
 
-function total(counted) {
-  return counted.input + counted.output + counted.cacheRead + counted.cacheWrite
+// Where /aleph stats report writes: a folder of the repository that git is told to leave alone.
+const REPORTS = '.aleph'
+
+async function writeReport($, rung) {
+  const cwd = await cwdOf($)
+  let version = ''
+  try {
+    version = JSON.parse(await $.fs.read($.plugin.root + '/.claude-plugin/plugin.json')).version || ''
+  } catch {
+    version = ''
+  }
+  const stamp = new Date((await now($)) || Date.now()).toISOString()
+  const name = stamp.slice(0, 16).replace(/[:T]/g, '-')
+  const markdown = reportMarkdown(rung, meter, { repository: cwd, written: stamp.slice(0, 16).replace('T', ' ') + ' UTC', version })
+  const base = (cwd ? cwd.replace(/\/$/, '') + '/' : '') + REPORTS
+  await $.fs.write(base + '/.gitignore', '*\n')
+  await $.fs.write(base + '/reports/' + name + '.md', markdown)
+  await $.fs.write(base + '/reports/' + name + '.json', JSON.stringify({ rung, version, written: stamp, repository: cwd, meter }, null, 2) + '\n')
+  return base + '/reports/' + name + '.md'
 }
 
-function report(rung, meter) {
-  const tools = Object.keys(meter.tools).sort().map((name) => name + ' ' + meter.tools[name]).join(', ')
-  const perTurn = meter.turns ? Math.round(total(meter.main) / meter.turns) : 0
-  return 'rung ' + rung + ' · turns ' + meter.turns
-    + ' · tokens ' + total(meter.main) + ' (' + perTurn + ' a turn; input ' + meter.main.input + ', output ' + meter.main.output
-    + ', cache read ' + meter.main.cacheRead + ', cache write ' + meter.main.cacheWrite + ') in ' + meter.main.requests + ' requests'
-    + ' · subagents ' + total(meter.subagents) + ' tokens in ' + meter.subagents.requests + ' requests'
-    + ' · aleph calls ' + meter.aleph + ' · grep calls ' + meter.grep
-    + (meter.first ? ' · first to be used: ' + meter.first : '')
-    + ' · locations added to ' + meter.added.prompt + ' prompts and ' + meter.added.grep + ' empty greps'
-    + ' · facts added ' + (meter.added.facts || 0) + ' times' + (meter.added.factsLate ? ' (' + meter.added.factsLate + ' look-ups too late)' : '')
-    + (meter.refused ? ' · the engine\'s tools were refused ' + meter.refused + ' times: not allowed yet (/aleph check)' : '')
-    + (tools ? ' · tools: ' + tools : '')
+// A project that names a rung other than the one the plugin runs at: said once. A session ran at rung 1 for 740 turns
+// while its CLAUDE.md said rung 3 and its .claude/settings.json set rung 3 (2026-11-05): nothing reads CLAUDE.md for it,
+// and the project's pluginConfigs did not take effect while the user's settings gave rung 1.
+let warnedRung = false
+let optionRung = 1
+
+async function warnInstructedRung($) {
+  if (warnedRung) return
+  warnedRung = true
+  const places = [
+    ['.claude/settings.json', rungInSettings, 'sets'], ['.claude/settings.local.json', rungInSettings, 'sets'],
+    ['CLAUDE.md', rungInInstructions, 'says'], ['.claude/CLAUDE.md', rungInInstructions, 'says'],
+  ]
+  for (const [file, read, verb] of places) {
+    let text = ''
+    try {
+      text = await $.fs.read(file)
+    } catch {
+      continue
+    }
+    const said = read(text)
+    if (said === null || said === optionRung) continue
+    $.ui.toast('Aleph Zero: ' + file + ' ' + verb + ' rung ' + said + ', but the plugin runs at rung ' + optionRung
+      + '. Set it in your user settings: /aleph configure.', { timeoutMs: 20000 })
+    return
+  }
 }
 
 export function register(on, options) {
   const rung = Number(options && options.rung !== undefined ? options.rung : 1)
+  optionRung = rung
   // The pointer in the descriptions of Grep and Glob is part of rung 1 but has its own switch,
   // so a measurement can tell it from the rest of the rung.
   const pointer = !(options && options.grep_pointer === 'off')
@@ -445,15 +526,24 @@ export function register(on, options) {
   // The graph tools are offered unless switched off (the manifest's default is on; the engine reads the same option).
   const graph = !(options && /^(off|0|false|no)$/i.test(String(options.graph || '').trim()))
   const section = graph ? SECTION + '\n' + GRAPH_LINE : SECTION
+  // Subagents' tasks get the note (and, from rung 2, ranked locations): on unless switched off, for a measurement.
+  const subagents = !(options && /^(off|0|false|no)$/i.test(String(options.subagents || '').trim()))
+  // Rung 3's grep help: after a grep that found nothing (the default), or also on the first locating grep of each turn
+  // and each subagent (`first`), until a measurement says which.
+  const assistFirst = String((options && options.grep_assist) || '').trim() === 'first'
+  // The engine's read-only tools allowed by the mod itself, so that neither the agent nor the mod waits on a permission
+  // the person would give anyway. A deny the person wrote still stands. Off for a place that wants each tool allowed by hand.
+  const allowReads = !(options && /^(off|0|false|no)$/i.test(String(options.allow_reads || '').trim()))
 
 
   on('session.start', async ($, e, next) => {
     if (e && typeof e.cwd === 'string') sessionCwd = e.cwd
     if (e && e.isInteractive) watchProgress($)
+    if (e && e.isInteractive) void warnInstructedRung($)
     await $.command.register({
       name: 'aleph',
-      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows this session\'s tokens, tool calls and how often search was used instead of grep; `stats last` shows the previous session\'s; `check` says whether the mod can reach the engine',
-      argumentHint: '[configure | stats [last] | check [model]]',
+      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows how often this conversation and its subagents located code with Aleph instead of grep, and what came of it; `stats last` the conversation before; `stats all` every conversation of this session; `stats report` writes the full report to .aleph/reports; `check` says whether the mod can reach the engine',
+      argumentHint: '[configure | stats [last | all | report] | check [model]]',
       immediate: true,
     })
     return next(e)
@@ -489,15 +579,26 @@ export function register(on, options) {
       }
       return {}
     }
-    if (!['stats', 'stats last', 'check', 'check model'].includes(args)) {
+    if (!['stats', 'stats last', 'stats all', 'stats report', 'check', 'check model'].includes(args)) {
       // A question typed after the command would be answered with a report, and the row
       // would enter the conversation. Questions go into the pane.
-      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `configure`, `stats`, `stats last`, `check` and `check model`.' }
+      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `configure`, `stats`, `stats last`, `stats all`, `stats report`, `check` and `check model`.' }
     }
     if (args === 'stats last') {
-      // The session before this one (any session on this machine): a headless run cannot be asked afterwards.
-      const kept = await $.store.get(LAST)
-      return { text: kept ? 'last session · ' + report(kept.rung, kept.meter) : 'no session has been recorded yet' }
+      // The conversation before this one (any session on this machine): a headless run cannot be asked afterwards.
+      const kept = (await $.store.get(PREVIOUS)) || (await $.store.get(LAST))
+      return { text: kept ? 'the conversation before · ' + summary(kept.rung, normalize(kept.meter)) : 'no conversation has been recorded yet' }
+    }
+    if (args === 'stats all') {
+      return { text: 'every conversation of this session · ' + summary(rung, combine(allTime, meter)) }
+    }
+    if (args === 'stats report') {
+      try {
+        const path = await writeReport($, rung)
+        return { text: summary(rung, meter) + '\n\nThe full report, with what it can and cannot show: ' + path }
+      } catch (error) {
+        return { text: 'the report could not be written: ' + (error && error.message ? error.message : String(error)) }
+      }
     }
     if (args === 'check model') {
       // One small real request in the shape the side chat sends (it costs a fraction of a cent):
@@ -540,7 +641,7 @@ export function register(on, options) {
         }
       }
     }
-    return { text: report(rung, meter) }
+    return { text: summary(rung, meter) }
   })
 
   // ---- the side chat's pane ------------------------------------------------------------------
@@ -734,13 +835,16 @@ export function register(on, options) {
           }
           const to = nextValue(option, value)
           await saveSession($)   // the change loads the mod again: what this load counted and said goes with it
-          // Each of the plugin's own four options by its fixed key: nothing else is ever written to the settings.
+          // Each of the plugin's own seven options by its fixed key: nothing else is ever written to the settings.
           const refused = (error) => ({ deny: error && error.message ? error.message : String(error) })
           let set = null
           if (option.key === 'rung') set = await $.config.set({ key: 'aleph-zero.rung', value: to }).catch(refused)
           else if (option.key === 'grep_pointer') set = await $.config.set({ key: 'aleph-zero.grep_pointer', value: to }).catch(refused)
           else if (option.key === 'lines') set = await $.config.set({ key: 'aleph-zero.lines', value: to }).catch(refused)
           else if (option.key === 'graph') set = await $.config.set({ key: 'aleph-zero.graph', value: to }).catch(refused)
+          else if (option.key === 'subagents') set = await $.config.set({ key: 'aleph-zero.subagents', value: to }).catch(refused)
+          else if (option.key === 'grep_assist') set = await $.config.set({ key: 'aleph-zero.grep_assist', value: to }).catch(refused)
+          else if (option.key === 'allow_reads') set = await $.config.set({ key: 'aleph-zero.allow_reads', value: to }).catch(refused)
           // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
           if (set && set.deny) {
             cfg.note = option.label + ' was not changed: ' + set.deny
@@ -921,14 +1025,30 @@ export function register(on, options) {
   on('turn.step', async function* ($, e, next) {
     await restore($)
     const result = yield* next(e)
-    add(e.agentId ? meter.subagents : meter.main, result && result.usage)
+    addUsage(e.agentId ? meter.subagents : meter.main, result && result.usage)
     return result
   })
 
   on('turn.complete', async ($, e, next) => {
     await restore($)
+    const key = e.agentId || 'main'
+    const run = runs.get(key)
+    if (run) {
+      endRun(meter, run)
+      runs.delete(key)
+    }
     if (!e.agentId) {
+      if (meter.turns === 0) {
+        // The first turn of a conversation: what `stats last` shows from now on is the one before.
+        try {
+          const before = await $.store.get(LAST)
+          if (before) await $.store.set(PREVIOUS, before)
+        } catch {
+          // nothing kept before, or no store here: `stats last` says so
+        }
+      }
       meter.turns += 1
+      noteRung(meter, rung)
       await $.store.set(LAST, { rung, meter })
       await saveSession($)
     }
@@ -940,15 +1060,54 @@ export function register(on, options) {
     // agent's: only calls Claude Code itself fires are counted.
     if (next.origin && next.origin.plugin !== 'engine') return next(e)
     await restore($)
-    meter.tools[e.tool] = (meter.tools[e.tool] || 0) + 1
-    const kind = ENGINE_TOOL.test(e.tool) ? 'aleph'
-      : (e.tool === 'Grep' || e.tool === 'Glob' || (e.tool === 'Bash' && isSearchCommand(e.command))) ? 'grep' : null
-    if (kind) {
-      meter[kind] += 1
-      if (meter.first === null) meter.first = kind
+    const result = await next(e)
+    try {
+      recordCall(meter, runFor(e.agentId), e, result, pathsIn, await cwdOf($))
+    } catch {
+      // a count that fails never costs the call its result
     }
-    return next(e)
+    return result
   }).catch(async ($, e, next) => next(e))
+
+  // ---- subagents: their task gets the note, and from rung 2 ranked locations -------------------
+
+  on('agent.spawn', async ($, e, next) => {
+    await restore($)
+    let hits = []
+    let input = e
+    if (rung >= 1 && subagents && spawnTakesNote(e)) {
+      if (rung >= 2) {
+        const found = hitsOf(await ask($, 'search', { query: String(e.prompt).slice(0, 2000), k: 15, kind: 'code' }))
+        if (confident(found)) hits = found
+      }
+      input = { ...e, prompt: e.prompt + spawnBlock(hits, signatures) }
+      meter.added.spawn += 1
+      if (hits.length) meter.added.spawnLocations += 1
+    }
+    const started = await next(input)
+    try {
+      const id = started && started.agentId
+      if (id && !(e && e.resume)) {
+        const type = String((e && e.subagentType) || 'subagent')
+        agentTypes.set(id, type)
+        const run = newRun(type)
+        loopOf(meter, type).runs += 1
+        recordAdded(run, [...new Set(hits.map((hit) => hit.path))].slice(0, 5))
+        runs.set(id, run)
+      }
+    } catch {
+      // the meter is best effort; the subagent has started either way
+    }
+    return started
+  }).catch(async ($, e, next) => next(e))
+
+  // ---- the engine's read-only tools, allowed by the mod ------------------------------------------
+
+  on('tool.check', { tool: READ_ONLY_TOOL }, async ($, e, next) => {
+    const verdict = await next(e)
+    if (!allowReads || !verdict || verdict.decision !== 'ask') return verdict
+    return { decision: 'allow', reason: 'Aleph Zero allows its own read-only search tools (option allow_reads)' }
+  }).catch(async ($, e, next) => next(e))   // a failure here leaves the verdict beneath, never a broader one
 
   // ---- L1: the tools are present and described ---------------------------------------------
 
@@ -995,6 +1154,7 @@ export function register(on, options) {
     if (!confident(hits)) return note ? next({ ...e, context }) : next(e)
     meter.added.prompt += 1
     meter.listed = [...new Set(hits.map((hit) => hit.path))].slice(0, 5)  // the files of the lines, as locations() takes them
+    recordAdded(runFor(null), meter.listed)
     return next({ ...e, context: [...context, promptContext(hits, signatures)] })
   }).catch(async ($, e, next) => next(e))
 
@@ -1002,6 +1162,15 @@ export function register(on, options) {
     await restore($)
     prompts = 0  // /clear, /resume and /branch end one conversation and start another
     handed = []  // the next conversation has not seen the facts handed over in this one
+    askedLate.clear()
+    // The conversation's meter goes into the session's total and is kept for `stats last`; the next one starts at zero.
+    for (const run of runs.values()) endRun(meter, run)
+    runs.clear()
+    if (meter.turns > 0) {
+      await $.store.set(PREVIOUS, { rung, meter })
+      allTime = combine(allTime, meter)
+    }
+    meter = createMeter()
     await saveSession($)
     return next(e)
   })
@@ -1019,11 +1188,20 @@ export function register(on, options) {
     }
     if (rung < 3) return result
     const read = readSearch(e.command)
-    if (!read || !foundNothing(result, read.program)) return result
+    if (!read) return result
     await restore($)
+    const empty = foundNothing(result, read.program)
+    const run = runFor(e.agentId)
+    if (!empty && !(assistFirst && !run.assisted && !result.isError && !result.deny)) return result
+    run.assisted = true
     const pattern = read.query
     const hits = hitsOf(await ask($, 'search', { query: pattern, k: 5 }))
     if (!hits.length) return result
+    recordAdded(run, hits.map((hit) => hit.path))
+    if (!empty) {
+      meter.added.firstGrep += 1
+      return { ...result, context: [...(result.context ?? []), assistNote(pattern, hits)] }
+    }
     meter.added.grep += 1
     const note = grepNote(pattern, hits)
     return { ...result, text: (result.text || '') + note, result: { ...result.result, stdout: (result.result.stdout || '') + note } }
@@ -1041,11 +1219,17 @@ export function register(on, options) {
     }
     if (rung < 3) return result
     const read = readGrepTool(e, await cwdOf($))
-    if (!read || !grepToolFoundNothing(result)) return result
+    if (!read) return result
     await restore($)
+    const empty = grepToolFoundNothing(result)
+    const run = runFor(e.agentId)
+    if (!empty && !(assistFirst && !run.assisted && result && !result.isError && !result.deny)) return result
+    run.assisted = true
     const hits = hitsOf(await ask($, 'search', { query: read.query, k: 5 }))
     if (!hits.length) return result
-    meter.added.grep += 1
-    return { ...result, context: [...(result.context ?? []), grepNote(read.query, hits, 'search').trim()] }
+    recordAdded(run, hits.map((hit) => hit.path))
+    if (!empty) meter.added.firstGrep += 1
+    else meter.added.grep += 1
+    return { ...result, context: [...(result.context ?? []), empty ? grepNote(read.query, hits, 'search').trim() : assistNote(read.query, hits)] }
   }).catch(async ($, e, next) => next(e))
 }

@@ -54,7 +54,12 @@ QUESTION = (
     "answer with one line of JSON and nothing after it, in exactly this form: "
     '{"files": ["path/relative/to/the/repository/root.py"]} listing at most five files, most likely first.'
 )
-ARMS = ("none", "L0", "L1n", "L1", "L1o", "L2", "L2s", "L3")
+# The form of the task that makes the agent search through a subagent, as in a long working session where subagents made
+# most of the requests (2026-11-05): appended after QUESTION, alike in every arm (`--delegate`).
+DELEGATE = ("\nSearch the repository through the Agent tool: start one subagent with subagent_type \"Explore\" to find the "
+            "candidate files, then check its answer yourself before you give the JSON line.")
+# x: rung 1 without the note in subagents' tasks (`subagents` off); f: rung 3 with grep_assist `first`.
+ARMS = ("none", "L0", "L1n", "L1", "L1o", "L1x", "L2", "L2s", "L3", "L3f")
 JOB = "A/B run"
 
 
@@ -104,9 +109,14 @@ def mod_meter(store: Path = STORE) -> dict | None:
         newest = max(store.glob("aleph-zero_inline-*.json"), key=lambda path: path.stat().st_mtime)
         kept = json.loads(newest.read_text())["aleph-zero.last-session"]
         meter = kept["meter"]
+        loops = meter.get("loops", {})
+        located = {name: loop.get("locate", {}) for name, loop in loops.items()}
         return {"rung": kept["rung"], "added_to_prompt": meter["added"]["prompt"], "added_to_grep": meter["added"]["grep"],
                 "added_facts": meter["added"].get("facts", 0), "facts_late": meter["added"].get("factsLate", 0),
-                "aleph_calls": meter["aleph"], "listed": list(meter.get("listed", []))}
+                "aleph_calls": meter["aleph"], "listed": list(meter.get("listed", [])),
+                "added_to_spawn": meter["added"].get("spawn", 0), "spawn_locations": meter["added"].get("spawnLocations", 0),
+                "added_first_grep": meter["added"].get("firstGrep", 0), "located": located,
+                "engine": {key: value for key, value in meter.get("engine", {}).items() if key != "ms"}}
     except (ValueError, OSError, KeyError, TypeError):
         return None
 
@@ -141,8 +151,8 @@ def clone_of(workdir: Path, repo: str) -> Path:
     return workdir / repo.replace("/", "__")
 
 
-def command(arm: str, model: str, budget: float, prompt: str) -> list[str]:
-    allowed = list(ALLOWED)
+def command(arm: str, model: str, budget: float, prompt: str, delegate: bool = False) -> list[str]:
+    allowed = list(ALLOWED) + (["Agent"] if delegate else [])
     args = ["claude", "-p", prompt, "--model", model, "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--max-budget-usd", str(budget)]
     if arm != "none":
@@ -153,6 +163,10 @@ def command(arm: str, model: str, budget: float, prompt: str) -> list[str]:
             options["lines"] = "signatures"  # rung 2 with the signature of each file's first result under its line
         if arm.endswith("o"):
             options["graph"] = "off"         # the graph tools off: what they add is read against this (DEFERRED 0-graph)
+        if arm.endswith("x"):
+            options["subagents"] = "off"     # rung 1 without the note in subagents' tasks (0.1.21)
+        if arm.endswith("f"):
+            options["grep_assist"] = "first"  # rung 3 also beside the first locating grep of each turn and subagent
         allowed.append(ENGINE_TOOLS)
         args += ["--plugin-dir", str(PLUGIN),
                  "--settings", json.dumps({"pluginConfigs": {"aleph-zero@inline": {"options": options}}})]
@@ -263,7 +277,8 @@ def _reads_gold(call: dict, gold: list[str]) -> bool:
     return any(target == path or target.endswith("/" + path) for path in gold)
 
 
-def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seconds: int, warm: bool = False) -> dict:
+def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seconds: int, warm: bool = False,
+            delegate: bool = False) -> dict:
     clone = clone_of(workdir, task["repo"]).resolve()
     scratch = Path(tempfile.mkdtemp(prefix="az-ab-", dir="/tmp"))
     tree = scratch / "repo"
@@ -282,7 +297,8 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
         started = time.monotonic()
         # Its own process group: on a timeout the session and everything it started (the engine's
         # server among them) are stopped together, not left behind.
-        proc = subprocess.Popen(command(arm, model, budget, task["issue"] + QUESTION), cwd=tree, stdout=subprocess.PIPE,
+        asked = task["issue"] + QUESTION + (DELEGATE if delegate else "")
+        proc = subprocess.Popen(command(arm, model, budget, asked, delegate), cwd=tree, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, start_new_session=True)
         try:
             stream, _ = proc.communicate(timeout=seconds)
@@ -297,7 +313,7 @@ def run_one(workdir: Path, task: dict, arm: str, model: str, budget: float, seco
             ended_by = f"stopped after {seconds} s"
         record = read_stream(stream or "", task["gold"], str(tree.resolve()))
         record.update(task=task["id"], repo=task["repo"], arm=arm, model=model, gold=task["gold"],
-                      wall_seconds=round(time.monotonic() - started, 1))
+                      wall_seconds=round(time.monotonic() - started, 1), delegate=delegate)
         if arm != "none":
             record.update(mod=mod_meter(), worker=worker_state)   # whether the mod added its locations, by its own count
         if ended_by:
@@ -342,6 +358,8 @@ def report(records: list[dict], baseline: str) -> dict:
     models = sorted({record.get("model") for record in records if record.get("model")})
     if len(models) > 1:
         raise ValueError(f"these records are from more than one model ({', '.join(models)}); report each by itself")
+    if len({bool(record.get("delegate")) for record in records}) > 1:
+        raise ValueError("these records are from both task forms (with and without --delegate); report each by itself")
     runs: dict[str, dict[str, list[dict]]] = {}
     failed: dict[str, int] = {}
     for record in records:
@@ -457,6 +475,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--set", default="locbench", help="tasks/run: where the issues come from: locbench (Python), others with --language, or facts "
                         "(the route and environment questions of DEFERRED 0-graph, from bench/data/benchc-facts)")
     parser.add_argument("--language", help="tasks/run: with --set others: the language of the issues")
+    parser.add_argument("--delegate", action="store_true",
+                        help="run: the task asks the agent to search through an Explore subagent, in every arm alike")
     parser.add_argument("--warm-worker", action="store_true",
                         help="run: before each session with the plugin, have the embedding worker running with its model loaded")
     parser.add_argument("--out", type=Path)
@@ -527,7 +547,8 @@ def main(argv: list[str] | None = None) -> int:
                           f"the spending limit is {args.spend_usd:.2f}. To go on: a higher --spend-usd with --take-up {out}", flush=True)
                     return 4
             job.unit(number, f"{task['id']} {arm}")
-            record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds, warm=args.warm_worker)
+            record = run_one(args.target, task, arm, args.model, args.budget_usd, args.seconds, warm=args.warm_worker,
+                             delegate=args.delegate)
             with out.open("a") as handle:
                 handle.write(json.dumps(record) + "\n")
             print(f"{number:3}/{len(chosen)} {task['id']:40} {arm:5} ok={record.get('ok')} tokens={record.get('tokens')} "
