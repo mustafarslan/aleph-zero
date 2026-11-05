@@ -242,3 +242,4 @@ def test_a_plugin_that_allows_its_read_only_tools_itself_leaves_nothing_to_allow
     allow = _by_key(firstrun.plan(replace(PYTHON, plugin=True, allows_reads=True), repo={}, machine={}))["allow"]
     assert allow.state == "done" and not allow.suggested
     assert "allows its read-only tools itself" in allow.detail and "remember" in allow.detail
+    assert allow.cost == ""                                         # done: nothing left to cost

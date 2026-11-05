@@ -4,7 +4,7 @@
 // What it is for: whether Aleph is used, by the main conversation and by each kind of subagent, and what came of it.
 // It says nothing about what a session would have cost without Aleph: only a measurement with and without it can
 // (docs/adr/ADR-011, bench/ab/run.py), and the report says so beside the counts.
-import { engineFeature, engineLocates, relativePath, searchKind } from './logic.js'
+import { engineFeature, engineLocates, foundNothing, grepToolFoundNothing, readSearch, relativePath, searchKind } from './logic.js'
 
 export const METER_VERSION = 2
 const LATENCIES = 200     // the engine's answer times kept, the latest
@@ -19,6 +19,7 @@ export function loopUse() {
     runs: 0,                                   // main turns, or subagents of this type started
     tools: {},                                 // calls by tool name
     locate: { aleph: 0, grep: 0 },             // the engine's locating tools against locating greps
+    emptyGrep: 0,                              // locating greps that found nothing, on every rung (advise.js reads it)
     filter: 0,                                 // other greps: of one file, of a command's output
     glob: 0,
     features: { retrieval: 0, architecture: 0, memory: 0, status: 0, other: 0 },
@@ -129,6 +130,7 @@ export function recordCall(meter, run, call, answer, pathsOf, cwd) {
     if (run.first === null) run.first = 'grep'
     if (meter.first === null) meter.first = 'grep'
     if (run.sinceAleph <= 2) loop.grepAfterAleph += 1
+    if (foundNothingAt(call, answer)) loop.emptyGrep += 1
   } else if (kind === 'filter') {
     loop.filter += 1
   } else if (kind === 'glob') {
@@ -142,6 +144,14 @@ export function recordCall(meter, run, call, answer, pathsOf, cwd) {
     if (run.aleph.has(path)) loop.reads.onAleph += 1
     if (run.added.has(path)) loop.reads.onAdded += 1
   }
+}
+
+// Whether a locating search came back empty: the Grep tool by its result, a shell search by its exit status.
+function foundNothingAt(call, answer) {
+  if (!answer) return false
+  if (call.tool === 'Grep') return grepToolFoundNothing(answer)
+  const read = readSearch(call.command)
+  return Boolean(read && foundNothing(answer, read.program))
 }
 
 // What the mod added to a run (a subagent's task, a prompt, a grep's note): the files it named.
@@ -213,7 +223,7 @@ export function figures(meter) {
     for (const [name, loop] of loops) {
       if (!names(name)) continue
       sum.runs += loop.runs
-      for (const key of ['filter', 'glob', 'grepAfterAleph']) sum[key] += loop[key]
+      for (const key of ['filter', 'glob', 'grepAfterAleph', 'emptyGrep']) sum[key] += loop[key] || 0
       for (const group of ['locate', 'features', 'first', 'reads']) for (const key of Object.keys(sum[group])) sum[group][key] += loop[group][key] || 0
     }
     return sum

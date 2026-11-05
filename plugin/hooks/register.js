@@ -15,6 +15,7 @@ import {
   addUsage, combine, createMeter, endRun, loopOf, newRun, normalize, noteRung, recordAdded, recordAsk, recordCall, reportMarkdown,
   summary,
 } from './meter.js'
+import { SETTABLE, adviceText, agentNote, dismissalKey, open as openAdvice, suggest } from './advise.js'
 import { DEFAULTS, EFFORTS, MODELS, PANE, citations, excerpts, note, plan, request, tokensOf } from './chat.js'
 import {
   CONFIG_PANE, FOOTER_COLUMNS, HELP_HINT, HELP_KEYS, LABEL_COLUMNS, OPTIONS, VALUE_COLUMNS, commandLine, engineCommand, help,
@@ -270,6 +271,7 @@ async function readConfig($) {
 // tools are not allowed, from the engine's own command, less often. Started with an interactive session only: a
 // headless run has no status line, and its measurements must not carry calls of the plugin's own.
 let progress = null          // the last reading (configure.js progressOf)
+let lastStatus = null        // the engine's status as last read, whole: what /aleph advise reads the setup from
 let progressTimer = null
 let fallbackAt = 0           // when the command was last run instead of the server
 let lookMs = 0               // what the last look took: the next waits at least 30 times as long (configure.js nextPoll)
@@ -297,6 +299,7 @@ async function readProgress($) {
     }
   }
   if (!status) return progress
+  lastStatus = status
   const before = progress
   progress = progressOf(status, progress, await now($))
   $.ui.status(statusLine(progress))
@@ -501,6 +504,106 @@ async function writeReport($, rung) {
   return base + '/reports/' + name + '.md'
 }
 
+// One of the plugin's own seven options, each by its fixed key: nothing else is ever written to the settings. Written
+// from /aleph configure and /aleph advise apply, both on the person's own key or command.
+async function setOption($, key, value) {
+  const refused = (error) => ({ deny: error && error.message ? error.message : String(error) })
+  if (key === 'rung') return $.config.set({ key: 'aleph-zero.rung', value }).catch(refused)
+  if (key === 'grep_pointer') return $.config.set({ key: 'aleph-zero.grep_pointer', value }).catch(refused)
+  if (key === 'lines') return $.config.set({ key: 'aleph-zero.lines', value }).catch(refused)
+  if (key === 'graph') return $.config.set({ key: 'aleph-zero.graph', value }).catch(refused)
+  if (key === 'subagents') return $.config.set({ key: 'aleph-zero.subagents', value }).catch(refused)
+  if (key === 'grep_assist') return $.config.set({ key: 'aleph-zero.grep_assist', value }).catch(refused)
+  if (key === 'allow_reads') return $.config.set({ key: 'aleph-zero.allow_reads', value }).catch(refused)
+  return { deny: 'not an option of this plugin: ' + key }
+}
+
+// ---- /aleph advise ------------------------------------------------------------------------------
+const DISMISSED = 'aleph-zero.dismissed-advice'   // the suggestions the person dismissed, on this machine
+let announced = []                                // ids the agent was told about this session
+
+// The engine's status: the last one read, or asked now (the settings pane and the vectors line keep it fresh).
+async function statusNow($) {
+  if (lastStatus) return lastStatus
+  try {
+    const answer = await lookup($, 'status', {})
+    lastStatus = answer ? JSON.parse(resultText(answer)) : null
+  } catch {
+    lastStatus = null
+  }
+  return lastStatus
+}
+
+async function currentAdvice($, options, rung, status) {
+  let dismissed = []
+  try {
+    const kept = await $.store.get(DISMISSED)
+    if (Array.isArray(kept)) dismissed = kept
+  } catch {
+    dismissed = []
+  }
+  const root = status && status.root
+  return openAdvice(suggest(combine(allTime, meter), status, options || {}, rung), dismissed, root)
+}
+
+async function advise($, args, options, rung) {
+  const status = await statusNow($)
+  const listed = await currentAdvice($, options, rung, status)
+  const [, verb, number] = /^advise(?:\s+(apply|dismiss)\s+(\d+))?$/.exec(args) || []
+  if (!verb) return adviceText(listed)
+  const chosen = listed[Number(number) - 1]
+  if (!chosen) return 'There is no suggestion ' + number + ' now: `/aleph advise` lists them.'
+  if (verb === 'dismiss') {
+    try {
+      const kept = await $.store.get(DISMISSED)
+      await $.store.set(DISMISSED, [...new Set([...(Array.isArray(kept) ? kept : []), dismissalKey(chosen, status && status.root)])])
+    } catch {
+      return 'The dismissal could not be kept here.'
+    }
+    return 'Dismissed: ' + chosen.title + '. It is not suggested again.'
+  }
+  const action = chosen.action
+  if (action.kind === 'option') {
+    if (!(SETTABLE[action.key] || []).includes(action.value)) return 'Not applied: ' + action.key + '=' + action.value + ' is not one a suggestion may set.'
+    await saveSession($)   // the change loads the mod again: what this load counted goes with it
+    const set = await setOption($, action.key, action.value)
+    return set && set.deny ? 'Not applied: ' + set.deny : 'Applied: ' + action.key + ' is now ' + action.value + ' (in your user settings; it takes effect at once).'
+  }
+  if (action.kind === 'engine') {
+    await runEngine($, action.args, chosen.title)
+    return 'Ran `aleph-zero ' + action.args.join(' ') + '`: ' + (cfg.note || 'done')
+  }
+  // A build on this machine: as in /aleph configure, its command is copied for a terminal and shown whole, not run here.
+  try {
+    await $.ui.copy({ text: action.command })
+  } catch {
+    // copying is a convenience
+  }
+  return 'Run this in a terminal (copied): `' + action.command + '`. ' + chosen.cost + '.'
+}
+
+// The note for the agent when a suggestion is new this session ('' otherwise), with a toast for the person.
+let adviceOptions = {}
+let adviceRung = 1
+
+async function adviceNote($) {
+  if (adviceRung < 1) return ''
+  let fresh = []
+  try {
+    fresh = (await currentAdvice($, adviceOptions, adviceRung, lastStatus)).filter((item) => !announced.includes(item.id))
+  } catch {
+    fresh = []
+  }
+  if (!fresh.length) return ''
+  announced = [...announced, ...fresh.map((item) => item.id)]
+  try {
+    $.ui.toast('Aleph Zero has a suggestion about its setup, from this session\'s figures: /aleph advise', { timeoutMs: 15000 })
+  } catch {
+    // the note to the agent says it too
+  }
+  return agentNote(fresh.length)
+}
+
 // A project that names a rung other than the one the plugin runs at: said once. A session ran at rung 1 for 740 turns
 // while its CLAUDE.md said rung 3 and its .claude/settings.json set rung 3 (2026-11-05): nothing reads CLAUDE.md for it,
 // and the project's pluginConfigs did not take effect while the user's settings gave rung 1.
@@ -532,6 +635,8 @@ async function warnInstructedRung($) {
 export function register(on, options) {
   const rung = Number(options && options.rung !== undefined ? options.rung : 1)
   optionRung = rung
+  adviceOptions = options || {}
+  adviceRung = rung
   // The pointer in the descriptions of Grep and Glob is part of rung 1 but has its own switch,
   // so a measurement can tell it from the rest of the rung.
   const pointer = !(options && options.grep_pointer === 'off')
@@ -556,8 +661,8 @@ export function register(on, options) {
     if (e && e.isInteractive) void warnInstructedRung($)
     await $.command.register({
       name: 'aleph',
-      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows how often this conversation and its subagents located code with Aleph instead of grep, and what came of it; `stats last` the conversation before; `stats all` every conversation of this session; `stats report` writes the full report to .aleph/reports; `check` says whether the mod can reach the engine',
-      argumentHint: '[configure | stats [last | all | report] | check [model]]',
+      description: 'Aleph Zero: with no argument, opens the side chat about this repository. `configure` opens its settings: the plugin\'s options, this repository\'s search by meaning and linked sources, what is built on this machine. `stats` shows how often this conversation and its subagents located code with Aleph instead of grep, and what came of it; `stats last` the conversation before; `stats all` every conversation of this session; `stats report` writes the full report to .aleph/reports; `advise` lists what Aleph suggests changing in its own setup, from those figures (`advise apply N` applies one); `check` says whether the mod can reach the engine',
+      argumentHint: '[configure | stats [last | all | report] | advise [apply N | dismiss N] | check [model]]',
       immediate: true,
     })
     return next(e)
@@ -593,10 +698,13 @@ export function register(on, options) {
       }
       return {}
     }
+    if (/^advise(\s+(apply|dismiss)\s+\d+)?$/.test(args)) {
+      return { text: await advise($, args, options, rung) }
+    }
     if (!['stats', 'stats last', 'stats all', 'stats report', 'check', 'check model'].includes(args)) {
       // A question typed after the command would be answered with a report, and the row
       // would enter the conversation. Questions go into the pane.
-      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `configure`, `stats`, `stats last`, `stats all`, `stats report`, `check` and `check model`.' }
+      return { text: 'Type the question in the pane: `/aleph` opens it. Arguments are `configure`, `stats`, `stats last`, `stats all`, `stats report`, `advise`, `check` and `check model`.' }
     }
     if (args === 'stats last') {
       // The conversation before this one (any session on this machine): a headless run cannot be asked afterwards.
@@ -656,7 +764,9 @@ export function register(on, options) {
         }
       }
     }
-    return { text: summary(rung, meter) }
+    const pending = await currentAdvice($, options, rung, lastStatus)
+    return { text: summary(rung, meter) + (pending.length ? '\nsuggested: ' + pending.length + ' change' + (pending.length === 1 ? '' : 's')
+      + ' to Aleph\'s setup from these figures: /aleph advise' : '') }
   })
 
   // ---- the side chat's pane ------------------------------------------------------------------
@@ -850,16 +960,7 @@ export function register(on, options) {
           }
           const to = nextValue(option, value)
           await saveSession($)   // the change loads the mod again: what this load counted and said goes with it
-          // Each of the plugin's own seven options by its fixed key: nothing else is ever written to the settings.
-          const refused = (error) => ({ deny: error && error.message ? error.message : String(error) })
-          let set = null
-          if (option.key === 'rung') set = await $.config.set({ key: 'aleph-zero.rung', value: to }).catch(refused)
-          else if (option.key === 'grep_pointer') set = await $.config.set({ key: 'aleph-zero.grep_pointer', value: to }).catch(refused)
-          else if (option.key === 'lines') set = await $.config.set({ key: 'aleph-zero.lines', value: to }).catch(refused)
-          else if (option.key === 'graph') set = await $.config.set({ key: 'aleph-zero.graph', value: to }).catch(refused)
-          else if (option.key === 'subagents') set = await $.config.set({ key: 'aleph-zero.subagents', value: to }).catch(refused)
-          else if (option.key === 'grep_assist') set = await $.config.set({ key: 'aleph-zero.grep_assist', value: to }).catch(refused)
-          else if (option.key === 'allow_reads') set = await $.config.set({ key: 'aleph-zero.allow_reads', value: to }).catch(refused)
+          const set = await setOption($, option.key, to)
           // Written, the mod is loaded again with the new value and draws this row itself; refused, it says why.
           if (set && set.deny) {
             cfg.note = option.label + ' was not changed: ' + set.deny
@@ -1155,11 +1256,14 @@ export function register(on, options) {
   on('prompt.submit', async ($, e, next) => {
     // The one chance goes to the first prompt that is a question: "hi" does not use it up.
     await restore($)
+    // Suggestions about Aleph's own setup: the agent is told once each that they exist, never a command; the person decides.
+    const told = await adviceNote($)
+    const pass = (event) => next(told ? { ...event, context: [...(event.context ?? []), told] } : event)
     // Facts: on every prompt that names a route or an environment name not looked up yet, with the graph tools on.
     const facts = graph && rung >= 1 ? lookUp($, e.text, worthAsking(e.text)) : Promise.resolve('')
     if (rung < 2 || prompts > 0 || !worthAsking(e.text)) {
       const note = await facts
-      return note ? next({ ...e, context: [...(e.context ?? []), note] }) : next(e)
+      return note ? pass({ ...e, context: [...(e.context ?? []), note] }) : pass(e)
     }
     prompts += 1
     // Code only, and enough hits to fill five files: a bug report's words match the issue template it was written on,
@@ -1167,11 +1271,11 @@ export function register(on, options) {
     const [note, answer] = await Promise.all([facts, ask($, 'search', { query: e.text.slice(0, 2000), k: 15, kind: 'code' })])
     const hits = hitsOf(answer)
     const context = [...(e.context ?? []), ...(note ? [note] : [])]
-    if (!confident(hits)) return note ? next({ ...e, context }) : next(e)
+    if (!confident(hits)) return note ? pass({ ...e, context }) : pass(e)
     meter.added.prompt += 1
     meter.listed = [...new Set(hits.map((hit) => hit.path))].slice(0, 5)  // the files of the lines, as locations() takes them
     recordAdded(runFor(null), meter.listed)
-    return next({ ...e, context: [...context, promptContext(hits, signatures)] })
+    return pass({ ...e, context: [...context, promptContext(hits, signatures)] })
   }).catch(async ($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {

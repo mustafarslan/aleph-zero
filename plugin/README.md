@@ -88,6 +88,18 @@ These look-ups, rungs 2 and 3 and the side chat need the engine's tools allowed 
 session, and `/aleph stats report` writes the full report as Markdown and JSON to
 `.aleph/reports/` in the repository (a `.gitignore` there keeps it out of git).
 
+`/aleph advise` turns those figures into suggestions about Aleph's own setup, each with the figure that triggered it,
+whether what it promises was measured, what applying it does and what it costs: rung 2 when subagents locate code
+mostly by grep (at least five subagents and 20 locating calls, under a quarter with Aleph); rung 3 when at least 8
+locating greps, a fifth of them, found nothing; search by meaning when its benchmark says it helps for the repository's
+language and a grep followed Aleph's answer in a quarter of at least 15 cases (also when you turned it off before, and
+then it says so); git's untracked cache when the engine is slow on a large worktree; a rebuild of what is out of date;
+memory by meaning when memory is used. `/aleph advise apply N` applies one (a plugin option in your user settings, an
+engine command for this repository, or a build's command copied for a terminal); `/aleph advise dismiss N` stops
+suggesting it. Nothing is changed otherwise. When a suggestion is new, you get a notice, and the agent is told once that
+`/aleph advise` has something for you, never a command or a setting. Never suggested: linked sources, the switches kept
+for measurements, `allow_reads`, or turning anything down.
+
 These are counts of use, not of savings. What a session would have cost without Aleph can only
 be measured by running the same tasks with and without it; the report quotes those
 measurements (ADR-011) beside the counts and claims nothing more.
@@ -113,13 +125,13 @@ These are all the mod's hooks, and everything each one does:
 | Hook | What it does |
 |---|---|
 | `session.start` | Registers the `/aleph` command and notes the session's working directory. In an interactive session it reads `.claude/settings.json`, `.claude/settings.local.json`, `CLAUDE.md` and `.claude/CLAUDE.md`, only to say once when they name a rung other than the one the plugin runs at, and it also starts watching how far vectors are made: it asks the engine's `status` (every 10 s while vectors are being made, every minute otherwise) and shows one short line under the prompt while there is work (`vectors 3,100/8,239 · ~2 min`), cleared when it is done. Nothing is watched in a headless run. |
-| `command.run` (`/aleph`) | Opens the side chat pane or the settings pane (`/aleph configure`), or answers `/aleph stats` (`last`, `all`, `report`), `/aleph check` and `/aleph check model`. `/aleph stats report` writes the report to `.aleph/reports/` in the session's directory, and `.aleph/.gitignore`. |
+| `command.run` (`/aleph`) | Opens the side chat pane or the settings pane (`/aleph configure`), or answers `/aleph stats` (`last`, `all`, `report`), `/aleph advise` (`apply N`, `dismiss N`), `/aleph check` and `/aleph check model`. `advise apply` writes only one of the plugin's own options by its fixed key (`rung` to 2 or 3, `subagents` on), runs the engine's own `setup --dense` or `setup --untracked-cache` for the session's repository, or copies a build's command for a terminal. `/aleph stats report` writes the report to `.aleph/reports/` in the session's directory, and `.aleph/.gitignore`. |
 | `ui.render` (the panes) | Draws the side chat and the settings pane. Pressing Insert puts the chosen answer into your prompt as a note, through `prompt.fill`; nothing reaches the conversation otherwise. |
 | `ui.focus` (the settings pane) | Notes which row the focus ring is on, to show that row's help under the rows; passes every move on unchanged. |
 | `tool.describe` (the engine's tools) | At rung 1 and above, replaces the descriptions of `search`, `symbol`, `outline` and `status` with tuned ones and loads them up front instead of on demand; with `graph` on, does the same for `facts`. |
 | `tool.describe` (Grep, Glob) | At rung 1 and above, with `grep_pointer` on, appends one sentence to their descriptions pointing to `search`. It changes nothing else about them. |
 | `prompt.compose` | At rung 1 and above, adds one fixed section to the system prompt: search before a recursive grep, and when grep is still right; with the `graph` option on, one more line saying when to use `references`, `decisions` and `facts`. |
-| `prompt.submit` | With `graph` on, at rung 1 and above: when the prompt names a route or an environment variable not looked up yet this session, asks the engine's `facts` with the prompt's first 4,000 characters and attaches where the code states them as context. At rung 2 and above, for the first prompt of a session that is a question, also asks the engine's `search` with its first 2,000 characters and, when the top result is confident, attaches up to five file locations. The prompt's own text is not changed. |
+| `prompt.submit` | When a suggestion of `/aleph advise` is new this session: one sentence as context telling the agent that `/aleph advise` has something for the person, with no command or setting in it, and a notice for the person. With `graph` on, at rung 1 and above: when the prompt names a route or an environment variable not looked up yet this session, asks the engine's `facts` with the prompt's first 4,000 characters and attaches where the code states them as context. At rung 2 and above, for the first prompt of a session that is a question, also asks the engine's `search` with its first 2,000 characters and, when the top result is confident, attaches up to five file locations. The prompt's own text is not changed. |
 | `tool.call` (Bash) | After the command has run. With `graph` on: when it was a recursive `grep`, `rg` or `git grep` whose pattern names a route or an environment variable not looked up yet, asks the engine's `facts` and gives the answer to the model as context after the result. At rung 3: after a recursive `grep`, `rg`, `git grep` or `find` that found nothing, asks the engine's `search` with its pattern and appends up to five ranked locations to that command's output. The command and its input are never changed, and nothing is done for any other command. |
 | `tool.call` (Grep) | After the search has run. With `graph` on, the same `facts` look-up for a pattern that names a route or an environment variable; at rung 3, after a search of the repository that found nothing, up to five ranked locations from `search`, as context after the result. The search, its input and its result are not changed. |
 | `tool.call` (all tools) | Counts tool calls for `/aleph stats`, by the loop they ran in (the main conversation or a subagent's type), after the call has run; passes every call and its result on unchanged. |
@@ -153,29 +165,30 @@ returned, with the additions above.
 
 Each finding of the directory's check of 0.1.15, answered, and what 0.1.21 added (line numbers are `hooks/register.js`'s):
 
-- **Settings it writes** (`config.set`, lines 856–862): only the plugin's own seven options, each
+- **Settings it writes** (`config.set`, lines 511–517): only the plugin's own seven options, each
   written by its fixed key: `aleph-zero.rung`, `aleph-zero.grep_pointer`, `aleph-zero.lines`,
   `aleph-zero.graph`, `aleph-zero.subagents`, `aleph-zero.grep_assist`, `aleph-zero.allow_reads`.
   Only when the person presses that option's key in `/aleph configure`, as
-  `/plugin` would. It never writes a permission, the permission mode or any other setting, and
+  `/plugin` would, or types `/aleph advise apply N` for a suggestion that sets `rung` (to 2 or 3) or `subagents` (on). It never writes a permission, the permission mode or any other setting, and
   sets no environment variable; the `graph` option reaches the engine as `ALEPH_GRAPH` through
   `.mcp.json`, as Claude Code passes any option.
-- **Permission decisions it makes** (`tool.check`, line 1122): with `allow_reads` on (the default),
+- **Permission decisions it makes** (`tool.check`, line 1223): with `allow_reads` on (the default),
   it answers allow for the engine's eight read-only tools where Claude Code's own decision is to
   ask. It never turns a deny into an allow, never answers for any other tool (`remember`, which
   writes, included), and writes nothing to the settings. With `allow_reads` off it does nothing.
-- **Tools it calls itself** (`mcp.call`, line 114): this plugin's own local engine only, the tools
+- **Tools it calls itself** (`mcp.call`, line 115): this plugin's own local engine only, the tools
   and times listed above, with arguments it builds itself (a prompt's, a subagent task's or a pattern's text, a
   path); nothing it receives is run as a command. Before each call it asks Claude Code's
   permission decision (`tool.check`, which runs nothing and opens no dialog) and makes no call that would ask.
-- **What it sends and where** (line 114): to the local engine only, as above. The one request that
+- **What it sends and where** (line 115): to the local engine only, as above. The one request that
   leaves the machine is the side chat's question to Claude, made through Claude Code's own
   `model.complete`, only when the person asks it.
-- **Programs it starts** (`process.run`, lines 236 and 293; `process.spawn`, line 332; `process.run` of git, line 898):
+- **Programs it starts** (`process.run`, lines 237 and 295; `process.spawn`, line 335; `process.run` of git, line 999):
   the engine's `status`, run as `sh <plugin>/scripts/engine.sh --cwd <the session's directory>
   status` (the settings pane and the vectors line); from `/aleph configure`, on a key the person
   presses, the engine's `setup --dense`, `--no-dense` or `--auto-dense`, `source add` with the path
-  or URL the person typed, `source remove` after a yes; and `git update-index --untracked-cache` or
+  or URL the person typed, `source remove` after a yes; from `/aleph advise apply N`, typed by the person, the
+  engine's `setup --dense` or `setup --untracked-cache`; and `git update-index --untracked-cache` or
   `--no-untracked-cache` in the session's directory. `scripts/engine.sh` only finds the separately
   installed `aleph-zero` (below) and runs it with those arguments. The only network use is a source
   the person links by URL, which the engine clones. Nothing fetched is run.
@@ -183,22 +196,22 @@ Each finding of the directory's check of 0.1.15, answered, and what 0.1.21 added
   Claude Code's own model connection (`model.complete`), the host's own vendor. `.mcp.json` passes
   the plugin's `graph` option (`on` or `off`) to the engine as `ALEPH_GRAPH`: an on/off switch,
   not a credential.
-- **Changes a tool's input** (`tool.call`, line 1074): no. That hook runs the call unchanged
+- **Changes a tool's input** (`tool.call`, line 1175): no. That hook runs the call unchanged
   (`await next(e)`), counts it for `/aleph stats`, and returns the call's own result.
-- **Answers in place of a tool** (`tool.call`, lines 1196 and 1228): no. Each first runs the tool
+- **Answers in place of a tool** (`tool.call`, lines 1300 and 1332): no. Each first runs the tool
   (`await next(e)`) and returns its own result, with the additions in the table above.
-- **Changes a subagent's task** (`agent.spawn`, line 1090): with `subagents` on, it appends one
+- **Changes a subagent's task** (`agent.spawn`, line 1191): with `subagents` on, it appends one
   paragraph after the task, and at rung 2 up to five file locations from the engine; the task as
   written comes first and is not changed. Forks, resumed runs and workflow agents are left alone,
   and it never refuses a spawn or changes its model, type or directory.
-- **Files it reads and writes** (`fs.read`, lines 490 and 520; `fs.write`, lines 498–500): it reads
+- **Files it reads and writes** (`fs.read`, lines 493 and 623; `fs.write`, lines 501–503): it reads
   its own `plugin.json` for its version, and the session's `.claude/settings.json`, `.claude/settings.local.json`,
   `CLAUDE.md` and `.claude/CLAUDE.md` only to compare a rung named there with the one it runs at. It writes only on `/aleph stats report`, typed by the
   person: the report under `.aleph/reports/` in the session's directory and `.aleph/.gitignore`.
-- **Hooks an event that is a call** (`command.run`, line 566): it answers only the plugin's own
+- **Hooks an event that is a call** (`command.run`, line 671): it answers only the plugin's own
   `/aleph` command.
-- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 1130 and 1140;
-  `prompt.compose`, line 1146): the changes are the ones in the table above.
+- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 1231 and 1241;
+  `prompt.compose`, line 1247): the changes are the ones in the table above.
 - **`types` in `plugin.json`:** the mod's type contract, read by `claude plugin validate` for the
   values it keeps in `$.state`; Claude Code ignores it when loading, as the check says.
 - **Scripts** (`scripts/serve.sh`, `scripts/engine.sh`): they start the separately installed

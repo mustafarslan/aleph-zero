@@ -89,7 +89,9 @@ prompt and with each subagent's task, and suggestions after a grep that found no
 not been shown yet: in measured sessions the agent often still greps first
 ([ADR-011](docs/adr/ADR-011-steering.md)). `/aleph stats` counts how often the conversation and
 its subagents located code with Aleph rather than grep, and what came of it; `/aleph stats report`
-writes that up, beside what the with-and-without measurements showed. `/aleph` opens a side chat about the repository
+writes that up, beside what the with-and-without measurements showed. `/aleph advise` turns the
+figures into suggestions about Aleph's own setup (a rung, search by meaning, git's untracked cache, a rebuild), each
+with the figure behind it and whether its gain was measured; nothing changes until you type `/aleph advise apply N`. `/aleph` opens a side chat about the repository
 whose answers cite `path:line`.
 
 ## Requirements

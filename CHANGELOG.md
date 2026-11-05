@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.22
+
+- **`/aleph advise`: Aleph suggests changes to its own setup from the session's figures.** Rung 2 when subagents locate
+  code mostly by grep, rung 3 when many greps find nothing, search by meaning where its benchmark says it helps and
+  Aleph's answers were often followed by a grep, git's untracked cache where the engine is slow, a rebuild of what is
+  out of date, memory by meaning where memory is used. Each says the figure behind it and whether its gain was
+  measured. You apply one with `/aleph advise apply N`; the agent is only told that suggestions exist.
+- Greps that found nothing are counted at every rung, not only at rung 3.
+- `aleph-zero setup` no longer shows a cost on the allow step once it is done.
+
 ## 0.1.21
 
 - **Subagents are steered too.** A subagent is given only its task, so the instruction to search before grepping never

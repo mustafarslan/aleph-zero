@@ -281,6 +281,28 @@ The run above showed the graph tools only by name. On the owner's ask ("activate
 Not adopted: answering "late" with nothing whenever the read finishes after the limit with `stale_ok`. The read is
 interrupted by its own deadline, and one that finishes just past it is a real answer; the mod's 450 ms race bounds the wait.
 
+## 2026-11-05, later: Aleph suggests changes to its own setup (`/aleph advise`)
+
+The owner asked for Aleph to say, from its own usage, which optional parts to turn on and how to change its settings,
+and for the agent to ask the person first. `plugin/hooks/advise.js` holds the rules as plain functions over the
+session's meter (all conversations) and the engine's status. The thresholds are agy's, given before any code: at
+least five subagents and 20 locating calls with under a quarter by Aleph for rung 2; at least 8 empty locating greps
+that are a fifth of all of them for rung 3; at least 15 locating calls by Aleph with a grep within two calls after a
+quarter of them for search by meaning, and only where its benchmark says it helps for the language; a median over
+50 ms on at least 10 settled answers and 3,000 files for the untracked cache.
+
+- **The person decides.** A suggestion is applied only by `/aleph advise apply N`. It writes one of the plugin's own
+  options by its fixed key, runs the engine's own `setup --dense` or `setup --untracked-cache` for the repository, or
+  copies a build's command for a terminal. The agent gets one sentence when a suggestion is new: that `/aleph advise`
+  has something for the person, with no command and no setting in it. agy argued against any note to the agent; the
+  sentence was kept because the owner asked for the agent to raise it, and it carries nothing it could act on.
+- **What is never suggested:** linked sources, the measurement switches, `allow_reads`, and turning any part down.
+- **One departure from agy:** agy would never suggest a choice the person reversed. Search by meaning, turned off in
+  a repository, is suggested again, but only on the evidence above, and the suggestion says it was turned off.
+- **Each suggestion says whether its gain was measured.** At the time of writing, only search by meaning (ADR-002),
+  the untracked cache (doctor's measurement) and rebuilds are measured or maintenance. The rung suggestions are
+  marked not measured.
+
 ## Views consulted
 
 - **Advisor:** the wrong event for adding a prompt section; the hung-transport hole in the "never blocks" rule; prove headless loading in one command before building rungs; fix the measures before any session runs; pilot with two sessions before eight; do not wait for the build's types.

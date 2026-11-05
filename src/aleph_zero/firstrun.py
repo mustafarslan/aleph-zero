@@ -87,7 +87,7 @@ def plan(found: Found, repo: dict, machine: dict) -> list[Step]:
                      f"is still asked: `{COMMAND} setup --allow-tools` allows it too" if found.allows_reads
                 else "not allowed yet: the plugin's look-ups (where a route or an environment variable you name is handled; "
                      "rungs 2 and 3) and its side chat do nothing until they are",
-                "" if found.allowed else f"adds one rule, \"{TOOLS_RULE}\", to permissions.allow in {claude_settings_file()}; "
+                "" if found.allowed or found.allows_reads else f"adds one rule, \"{TOOLS_RULE}\", to permissions.allow in {claude_settings_file()}; "
                                          "nothing else there is changed",
                 f"{COMMAND} setup --allow-tools", not found.allows_reads)] if found.plugin else []),
         Step("worker", "machine", "The embedding worker and its model (search by meaning)",
