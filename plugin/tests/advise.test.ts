@@ -86,14 +86,21 @@ test('the untracked cache where the engine is slow on a large worktree; builds t
   expect(suggest(used, STATUS, {}, 1)[0].id).toBe('memory')
 })
 
-test('a dismissed suggestion stays dismissed, by repository or for the machine', async () => {
-  const listed = suggest(session({ subs: 6, greps: 5 }), { ...STATUS, vectors: { ...STATUS.vectors, worker_installed: false } }, {}, 1)
-  const ids = listed.map((item) => item.id)
-  expect(ids).toEqual(['rung-2', 'worker'])
-  const kept = [dismissalKey(listed[0], '/repo'), dismissalKey(listed[1], '/repo')]
-  expect(kept).toEqual(['rung-2@/repo', 'worker'])
+test('a dismissed suggestion stays dismissed: a repository\'s by repository, the plugin\'s and the machine\'s everywhere', async () => {
+  const meter = session({ subs: 6, greps: 5 })
+  meter.engine = { ...meter.engine, asked: 12, answered: 12, stale: 0, ms: Array(12).fill(80) }
+  const listed = suggest(meter, { ...STATUS, untracked_cache: false, vectors: { ...STATUS.vectors, worker_installed: false } }, {}, 1)
+  expect(listed.map((item) => item.id)).toEqual(['rung-2', 'worker', 'untracked-cache'])
+  const kept = listed.map((item) => dismissalKey(item, '/repo'))
+  expect(kept).toEqual(['rung-2', 'worker', 'untracked-cache@/repo'])
   expect(open(listed, kept, '/repo')).toEqual([])
-  expect(open(listed, kept, '/other').map((item) => item.id)).toEqual(['rung-2'])
+  expect(open(listed, kept, '/other').map((item) => item.id)).toEqual(['untracked-cache'])
+})
+
+test('at most four are listed, counted after the dismissed ones are left out', async () => {
+  const many = [1, 2, 3, 4, 5].map((n) => ({ id: 's' + n, scope: 'machine' }))
+  expect(open(many as any, [], '').length).toBe(4)
+  expect(open(many as any, ['s1'], '').map((item: any) => item.id)).toEqual(['s2', 's3', 's4', 's5'])
 })
 
 test('what the person and the agent are told', async () => {

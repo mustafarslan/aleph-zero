@@ -106,16 +106,17 @@ export function suggest(meter, status, options = {}, rung = 1) {
       evidence: 'not measured', action: machine('aleph-zero setup --memory'), cost: 'a build of under a minute, uses the network' })
   }
 
-  return out.slice(0, 4)
+  return out
 }
 
-// The suggestions not dismissed. A dismissal is kept by id and repository (machine-wide ones by id alone).
+// The suggestions not dismissed, at most four. A dismissal is kept by id and repository for a repository's settings, by
+// id alone for the machine's builds and the plugin's options (they are in the user's settings, for every repository).
 export function dismissalKey(suggestion, root) {
-  return suggestion.scope === 'machine' ? suggestion.id : suggestion.id + '@' + String(root || '')
+  return suggestion.scope === 'repository' ? suggestion.id + '@' + String(root || '') : suggestion.id
 }
 
 export function open(suggestions, dismissed = [], root = '') {
-  return suggestions.filter((suggestion) => !dismissed.includes(dismissalKey(suggestion, root)))
+  return suggestions.filter((suggestion) => !dismissed.includes(dismissalKey(suggestion, root))).slice(0, 4)
 }
 
 export function actionText(action) {

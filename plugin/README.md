@@ -165,25 +165,25 @@ returned, with the additions above.
 
 Each finding of the directory's check of 0.1.15, answered, and what 0.1.21 added (line numbers are `hooks/register.js`'s):
 
-- **Settings it writes** (`config.set`, lines 511–517): only the plugin's own seven options, each
+- **Settings it writes** (`config.set`, lines 514–520): only the plugin's own seven options, each
   written by its fixed key: `aleph-zero.rung`, `aleph-zero.grep_pointer`, `aleph-zero.lines`,
   `aleph-zero.graph`, `aleph-zero.subagents`, `aleph-zero.grep_assist`, `aleph-zero.allow_reads`.
   Only when the person presses that option's key in `/aleph configure`, as
   `/plugin` would, or types `/aleph advise apply N` for a suggestion that sets `rung` (to 2 or 3) or `subagents` (on). It never writes a permission, the permission mode or any other setting, and
   sets no environment variable; the `graph` option reaches the engine as `ALEPH_GRAPH` through
   `.mcp.json`, as Claude Code passes any option.
-- **Permission decisions it makes** (`tool.check`, line 1223): with `allow_reads` on (the default),
+- **Permission decisions it makes** (`tool.check`, line 1228): with `allow_reads` on (the default),
   it answers allow for the engine's eight read-only tools where Claude Code's own decision is to
   ask. It never turns a deny into an allow, never answers for any other tool (`remember`, which
   writes, included), and writes nothing to the settings. With `allow_reads` off it does nothing.
-- **Tools it calls itself** (`mcp.call`, line 115): this plugin's own local engine only, the tools
+- **Tools it calls itself** (`mcp.call`, line 117): this plugin's own local engine only, the tools
   and times listed above, with arguments it builds itself (a prompt's, a subagent task's or a pattern's text, a
   path); nothing it receives is run as a command. Before each call it asks Claude Code's
   permission decision (`tool.check`, which runs nothing and opens no dialog) and makes no call that would ask.
-- **What it sends and where** (line 115): to the local engine only, as above. The one request that
+- **What it sends and where** (line 117): to the local engine only, as above. The one request that
   leaves the machine is the side chat's question to Claude, made through Claude Code's own
   `model.complete`, only when the person asks it.
-- **Programs it starts** (`process.run`, lines 237 and 295; `process.spawn`, line 335; `process.run` of git, line 999):
+- **Programs it starts** (`process.run`, lines 239 and 298; `process.spawn`, line 338; `process.run` of git, line 1004):
   the engine's `status`, run as `sh <plugin>/scripts/engine.sh --cwd <the session's directory>
   status` (the settings pane and the vectors line); from `/aleph configure`, on a key the person
   presses, the engine's `setup --dense`, `--no-dense` or `--auto-dense`, `source add` with the path
@@ -196,22 +196,22 @@ Each finding of the directory's check of 0.1.15, answered, and what 0.1.21 added
   Claude Code's own model connection (`model.complete`), the host's own vendor. `.mcp.json` passes
   the plugin's `graph` option (`on` or `off`) to the engine as `ALEPH_GRAPH`: an on/off switch,
   not a credential.
-- **Changes a tool's input** (`tool.call`, line 1175): no. That hook runs the call unchanged
+- **Changes a tool's input** (`tool.call`, line 1180): no. That hook runs the call unchanged
   (`await next(e)`), counts it for `/aleph stats`, and returns the call's own result.
-- **Answers in place of a tool** (`tool.call`, lines 1300 and 1332): no. Each first runs the tool
+- **Answers in place of a tool** (`tool.call`, lines 1305 and 1337): no. Each first runs the tool
   (`await next(e)`) and returns its own result, with the additions in the table above.
-- **Changes a subagent's task** (`agent.spawn`, line 1191): with `subagents` on, it appends one
+- **Changes a subagent's task** (`agent.spawn`, line 1196): with `subagents` on, it appends one
   paragraph after the task, and at rung 2 up to five file locations from the engine; the task as
   written comes first and is not changed. Forks, resumed runs and workflow agents are left alone,
   and it never refuses a spawn or changes its model, type or directory.
-- **Files it reads and writes** (`fs.read`, lines 493 and 623; `fs.write`, lines 501–503): it reads
+- **Files it reads and writes** (`fs.read`, lines 496 and 628; `fs.write`, lines 504–506): it reads
   its own `plugin.json` for its version, and the session's `.claude/settings.json`, `.claude/settings.local.json`,
   `CLAUDE.md` and `.claude/CLAUDE.md` only to compare a rung named there with the one it runs at. It writes only on `/aleph stats report`, typed by the
   person: the report under `.aleph/reports/` in the session's directory and `.aleph/.gitignore`.
-- **Hooks an event that is a call** (`command.run`, line 671): it answers only the plugin's own
+- **Hooks an event that is a call** (`command.run`, line 676): it answers only the plugin's own
   `/aleph` command.
-- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 1231 and 1241;
-  `prompt.compose`, line 1247): the changes are the ones in the table above.
+- **Hooks what instructions and descriptions pass through** (`tool.describe`, lines 1236 and 1246;
+  `prompt.compose`, line 1252): the changes are the ones in the table above.
 - **`types` in `plugin.json`:** the mod's type contract, read by `claude plugin validate` for the
   values it keeps in `$.state`; Claude Code ignores it when loading, as the check says.
 - **Scripts** (`scripts/serve.sh`, `scripts/engine.sh`): they start the separately installed

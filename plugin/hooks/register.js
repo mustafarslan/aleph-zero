@@ -39,6 +39,7 @@ const agentTypes = new Map()
 let prompts = 0
 // The names facts were looked up for this session (a route's path, an environment name): each is looked up once.
 let handed = []
+let announced = []          // the suggestions (advise.js) the agent was told about this session, by id
 const askedLate = new Set()   // names whose look-up came back late once: the next one hands them over whatever comes back
 
 // The session's meter, rung 2's one chance and the side chat's conversation, kept in $.state: a changed option loads the
@@ -61,6 +62,7 @@ async function readBack($) {
     if (value.allTime && typeof value.allTime === 'object') allTime = normalize(value.allTime)
     if (typeof value.prompts === 'number') prompts = value.prompts
     if (Array.isArray(value.handed)) handed = value.handed
+    if (Array.isArray(value.announced)) announced = value.announced
     if (Array.isArray(value.turns) && !chat.turns.length) chat.turns.push(...value.turns)
     if (typeof value.tokens === 'number') chat.tokens = value.tokens
     if (typeof value.focused === 'string') cfg.focused = value.focused     // the settings row the ring was on
@@ -74,7 +76,7 @@ async function saveSession($) {
   const turns = chat.turns.slice(-8).map((turn) => turn.state === 'searching' || turn.state === 'thinking'
     ? { ...turn, state: 'failed', answer: 'Stopped: the plugin was loaded again.' } : { ...turn })
   try {
-    await $.state.set(SESSION_STATE, { meter, allTime, prompts, handed, turns, tokens: chat.tokens, focused: cfg.focused })
+    await $.state.set(SESSION_STATE, { meter, allTime, prompts, handed, announced, turns, tokens: chat.tokens, focused: cfg.focused })
   } catch {
     // the session goes on without it
   }
@@ -242,6 +244,7 @@ async function readConfig($) {
       // through Claude Code and the engine was not.
       const older = !read.vectors || !('chosen' in read.vectors) || !read.memory || !('aeon_installed' in read.memory)
       cfg.status = older ? null : read
+      if (!older) lastStatus = read      // what /aleph advise reads the setup from, fresh
       cfg.error = older ? 'The engine is older than this plugin: `uv tool install --reinstall '
         + 'git+https://github.com/mustafarslan/aleph-zero.git` in a terminal, then /aleph configure again.' : ''
     } else {
@@ -520,7 +523,6 @@ async function setOption($, key, value) {
 
 // ---- /aleph advise ------------------------------------------------------------------------------
 const DISMISSED = 'aleph-zero.dismissed-advice'   // the suggestions the person dismissed, on this machine
-let announced = []                                // ids the agent was told about this session
 
 // The engine's status: the last one read, or asked now (the settings pane and the vectors line keep it fresh).
 async function statusNow($) {
@@ -542,7 +544,7 @@ async function currentAdvice($, options, rung, status) {
   } catch {
     dismissed = []
   }
-  const root = status && status.root
+  const root = (status && status.root) || await cwdOf($)
   return openAdvice(suggest(combine(allTime, meter), status, options || {}, rung), dismissed, root)
 }
 
@@ -556,7 +558,8 @@ async function advise($, args, options, rung) {
   if (verb === 'dismiss') {
     try {
       const kept = await $.store.get(DISMISSED)
-      await $.store.set(DISMISSED, [...new Set([...(Array.isArray(kept) ? kept : []), dismissalKey(chosen, status && status.root)])])
+      const root = (status && status.root) || await cwdOf($)
+      await $.store.set(DISMISSED, [...new Set([...(Array.isArray(kept) ? kept : []), dismissalKey(chosen, root)])])
     } catch {
       return 'The dismissal could not be kept here.'
     }
@@ -570,7 +573,9 @@ async function advise($, args, options, rung) {
     return set && set.deny ? 'Not applied: ' + set.deny : 'Applied: ' + action.key + ' is now ' + action.value + ' (in your user settings; it takes effect at once).'
   }
   if (action.kind === 'engine') {
+    if (cfg.busy) return 'Not applied: ' + cfg.busy.split(' · ')[0] + ' is still running. Try again when it has finished.'
     await runEngine($, action.args, chosen.title)
+    lastStatus = null     // read again: what the command changed must not be suggested again
     return 'Ran `aleph-zero ' + action.args.join(' ') + '`: ' + (cfg.note || 'done')
   }
   // A build on this machine: as in /aleph configure, its command is copied for a terminal and shown whole, not run here.
